@@ -1,0 +1,202 @@
+import Fastify, { type FastifyInstance } from "fastify";
+import cookie from "@fastify/cookie";
+import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
+import type { CoreContext } from "@proxvm/core";
+import { AppError, ProxmoxApiError, sweepExpiredVmAccess } from "@proxvm/core";
+import { ZodError } from "zod";
+import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
+import { setupRoutes } from "./routes/setup.js";
+import { authRoutes } from "./routes/auth.js";
+import { meRoutes } from "./routes/me.js";
+import { usersRoutes } from "./routes/users.js";
+import { proxmoxRoutes } from "./routes/proxmox.js";
+import { vmRoutes } from "./routes/vms.js";
+import { templateRoutes } from "./routes/templates.js";
+import { credentialRoutes } from "./routes/credentials.js";
+import { guacamoleRoutes } from "./routes/guacamole.js";
+import { jobRoutes } from "./routes/jobs.js";
+import { auditRoutes } from "./routes/audit.js";
+import { settingsRoutes } from "./routes/settings.js";
+import { healthRoutes } from "./routes/health.js";
+import { iamRoutes } from "./routes/iam.js";
+
+export interface BuildAppOptions {
+  ctx?: CoreContext;
+  setupMode: boolean;
+  queue?: unknown;
+  webOrigin?: string;
+}
+
+export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: false,
+    trustProxy: true,
+    bodyLimit: 1024 * 1024,
+  });
+
+  await app.register(rateLimit, {
+    global: true,
+    max: 400,
+    timeWindow: "1 minute",
+  });
+
+  await app.register(cookie, {});
+
+  if (opts.webOrigin) {
+    await app.register(cors, {
+      origin: opts.webOrigin,
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "X-CSRF-Token"],
+    });
+  }
+
+  app.setErrorHandler((error, request, reply) => {
+    // Duck-type ZodError (name + issues) instead of relying solely on
+    // instanceof: the zod CJS and ESM builds expose distinct class objects,
+    // so cross-package ZodErrors can fail an instanceof check.
+    if (error instanceof ZodError || (error as { name?: unknown; issues?: unknown }).name === "ZodError") {
+      const issues = ((error as { issues?: Array<{ path: Array<string | number>; message: string }> }).issues ?? []);
+      const message =
+        issues.map((i) => `${(i.path ?? []).join(".") || "value"}: ${i.message}`).join("; ") || "Invalid request";
+      void reply.status(400).send({ code: "VALIDATION_ERROR", message });
+      return;
+    }
+    if (error instanceof AppError) {
+      void reply.status(error.statusCode).send({
+        code: error.code,
+        message: error.message,
+        ...(error.details ? { explanation: error.details } : {}),
+      });
+      return;
+    }
+    if (error instanceof ProxmoxApiError) {
+      // Report Proxmox upstream failures accurately (bad gateway), never as an
+      // opaque 500. Log the structured detail for diagnosis.
+      console.error(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          level: "error",
+          logger: "api",
+          path: request.method + " " + request.url,
+          msg: "Proxmox upstream error",
+          upstreamStatus: error.statusCode,
+          error: error.message,
+          detail: error.detail,
+        }),
+      );
+      void reply.status(502).send({ code: "PROXMOX_ERROR", message: error.message, detail: error.detail });
+      return;
+    }
+    const err = error as { statusCode?: number; message?: string };
+    if (err.statusCode === 429) {
+      void reply.status(429).send({ code: "RATE_LIMITED", message: "Too many requests. Please slow down." });
+      return;
+    }
+    const statusCode = err.statusCode ?? 500;
+    const message = statusCode < 500 ? (err.message ?? "Request failed") : "Internal server error";
+    if (statusCode >= 500) {
+      console.error(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          level: "error",
+          logger: "api",
+          path: request.method + " " + request.url,
+          msg: message,
+          error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error),
+        }),
+      );
+    }
+    void reply.status(statusCode).send({ code: "INTERNAL_ERROR", message });
+  });
+
+  if (!opts.setupMode && opts.ctx) {
+    const ctx: CoreContext = opts.ctx;
+    await app.register(buildAuthPlugin(ctx));
+    await app.register(setupRoutes, { prefix: "/api", ctx, setupMode: false });
+    await app.register(authRoutes, { prefix: "/api", ctx });
+    await app.register(meRoutes, { prefix: "/api", ctx });
+    await app.register(usersRoutes, { prefix: "/api", ctx });
+    await app.register(proxmoxRoutes, { prefix: "/api", ctx });
+    await app.register(vmRoutes, { prefix: "/api", ctx });
+    await app.register(templateRoutes, { prefix: "/api", ctx });
+    await app.register(credentialRoutes, { prefix: "/api", ctx });
+    await app.register(guacamoleRoutes, { prefix: "/api", ctx });
+    await app.register(jobRoutes, { prefix: "/api", ctx });
+    await app.register(auditRoutes, { prefix: "/api", ctx });
+    await app.register(settingsRoutes, { prefix: "/api", ctx });
+    await app.register(healthRoutes, { prefix: "/api", ctx });
+    await app.register(iamRoutes, { prefix: "/api", ctx });
+    startSessionCleanup(app, ctx);
+    startIamSweep(app, ctx);
+  } else {
+    await app.register(setupRoutes, { prefix: "/api", setupMode: true });
+  }
+
+  app.get("/api/health/live", async () => ({ status: "OK" }));
+
+  return app;
+}
+
+export { SESSION_COOKIE };
+
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Periodically prunes long-expired/revoked sessions. Without this the
+ * sessions table grows without bound (every login inserts a row; logout
+ * only marks revoked). Exported for testing.
+ */
+export function startIamSweep(app: FastifyInstance, ctx: CoreContext, intervalMs = SESSION_CLEANUP_INTERVAL_MS): void {
+  // Prunes expired IAM rows and revokes leftover Guacamole permissions.
+  // Authorization never depends on this (resolution ignores expired rows);
+  // it only reclaims access that already stopped working.
+  const run = async (): Promise<void> => {
+    try {
+      const result = await sweepExpiredVmAccess(ctx);
+      if (result.revoked > 0 || result.errors > 0) {
+        ctx.logger.info({ revoked: result.revoked, errors: result.errors }, "iam expiry sweep completed");
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "iam expiry sweep failed",
+      );
+    }
+  };
+  void run();
+  const timer = setInterval(() => {
+    void run();
+  }, intervalMs);
+  (timer as unknown as { unref?: () => void }).unref?.();
+  app.addHook("onClose", async () => {
+    clearInterval(timer);
+  });
+}
+
+export function startSessionCleanup(
+  app: FastifyInstance,
+  ctx: CoreContext,
+  intervalMs = SESSION_CLEANUP_INTERVAL_MS,
+): void {
+  const run = async (): Promise<void> => {
+    try {
+      await ctx.sessions.cleanup();
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "session cleanup failed",
+      );
+    }
+  };
+  void run();
+  const timer = setInterval(() => {
+    void run();
+  }, intervalMs);
+  // Never keep the process (or vitest workers) alive just for cleanup.
+  (timer as unknown as { unref?: () => void }).unref?.();
+  app.addHook("onClose", async () => {
+    clearInterval(timer);
+  });
+}

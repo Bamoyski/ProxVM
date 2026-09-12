@@ -1,0 +1,34 @@
+{
+  "name": "proxvm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ProxVM - Proxmox VE + Apache Guacamole VM management platform",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,worker,web -c blue,yellow,green \"npm:dev:api\" \"npm:dev:worker\" \"npm:dev:web\"",
+    "dev:api": "npm run dev -w @proxvm/api",
+    "dev:worker": "npm run dev -w @proxvm/worker",
+    "dev:web": "npm run dev -w @proxvm/web",
+    "build": "npm run build -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web",
+    "typecheck": "npm run typecheck -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web",
+    "test": "npm run test -w @proxvm/shared -w @proxvm/core -w @proxvm/api",
+    "test:integration": "npm run test:integration -w @proxvm/api",
+    "db:migrate": "npm run db:migrate -w @proxvm/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  },
+  "allowScripts": {
+    "argon2@0.44.0": true,
+    "esbuild@0.28.2": true,
+    "ssh2@1.17.0": true,
+    "cpu-features@0.0.10": true
+  },
+  "dependencies": {
+    "fastify-plugin": "^6.0.0"
+  }
+}

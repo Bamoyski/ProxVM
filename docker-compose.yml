@@ -1,0 +1,80 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      PROXVM_CONFIG_DIR: /data/.proxvm
+      PROXVM_PORT: "4000"
+      PROXVM_WEB_ORIGIN: ""
+      NODE_ENV: production
+    volumes:
+      - proxvm-config:/data/.proxvm
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["node", "apps/worker/dist/index.js"]
+    environment:
+      PROXVM_CONFIG_DIR: /data/.proxvm
+      NODE_ENV: production
+    volumes:
+      - proxvm-config:/data/.proxvm
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: proxvm
+      POSTGRES_USER: proxvm
+      POSTGRES_PASSWORD: changeme-postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proxvm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  proxvm-config:
+  pgdata:
+    name: proxvm-pgdata
+  redis-data:
