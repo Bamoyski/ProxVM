@@ -1,5 +1,20 @@
 # ProxVM
 
+## ⚠️ WARNING — AI-Generated Code / Do Not Use in Production
+**This entire project is 100% AI-generated.**
+
+The code in this repository was generated and modified by AI coding agents. It was **not written, reviewed, or professionally audited by a human software engineer**. Although testing and security analysis have been performed, passing tests and automated security scans do **not** mean that this software is secure or suitable for real-world use.
+
+**Do not deploy this software to production. Do not use it to manage real infrastructure, accounts, credentials, virtual machines, networks, or other sensitive systems.**
+
+This repository is published primarily for **experimentation, learning, research, and demonstration purposes**. Any security vulnerabilities, bugs, unsafe assumptions, or other problems may still exist.
+
+If you choose to run it anyway, assume that **the code is untrusted and potentially insecure**.
+
+**Use at your own risk.**
+
+---
+
 ProxVM is a real VM management platform for **Proxmox VE** and **Apache Guacamole**. It provisions real VMs from real templates via cloud-init, discovers the real guest IP through the QEMU guest agent, verifies guest credentials over SSH (Linux) / RDP port probe (Windows), creates real Guacamole connections in the Guacamole database, and launches real remote sessions.
 
 No mock data, no simulated infrastructure. If a service is unreachable, the UI shows the real error.
