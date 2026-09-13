@@ -65,6 +65,26 @@ describe("ProxmoxClient error reporting", () => {
     expect(caught?.detail?.path).toContain("/qemu/126/clone");
   });
 
+  // CodeQL js/polynomial-redos alert #4: the constructor must normalize
+  // slash-heavy base URLs without regex backtracking.
+  it("strips many trailing slashes from the base URL in linear time", async () => {
+    let requested = "";
+    const client = new ProxmoxClient({
+      url: `https://192.0.2.1:8006${"/".repeat(50_000)}`,
+      tokenId: "root@pve!test",
+      tokenSecret: "secret",
+      verifySsl: false,
+      fetchImpl: (async (url: unknown) => {
+        requested = String(url);
+        return new Response(JSON.stringify({ data: { version: "8.0", release: "8.0", repoid: "abc" } }), {
+          status: 200,
+        });
+      }) as unknown as typeof fetch,
+    });
+    await client.version();
+    expect(requested).toBe("https://192.0.2.1:8006/api2/json/version");
+  });
+
   it("returns parsed data for valid JSON responses", async () => {
     const client = clientWith((async () =>
       new Response(JSON.stringify({ data: { storage: "local-lvm" } }), { status: 200 })) as unknown as typeof fetch);

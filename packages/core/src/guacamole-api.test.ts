@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GuacamoleApiClient } from "./guacamole/api.js";
+import { buildClientLaunchUrl, buildLoginUrl, GuacamoleApiClient } from "./guacamole/api.js";
 
 describe("GuacamoleApiClient error reporting", () => {
   afterEach(() => {
@@ -22,5 +22,15 @@ describe("GuacamoleApiClient error reporting", () => {
     }
     expect(message).toMatch(/Cannot reach the Guacamole web application/);
     expect(message).not.toMatch(/10\.9\.8\.7|https?:\/\//);
+  });
+
+  // CodeQL js/polynomial-redos alerts #2-#3: launch/login URL builders must
+  // normalize slash-heavy base URLs without regex backtracking.
+  it("builds launch and login URLs from slash-heavy base URLs", () => {
+    const base = `http://guacamole.example.com/guacamole${"/".repeat(50_000)}`;
+    expect(buildLoginUrl(base)).toBe("http://guacamole.example.com/guacamole/");
+    expect(buildClientLaunchUrl(base, "42", "tok")).toBe(
+      "http://guacamole.example.com/guacamole/#/client/42?token=tok",
+    );
   });
 });

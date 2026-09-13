@@ -183,6 +183,9 @@ describe("sha256 salted hash (Guacamole SHA256PasswordEncryptionService compatib
     expect(b.hash.length).toBe(32);
     expect(a.salt.equals(b.salt)).toBe(false);
     const expected = createHash("sha256")
+      // codeql[js/insufficient-password-hash]: Test-only mirror of Guacamole 1.6.0's
+      // SHA256PasswordEncryptionService format (see guacamole/db.ts). Asserts byte
+      // compatibility with the third-party algorithm; not application auth.
       .update("same-password" + a.salt.toString("hex").toUpperCase(), "utf8")
       .digest();
     expect(a.hash.equals(expected)).toBe(true);
