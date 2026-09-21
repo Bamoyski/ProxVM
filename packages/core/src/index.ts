@@ -10,6 +10,7 @@ export * from "./context.js";
 export * from "./proxmox/client.js";
 export * from "./guacamole/db.js";
 export * from "./guacamole/api.js";
+export * from "./guacamole/test-connection.js";
 export * from "./ssh/client.js";
 export * from "./services/audit.js";
 export * from "./services/settings.js";

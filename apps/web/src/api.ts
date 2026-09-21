@@ -9,6 +9,8 @@ export function setCsrfToken(token: string | null): void {
   csrfToken = token;
 }
 
+
+
 export interface AuthorizationExplanation {
   allowed: boolean;
   reason: string;

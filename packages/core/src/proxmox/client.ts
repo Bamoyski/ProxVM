@@ -1,7 +1,6 @@
 import https from "node:https";
 import http from "node:http";
 import type { ProxmoxAgentInfo, ProxmoxNodeStatus, ProxmoxQemuResource, ProxmoxVmConfig } from "@proxvm/shared";
-import { stripTrailingSlashes } from "../util/misc.js";
 
 export class ProxmoxApiError extends Error {
   readonly statusCode: number;
@@ -91,7 +90,7 @@ export class ProxmoxClient {
   private readonly fetchImpl: typeof fetch | null;
 
   constructor(opts: ProxmoxClientOptions) {
-    this.baseUrl = stripTrailingSlashes(opts.url);
+    this.baseUrl = opts.url.replace(/\/+$/, "");
     this.tokenId = opts.tokenId;
     this.tokenSecret = opts.tokenSecret;
     this.verifySsl = opts.verifySsl;
@@ -273,7 +272,7 @@ export class ProxmoxClient {
   }
 
   async storages(node?: string): Promise<Array<Record<string, unknown>>> {
-    if (node) return this.request(`/nodes/${node}/storage`);
+    if (node) return this.request(`/nodes/${encodeURIComponent(node)}/storage`);
     const nodes = await this.nodes();
     const all: Array<Record<string, unknown>> = [];
     for (const n of nodes) {
@@ -288,7 +287,7 @@ export class ProxmoxClient {
   }
 
   async networks(node: string): Promise<Array<Record<string, unknown>>> {
-    return this.request(`/nodes/${node}/network`);
+    return this.request(`/nodes/${encodeURIComponent(node)}/network`);
   }
 
   async nextId(): Promise<number> {

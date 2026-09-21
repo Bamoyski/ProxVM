@@ -55,6 +55,7 @@ export default function VmDetail({ me }: { me: Me }) {
   const [revealed, setRevealed] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [launchProtocol, setLaunchProtocol] = useState<string | null>(null);
+  const [connTest, setConnTest] = useState<Record<string, { testing: boolean; text?: string; ok?: boolean }>>({});
   // Hooks must run before any early return (Rules of Hooks): permission
   // resolution stays unconditional and only gates rendering below.
   const can = makeCan(useEffectivePermissions(), (perm) => hasPermission(me, perm));
@@ -112,10 +113,34 @@ export default function VmDetail({ me }: { me: Me }) {
         method: "POST",
         body: protocol ? { protocol } : {},
       });
-      window.open(res.url, "_blank");
+      window.open(res.url, "_blank", "noopener");
     } catch (err) {
       const why = explainDenial(err);
       alert(why ?? (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const testConnection = async (protocol: string) => {
+    setConnTest((t) => ({ ...t, [protocol]: { testing: true } }));
+    try {
+      const res = await api<{ reachable: boolean; authenticated: boolean | null; detail: string }>(
+        `/vms/${id}/guacamole/test`,
+        { method: "POST", body: { protocol } },
+      );
+      const ok = res.reachable && res.authenticated !== false;
+      setConnTest((t) => ({
+        ...t,
+        [protocol]: {
+          testing: false,
+          ok,
+          text: `${res.reachable ? "Reachable" : "Unreachable"}${res.authenticated === null ? "" : res.authenticated ? ", authenticated" : ", NOT authenticated"} — ${res.detail}`,
+        },
+      }));
+    } catch (err) {
+      setConnTest((t) => ({
+        ...t,
+        [protocol]: { testing: false, ok: false, text: err instanceof Error ? err.message : String(err) },
+      }));
     }
   };
 
@@ -219,6 +244,22 @@ export default function VmDetail({ me }: { me: Me }) {
                 </div>
                 <div className="text-xs text-slate-400 mt-1">{c.hostname}:{c.port}</div>
                 <div className="text-xs text-slate-400">User: {c.username}</div>
+                {canLaunch && (
+                  <div className="mt-2">
+                    <button
+                      onClick={() => void testConnection(c.protocol)}
+                      disabled={connTest[c.protocol]?.testing}
+                      className="text-xs text-blue-400 underline disabled:opacity-40 disabled:no-underline"
+                    >
+                      {connTest[c.protocol]?.testing ? "Testing…" : "Test connection"}
+                    </button>
+                    {connTest[c.protocol]?.text && (
+                      <div className={`text-xs mt-1 ${connTest[c.protocol]?.ok ? "text-green-300" : "text-red-300"}`}>
+                        {connTest[c.protocol]?.text}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

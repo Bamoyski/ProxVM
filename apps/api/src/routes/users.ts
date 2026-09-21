@@ -28,6 +28,22 @@ const updateUserSchema = z.object({
 
 export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
+
+  // Best-effort: invalidate Guacamole tokens minted by the user's sessions
+  // (password change, disable, delete). Never throws.
+  const revokeGuacTokens = async (userId: string): Promise<void> => {
+    try {
+      let guacApi = null;
+      try {
+        guacApi = await ctx.getGuacApi();
+      } catch {
+        guacApi = null;
+      }
+      await ctx.guac.revokeAllUserTokens(userId, guacApi);
+    } catch {
+      // revocation must never fail the user-administration action
+    }
+  };
   const guard = app.requirePermission("users.manage");
 
   app.get("/users", async (request) => {
@@ -107,8 +123,21 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       }
       await ctx.users.setActive(target.id, body.active);
       await ctx.sessions.revokeAllForUser(target.id);
+      await revokeGuacTokens(target.id);
+      // Disabling must also suspend the Guacamole account: Guac-side logins
+      // and tokens are outside ProxVM session revocation's reach.
+      try {
+        await ctx.guac.setGuacUserDisabled(target.id, true, await ctx.getGuacDb());
+      } catch {
+        // best-effort; re-disabling is idempotent via the Users page
+      }
     } else if (body.active === true) {
       await ctx.users.setActive(target.id, true);
+      try {
+        await ctx.guac.setGuacUserDisabled(target.id, false, await ctx.getGuacDb());
+      } catch {
+        // best-effort; re-enabling is idempotent via the Users page
+      }
     }
     if (body.role) {
       if (target.id === actor.id && body.role !== "ADMIN") {
@@ -125,6 +154,7 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
     if (body.password) {
       await ctx.users.changePassword(target.id, await hashPassword(body.password));
       await ctx.sessions.revokeAllForUser(target.id);
+      await revokeGuacTokens(target.id);
     }
     if (body.email !== undefined || body.givenName !== undefined) {
       await ctx.db.query(

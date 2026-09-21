@@ -15,6 +15,8 @@ export default function Users() {
   const [form, setForm] = useState({ username: "", email: "", password: "", role: "USER" as (typeof ROLES)[number] });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [resetId, setResetId] = useState<string | null>(null);
+  const [resetPw, setResetPw] = useState({ a: "", b: "" });
   const { data: matrix } = useQuery({
     queryKey: ["iam-matrix"],
     queryFn: () =>
@@ -65,6 +67,20 @@ export default function Users() {
       void qc.invalidateQueries({ queryKey: ["users"] });
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const resetPassword = async (id: string, username: string) => {
+    setError(null);
+    setNotice(null);
+    try {
+      await api(`/users/${id}`, { method: "PUT", body: { password: resetPw.a } });
+      setResetId(null);
+      setResetPw({ a: "", b: "" });
+      setNotice(`Password reset for ${username}. All of their sessions were revoked; they must log in again.`);
+      void qc.invalidateQueries({ queryKey: ["users"] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -163,6 +179,15 @@ export default function Users() {
                     <div className="flex gap-2">
                       <Link to={`/users/${u.id}/permissions`} className="text-xs text-blue-400 underline">Permissions</Link>
                       <button
+                        className="text-xs text-blue-400 underline"
+                        onClick={() => {
+                          setResetId(resetId === u.id ? null : u.id);
+                          setResetPw({ a: "", b: "" });
+                        }}
+                      >
+                        Reset password
+                      </button>
+                      <button
                         className="text-xs underline disabled:opacity-40 disabled:no-underline"
                         disabled={u.id === undefined || u.isInitialAdmin || (onlyAdmin && u.active)}
                         title={
@@ -191,6 +216,33 @@ export default function Users() {
                         Delete
                       </button>
                     </div>
+                    {resetId === u.id && (
+                      <div className="flex flex-wrap gap-2 items-center mt-2">
+                        <input
+                          type="password"
+                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-44"
+                          placeholder="New password (min 12, mixed case, number, symbol)"
+                          value={resetPw.a}
+                          onChange={(e) => setResetPw({ ...resetPw, a: e.target.value })}
+                        />
+                        <input
+                          type="password"
+                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-44"
+                          placeholder="Confirm new password"
+                          value={resetPw.b}
+                          onChange={(e) => setResetPw({ ...resetPw, b: e.target.value })}
+                        />
+                        <button
+                          className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
+                          disabled={!resetPw.a || resetPw.a !== resetPw.b}
+                          title={resetPw.a && resetPw.a !== resetPw.b ? "Passwords do not match" : undefined}
+                          onClick={() => void resetPassword(u.id, u.username)}
+                        >
+                          Set password
+                        </button>
+                        <span className="text-[11px] text-slate-500">Resets immediately and revokes their sessions.</span>
+                      </div>
+                    )}
                   </td>
                 </tr>
                 );

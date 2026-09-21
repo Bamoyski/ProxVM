@@ -322,4 +322,101 @@ describe("RBAC authorization model", () => {
       expect(denied.statusCode).toBe(403);
     }
   });
+
+  it("credential reveal/copy/rotate require VM access, not just the permission", async () => {
+    await ctx.creds.store(assignedVmId, "root", "Vault-Password-1!");
+
+    // Grant alice cred.reveal directly (she has VM access to assignedVmId only).
+    const grant = await app.inject({
+      method: "POST",
+      url: `/api/users/${userId}/permissions`,
+      headers: { cookie: admin.cookie, "x-csrf-token": admin.csrf },
+      payload: { permission: "cred.reveal" },
+    });
+    expect(grant.statusCode).toBe(200);
+
+    const authU = { cookie: user.cookie, "x-csrf-token": user.csrf };
+    const revealOk = await app.inject({
+      method: "POST",
+      url: `/api/vms/${assignedVmId}/credentials/reveal`,
+      headers: authU,
+    });
+    expect(revealOk.statusCode).toBe(200);
+    expect((revealOk.json() as { password: string }).password).toBe("Vault-Password-1!");
+
+    // Same permission, no VM access -> 403.
+    for (const action of ["reveal", "copy"]) {
+      const denied = await app.inject({
+        method: "POST",
+        url: `/api/vms/${unassignedVmId}/credentials/${action}`,
+        headers: authU,
+      });
+      expect(denied.statusCode).toBe(403);
+    }
+  });
+
+  it("jobs are scoped to their creator for non-privileged users", async () => {
+    const aliceJob = await ctx.jobs.create({ vmId: assignedVmId, request: {}, createdByUserId: userId });
+    const othersJob = await ctx.jobs.create({ vmId: unassignedVmId, request: {}, createdByUserId: null });
+
+    const authU = { cookie: user.cookie, "x-csrf-token": user.csrf };
+    const list = await app.inject({ method: "GET", url: "/api/jobs?limit=200", headers: authU });
+    expect(list.statusCode).toBe(200);
+    const ids = (list.json() as { jobs: Array<{ id: string }> }).jobs.map((j) => j.id);
+    expect(ids).toContain(aliceJob.id);
+    expect(ids).not.toContain(othersJob.id);
+
+    // Another user's job: 403 on detail, events, retry, cancel.
+    const opUser = await ctx.users.findByUsername("op");
+    const adminJob = await ctx.jobs.create({ vmId: unassignedVmId, request: {}, createdByUserId: opUser!.id });
+    const detail = await app.inject({ method: "GET", url: `/api/jobs/${adminJob.id}`, headers: authU });
+    expect(detail.statusCode).toBe(403);
+    const retry = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${adminJob.id}/retry`,
+      headers: authU,
+      payload: {},
+    });
+    expect(retry.statusCode).toBe(403);
+
+    // Own job stays fully accessible.
+    const own = await app.inject({ method: "GET", url: `/api/jobs/${aliceJob.id}`, headers: authU });
+    expect(own.statusCode).toBe(200);
+
+    // Privileged roles keep full visibility.
+    const adminList = await app.inject({
+      method: "GET",
+      url: "/api/jobs?limit=200",
+      headers: { cookie: admin.cookie },
+    });
+    expect(adminList.statusCode).toBe(200);
+    const adminIds = (adminList.json() as { jobs: Array<{ id: string }> }).jobs.map((j) => j.id);
+    expect(adminIds).toEqual(expect.arrayContaining([aliceJob.id, othersJob.id, adminJob.id]));
+  });
+
+  it("credential rotate requires VM access for bare permission holders", async () => {
+    // A bare user granted only cred.rotate (no VM access, no operator bypass) -> 403.
+    const bob = await ctx.users.create({
+      username: "bob",
+      passwordHash: await hashPassword("Bob-Password-1!"),
+      roles: ["USER"],
+    });
+    const bobGrant = await app.inject({
+      method: "POST",
+      url: `/api/users/${bob.id}/permissions`,
+      headers: { cookie: admin.cookie, "x-csrf-token": admin.csrf },
+      payload: { permission: "cred.rotate" },
+    });
+    expect(bobGrant.statusCode).toBe(200);
+    const bobSession = await login(app, "bob", "Bob-Password-1!");
+    for (const vm of [assignedVmId, unassignedVmId]) {
+      const rotateDenied = await app.inject({
+        method: "POST",
+        url: `/api/vms/${vm}/credentials/rotate`,
+        headers: { cookie: bobSession.cookie, "x-csrf-token": bobSession.csrf },
+        payload: {},
+      });
+      expect(rotateDenied.statusCode).toBe(403);
+    }
+  });
 });

@@ -27,6 +27,7 @@ export interface GuacamoleDbClient {
   testConnection(): Promise<{ ok: boolean; schemaVersion: string | null; detail: string | null }>;
   createUser(opts: { username: string; password: string }): Promise<number>;
   setUserPassword(username: string, password: string): Promise<void>;
+  setUserDisabled(username: string, disabled: boolean): Promise<void>;
   deleteUser(username: string): Promise<void>;
   createConnection(opts: { name: string; protocol: string; params: Record<string, string> }): Promise<number>;
   updateConnectionParams(connectionName: string, params: Record<string, string>): Promise<void>;
@@ -44,13 +45,6 @@ export function sha256SaltedHashPassword(password: string): { hash: Buffer; salt
   // the salt is appended AFTER the password as an UPPERCASE hex string, and the
   // combined text is hashed as UTF-8 bytes: SHA256(password + hex(salt).toUpperCase()).
   const salted = password + salt.toString("hex").toUpperCase();
-  // codeql[js/insufficient-password-hash]: Intentional third-party compatibility requirement.
-  // This MUST stay SHA-256: it implements Apache Guacamole 1.6.0's
-  // SHA256PasswordEncryptionService JDBC format (SHA256(password +
-  // hex(salt).toUpperCase())), which Guacamole itself verifies on login.
-  // Any other algorithm (bcrypt/Argon2/scrypt/PBKDF2) would lock every
-  // Guacamole-managed user out. ProxVM's own application passwords use
-  // Argon2id (see crypto/password.ts); this hash is never used for them.
   const digest = createHash("sha256").update(salted, "utf8").digest();
   return { hash: digest, salt };
 }
@@ -179,6 +173,14 @@ export class GuacamolePostgresClient implements GuacamoleDbClient {
        SET password_hash = $2, password_salt = $3, password_date = NOW()::date
        WHERE entity_id = (SELECT entity_id FROM guacamole_entity WHERE name = $1 AND type = 'USER')`,
       [username, hash, salt],
+    );
+  }
+
+  async setUserDisabled(username: string, disabled: boolean): Promise<void> {
+    await this.pool.query(
+      `UPDATE guacamole_user SET disabled = $2 WHERE entity_id =
+        (SELECT entity_id FROM guacamole_entity WHERE name = $1 AND type = 'USER')`,
+      [username, disabled],
     );
   }
 
@@ -467,6 +469,14 @@ export class GuacamoleMySqlClient implements GuacamoleDbClient {
        SET password_hash = ?, password_salt = ?, password_date = CURRENT_DATE()
        WHERE entity_id = (SELECT entity_id FROM guacamole_entity WHERE name = ? AND type = 'USER')`,
       [hash, salt, username],
+    );
+  }
+
+  async setUserDisabled(username: string, disabled: boolean): Promise<void> {
+    await this.execute(
+      `UPDATE guacamole_user SET disabled = ? WHERE entity_id =
+        (SELECT entity_id FROM guacamole_entity WHERE name = ? AND type = 'USER')`,
+      [disabled ? 1 : 0, username],
     );
   }
 

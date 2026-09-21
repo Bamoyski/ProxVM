@@ -30,6 +30,8 @@ export interface RotationResult {
   mechanism: string;
   verified: boolean;
   details: string;
+  /** False when the guest + vault rotated but the Guacamole password sync failed. */
+  guacSynced: boolean;
 }
 
 export interface RotationOptions {
@@ -110,7 +112,8 @@ export async function rotateVmCredential(
   const verify = opts.verify !== false;
   let verified = false;
   if (verify) {
-    if (vm.osType === "windows") {
+    const isWindows = vm.osType === "windows";
+    if (isWindows) {
       verified = await probeTcp(vm.ipAddress, 3389, 8000);
     } else {
       const result = await probeSsh({
@@ -121,19 +124,54 @@ export async function rotateVmCredential(
       });
       verified = result.status === "AUTHENTICATED";
       if (!verified) {
-        await rotateViaSsh(vm.ipAddress as string, username, newPassword, oldPassword).catch(() => undefined);
-        await deps.creds.store(vmId, existing.username, oldPassword, "VERIFIED");
-        await deps.creds.setStatus(vmId, "VERIFIED");
+        // Roll back to the old password, but only claim a restore after
+        // re-verifying it: a failed rollback with an unconditional VERIFIED
+        // store has previously locked operators out with neither password
+        // recorded as working.
+        let rollbackError: string | null = null;
+        try {
+          const rolledBack = await rotateViaSsh(vm.ipAddress as string, username, newPassword, oldPassword);
+          if (!rolledBack.success) rollbackError = rolledBack.message;
+        } catch (err) {
+          rollbackError = err instanceof Error ? err.message : String(err);
+        }
+        let restored = rollbackError === null;
+        if (restored) {
+          restored = isWindows
+            ? await probeTcp(vm.ipAddress, 3389, 8000)
+            : (
+                await probeSsh({ host: vm.ipAddress, port: 22, username, password: oldPassword })
+              ).status === "AUTHENTICATED";
+        }
+        if (restored) {
+          await deps.creds.store(vmId, existing.username, oldPassword, "VERIFIED");
+          await deps.audit.record({
+            event: "PASSWORD_ROTATED",
+            actorUserId: actor.userId,
+            actorUsername: actor.username,
+            vmId,
+            detail: { result: "rolled-back", reason: `verification failed: ${result.detail}` },
+          });
+          throw AppError.external(
+            "Guest",
+            `New credential failed verification (${result.detail}). The previous credential was restored.`,
+          );
+        }
+        await deps.creds.store(vmId, existing.username, oldPassword, "FAILED");
         await deps.audit.record({
           event: "PASSWORD_ROTATED",
           actorUserId: actor.userId,
           actorUsername: actor.username,
           vmId,
-          detail: { result: "rolled-back", reason: `verification failed: ${result.detail}` },
+          detail: {
+            result: "rollback-failed",
+            reason: `verification failed: ${result.detail}; rollback ${rollbackError ?? "could not be confirmed"}`,
+          },
         });
         throw AppError.external(
           "Guest",
-          `New credential failed verification (${result.detail}). The previous credential was restored.`,
+          "New credential failed verification and automatic rollback could not be confirmed. " +
+            "The stored credential may not match the guest — reset the password out-of-band and update the vault.",
         );
       }
     }
@@ -146,11 +184,15 @@ export async function rotateVmCredential(
     await deps.creds.setStatus(vmId, "PROVISIONED");
   }
 
+  let guacSynced = true;
+  let guacError: string | null = null;
   try {
     const guacDb = await deps.getGuacDb();
     await deps.guac.updateConnectionPassword(vmId, newPassword, guacDb);
   } catch (err) {
-    deps.logger.error({ vmId, error: err instanceof Error ? err.message : String(err) }, "failed to update Guacamole connection password");
+    guacSynced = false;
+    guacError = err instanceof Error ? err.message : String(err);
+    deps.logger.error({ vmId, error: guacError }, "failed to update Guacamole connection password");
   }
 
   await deps.audit.record({
@@ -158,13 +200,16 @@ export async function rotateVmCredential(
     actorUserId: actor.userId,
     actorUsername: actor.username,
     vmId,
-    detail: { result: "success", mechanism: applied.message, verified },
+    detail: { result: guacSynced ? "success" : "success-guac-pending", mechanism: applied.message, verified, guacSynced, guacError },
   });
   return {
     success: true,
     mechanism: applied.message,
     verified,
-    details: vm.osType === "windows" ? "Transport-level check only; RDP authentication is verified when opened" : "SSH authentication verified",
+    guacSynced,
+    details:
+      (vm.osType === "windows" ? "Transport-level check only; RDP authentication is verified when opened" : "SSH authentication verified") +
+      (guacSynced ? "" : ". WARNING: the Guacamole connection password was NOT updated — remote sessions will fail until it is resynced."),
   };
 }
 

@@ -51,7 +51,7 @@ export class JobsRepository {
     return job;
   }
 
-  async list(opts: { limit?: number; offset?: number; status?: JobStatus; vmId?: string }): Promise<JobRecord[]> {
+  async list(opts: { limit?: number; offset?: number; status?: JobStatus; vmId?: string; createdByUserId?: string }): Promise<JobRecord[]> {
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (opts.status) {
@@ -61,6 +61,10 @@ export class JobsRepository {
     if (opts.vmId) {
       params.push(opts.vmId);
       conditions.push(`vm_id = $${params.length}`);
+    }
+    if (opts.createdByUserId !== undefined) {
+      params.push(opts.createdByUserId);
+      conditions.push(`created_by_user_id = $${params.length}`);
     }
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     params.push(opts.limit ?? 50, opts.offset ?? 0);

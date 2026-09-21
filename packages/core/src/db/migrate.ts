@@ -14,6 +14,7 @@ import { adminGuardMigration } from "./migrations/004_admin_vm_meta.js";
 import { guacUserUniqueMigration } from "./migrations/005_guac_user_unique.js";
 import { vmAccessActorMigration } from "./migrations/006_vm_access_actor.js";
 import { iamMigration } from "./migrations/007_iam.js";
+import { guacSessionTokensMigration } from "./migrations/008_guac_session_tokens.js";
 
 export const MIGRATIONS: Migration[] = [
   { id: "001", name: "initial", sql: initialMigration },
@@ -23,6 +24,7 @@ export const MIGRATIONS: Migration[] = [
   { id: "005", name: "guac_user_unique", sql: guacUserUniqueMigration },
   { id: "006", name: "vm_access_actor", sql: vmAccessActorMigration },
   { id: "007", name: "iam", sql: iamMigration },
+  { id: "008", name: "guac_session_tokens", sql: guacSessionTokensMigration },
 ];
 
 export async function runMigrations(db: Queryable, logger: Logger): Promise<string[]> {

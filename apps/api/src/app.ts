@@ -31,7 +31,13 @@ export interface BuildAppOptions {
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false,
-    trustProxy: true,
+    // Secure by default: derive the client IP from the socket, never from
+    // X-Forwarded-For (whose leftmost entries anyone can spoof). Rate limits
+    // and audit IPs keyed off request.ip are then spoof-proof. Set
+    // PROXVM_TRUST_PROXY=1 ONLY when a reverse proxy you control is
+    // guaranteed in front (it appends the real client IP last) and you need
+    // true client IPs in logs — and understand spoofed prefixes are trusted.
+    trustProxy: process.env.PROXVM_TRUST_PROXY === "1",
     bodyLimit: 1024 * 1024,
   });
 
@@ -51,6 +57,15 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       allowedHeaders: ["Content-Type", "X-CSRF-Token"],
     });
   }
+
+  // Defense-in-depth response headers for the JSON/SSE API (the nginx layer
+  // sends its own set for the proxied path; duplicates are harmless).
+  app.addHook("onSend", async (_request, reply, payload) => {
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("Referrer-Policy", "same-origin");
+    reply.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+    return payload;
+  });
 
   app.setErrorHandler((error, request, reply) => {
     // Duck-type ZodError (name + issues) instead of relying solely on

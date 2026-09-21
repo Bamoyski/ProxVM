@@ -96,4 +96,17 @@ describe("proxmox routes report upstream errors", () => {
     expect(res.statusCode).toBe(400);
     await app.close();
   });
+
+  it("rejects node values that could escape the upstream API path", async () => {
+    const app = await buildApp({ setupMode: false, ctx });
+    for (const node of ["foo/../cluster", "..%2F..%2Fcluster", "node;rm"]) {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/proxmox/storage?node=${node}`,
+        headers: { cookie: cookieHeader },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+    await app.close();
+  });
 });

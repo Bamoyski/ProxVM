@@ -395,6 +395,145 @@ describe("IAM system", () => {
     expect((after.json() as { members: unknown[] }).members).toHaveLength(0);
   });
 
+  it("group detail exposes effective permissions with provenance and descriptions", async () => {
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/groups",
+      headers: auth(admin),
+      payload: { name: "perm-viewers" },
+    });
+    expect(create.statusCode).toBe(200);
+    const gid = (create.json() as { group: { id: string } }).group.id;
+
+    const addRdpRole = await app.inject({
+      method: "POST",
+      url: `/api/groups/${gid}/roles`,
+      headers: auth(admin),
+      payload: { roleId: rdpRoleId },
+    });
+    expect(addRdpRole.statusCode).toBe(200);
+
+    // Legacy role (hardcoded permission set) alongside the custom role.
+    const rolesRes = await app.inject({ method: "GET", url: "/api/roles", headers: get(admin) });
+    expect(rolesRes.statusCode).toBe(200);
+    const userRole = (rolesRes.json() as { roles: Array<{ id: string; name: string }> }).roles.find(
+      (r) => r.name === "USER",
+    );
+    expect(userRole).toBeTruthy();
+    const addUserRole = await app.inject({
+      method: "POST",
+      url: `/api/groups/${gid}/roles`,
+      headers: auth(admin),
+      payload: { roleId: userRole!.id },
+    });
+    expect(addUserRole.statusCode).toBe(200);
+
+    const detail = await app.inject({ method: "GET", url: `/api/groups/${gid}`, headers: get(admin) });
+    expect(detail.statusCode).toBe(200);
+    const perms = (
+      detail.json() as {
+        permissions: Array<{ code: string; category: string; description: string; scope: string; roles: string[] }>;
+      }
+    ).permissions;
+    const byCode = new Map(perms.map((p) => [p.code, p]));
+    // Custom-role provenance with catalog description.
+    expect(byCode.get("protocol.rdp")?.roles).toEqual(["RDP Operator"]);
+    expect(byCode.get("protocol.rdp")?.description).toBe("Use RDP on accessible VMs");
+    expect(byCode.get("protocol.rdp")?.category).toBe("Remote Access");
+    // Union across custom + legacy roles, roles sorted.
+    expect(byCode.get("vm.read")?.roles).toEqual(["RDP Operator", "USER"]);
+    // Legacy-only permission.
+    expect(byCode.get("guac.launch")?.roles).toEqual(["USER"]);
+    // Every entry carries catalog metadata.
+    for (const p of perms) {
+      expect(p.description.length).toBeGreaterThan(0);
+      expect(p.category.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("delegated group-managers cannot self-escalate via members or VM grants", async () => {
+    const roleRes = await app.inject({
+      method: "POST",
+      url: "/api/roles",
+      headers: auth(admin),
+      payload: { name: "Group Manager", description: "t", permissions: ["groups.manage"] },
+    });
+    expect(roleRes.statusCode).toBe(200);
+    const gmRoleId = (roleRes.json() as { role: { id: string } }).role.id;
+
+    const mgrUser = await ctx.users.create({
+      username: "mgr",
+      passwordHash: await hashPassword("Mgr-Password-1!"),
+      roles: ["USER"],
+    });
+    const assign = await app.inject({
+      method: "POST",
+      url: `/api/users/${mgrUser.id}/roles`,
+      headers: auth(admin),
+      payload: { roleId: gmRoleId },
+    });
+    expect(assign.statusCode).toBe(200);
+    const mgr = await login(app, "mgr", "Mgr-Password-1!");
+
+    // Empty group: adding a plain user confers nothing, so it succeeds.
+    const dave = await ctx.users.create({
+      username: "dave",
+      passwordHash: await hashPassword("Dave-Password-1!"),
+      roles: ["USER"],
+    });
+    const g = await app.inject({
+      method: "POST",
+      url: "/api/groups",
+      headers: auth(mgr),
+      payload: { name: "course101" },
+    });
+    expect(g.statusCode).toBe(200);
+    const gid = (g.json() as { group: { id: string } }).group.id;
+    const addDave = await app.inject({
+      method: "POST",
+      url: `/api/groups/${gid}/members`,
+      headers: auth(mgr),
+      payload: { userId: dave.id },
+    });
+    expect(addDave.statusCode).toBe(200);
+
+    // ADMIN-role group: adding a member would confer admin -> 403.
+    const rolesRes = await app.inject({ method: "GET", url: "/api/roles", headers: get(admin) });
+    const adminRole = (rolesRes.json() as { roles: Array<{ id: string; name: string }> }).roles.find(
+      (r) => r.name === "ADMIN",
+    )!;
+    const g2 = await app.inject({
+      method: "POST",
+      url: "/api/groups",
+      headers: auth(admin),
+      payload: { name: "admins-ish" },
+    });
+    const gid2 = (g2.json() as { group: { id: string } }).group.id;
+    const linkAdmin = await app.inject({
+      method: "POST",
+      url: `/api/groups/${gid2}/roles`,
+      headers: auth(admin),
+      payload: { roleId: adminRole.id },
+    });
+    expect(linkAdmin.statusCode).toBe(200);
+    const escAdd = await app.inject({
+      method: "POST",
+      url: `/api/groups/${gid2}/members`,
+      headers: auth(mgr),
+      payload: { userId: dave.id },
+    });
+    expect(escAdd.statusCode).toBe(403);
+
+    // VM grants need vm.edit on top of groups.manage.
+    const grantVm = await app.inject({
+      method: "POST",
+      url: `/api/groups/${gid}/vms`,
+      headers: auth(mgr),
+      payload: { vmId },
+    });
+    expect(grantVm.statusCode).toBe(403);
+  });
+
   it("protocol scoping is enforced on launch with safe explanations", async () => {
     // alice: direct legacy access (all protocols) + group rdp-only access.
     // Re-add her to the group first.

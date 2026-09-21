@@ -32,6 +32,8 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
   app.post("/vms/:id/credentials/reveal", async (request) => {
     const { id } = request.params as { id: string };
     const user = await app.requirePermission("cred.reveal")(request);
+    const access = await resolveAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden("No access to this VM");
     const vm = await ctx.vms.requireById(id);
     const row = await ctx.creds.findByVm(vm.id);
     if (!row) throw AppError.notFound("No credential stored for this VM");
@@ -49,6 +51,8 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
   app.post("/vms/:id/credentials/copy", async (request) => {
     const { id } = request.params as { id: string };
     const user = await app.requirePermission("cred.reveal")(request);
+    const access = await resolveAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden("No access to this VM");
     const vm = await ctx.vms.requireById(id);
     const row = await ctx.creds.findByVm(vm.id);
     if (!row) throw AppError.notFound("No credential stored for this VM");
@@ -66,6 +70,8 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
   app.post("/vms/:id/credentials/rotate", async (request) => {
     const { id } = request.params as { id: string };
     const user = await app.requirePermission("cred.rotate")(request);
+    const access = await resolveAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden("No access to this VM");
     const vm = await ctx.vms.requireById(id);
     const body = credentialRotateSchema.parse(request.body ?? {});
     const result = await ctx.rotateCredential(

@@ -296,7 +296,7 @@ export default function Vms({ me }: { me: Me }) {
       if (res.mode === "login" && res.detail) {
         alert(`Guacamole could not start a direct session: ${res.detail}\n\nOpening the Guacamole login page instead.`);
       }
-      window.open(res.url, "_blank");
+      window.open(res.url, "_blank", "noopener");
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }

@@ -12,10 +12,19 @@ interface Group {
   vmCount: number;
 }
 
+interface GroupPermission {
+  code: string;
+  category: string;
+  description: string;
+  scope: string;
+  roles: string[];
+}
+
 interface GroupDetail extends Group {
   members: Array<{ userId: string; username: string; expiresAt: string | null }>;
   roles: Array<{ roleId: string; roleName: string; expiresAt: string | null }>;
   vms: Array<{ vmId: string; vmName: string; vmid: number; node: string; protocols: string[] | null; expiresAt: string | null }>;
+  permissions: GroupPermission[];
 }
 
 interface Role {
@@ -55,7 +64,7 @@ export default function Groups() {
 
   const { data: detailData } = useQuery({
     queryKey: ["group", selectedId],
-    queryFn: () => api<{ group: Group; members: GroupDetail["members"]; roles: GroupDetail["roles"]; vms: GroupDetail["vms"] }>(`/groups/${selectedId}`),
+    queryFn: () => api<{ group: Group; members: GroupDetail["members"]; roles: GroupDetail["roles"]; vms: GroupDetail["vms"]; permissions: GroupPermission[] }>(`/groups/${selectedId}`),
     enabled: !!selectedId,
   });
 
@@ -240,6 +249,11 @@ export default function Groups() {
                 </div>
               </div>
               <div className="bg-slate-900 border border-slate-800 rounded p-4">
+                <h3 className="text-xs font-medium text-slate-400 mb-2">Effective permissions</h3>
+                <div className="text-xs text-slate-500 mb-2">Union of permissions from the group's roles.</div>
+                <GroupPermissions permissions={detailData.permissions ?? []} />
+              </div>
+              <div className="bg-slate-900 border border-slate-800 rounded p-4">
                 <h3 className="text-xs font-medium text-slate-400 mb-2">VM access</h3>
                 <div className="space-y-1 mb-3">
                   {detail.vms.map((v) => (
@@ -273,6 +287,34 @@ export default function Groups() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function GroupPermissions({ permissions }: { permissions: GroupPermission[] }) {
+  if (!permissions.length) return <div className="text-xs text-slate-500">No permissions via roles.</div>;
+  const byCategory = new Map<string, GroupPermission[]>();
+  for (const p of permissions) {
+    const list = byCategory.get(p.category) ?? [];
+    list.push(p);
+    byCategory.set(p.category, list);
+  }
+  return (
+    <div className="space-y-3">
+      {[...byCategory.entries()].map(([category, perms]) => (
+        <div key={category}>
+          <div className="text-xs font-medium text-slate-400 mb-1">{category}</div>
+          <div className="space-y-1">
+            {perms.map((p) => (
+              <div key={p.code} className="text-sm py-0.5" title={p.description}>
+                <span className="font-mono text-blue-300">{p.code}</span>
+                <span className="text-slate-400 ml-2">{p.description}</span>
+                <span className="text-xs text-slate-500 ml-2">via {p.roles.join(", ")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

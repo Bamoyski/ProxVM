@@ -19,6 +19,7 @@ import Audit from "./pages/Audit.js";
 import Jobs from "./pages/Jobs.js";
 import Settings from "./pages/Settings.js";
 import Health from "./pages/Health.js";
+import Help from "./pages/Help.js";
 
 export interface Me {
   user: { id: string; username: string; roles: string[] } | null;
@@ -56,6 +57,7 @@ const NAV = [
   { to: "/jobs", label: "Jobs" },
   { to: "/settings", label: "Settings" },
   { to: "/health", label: "Health" },
+  { to: "/help", label: "Help" },
 ];
 
 export default function App() {
@@ -129,6 +131,16 @@ export default function App() {
   const effective = effectiveData ? new Set(effectiveData.permissions.map((p) => p.permission)) : null;
   const canNav = (perm: string, legacy: boolean): boolean =>
     effective ? effective.has(perm) : legacy;
+  // Legacy fallback per permission for the Help page, mirroring the sidebar
+  // rules above: pages without a nav filter are visible to everyone.
+  const helpLegacy = (perm: string): boolean => {
+    if (perm === "templates.manage" || perm === "jobs.read") return privileged;
+    if (perm === "audit.read") return hasAuditRead;
+    if (["users.manage", "roles.manage", "groups.manage", "cred.reveal", "settings.manage"].includes(perm)) {
+      return isAdmin;
+    }
+    return true;
+  };
 
   return (
     <div className="min-h-screen flex">
@@ -194,6 +206,7 @@ export default function App() {
           <Route path="/jobs/:jobId" element={<Jobs me={me} />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/health" element={<Health />} />
+          <Route path="/help" element={<Help can={(perm) => canNav(perm, helpLegacy(perm))} />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

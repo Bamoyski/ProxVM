@@ -18,6 +18,8 @@ interface SetupOpts {
   setupMode: boolean;
 }
 
+
+
 export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promise<void> {
   const configured = opts.setupMode === false;
 
@@ -31,11 +33,12 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
         mode: "setup",
         configured: false,
         restartRequired: true,
-        configFile: defaultConfigPath(),
       };
     }
-    return { mode: "setup", configured: false, restartRequired: false, configFile: defaultConfigPath() };
+    return { mode: "setup", configured: false, restartRequired: false };
   });
+
+
 
   // The test-* endpoints let callers make the server open connections to
   // arbitrary hosts. In setup mode they must stay open (no users exist yet);
@@ -45,7 +48,9 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     await app.requirePermission("settings.manage")(request);
   };
 
-  app.post("/setup/test-database", { config: { csrf: "skip" } }, async (request) => {
+  // Unauthenticated while unconfigured: tight per-IP budgets so internet
+  // scanning bots get 429s instead of free SSRF probes.
+  app.post("/setup/test-database", { config: { csrf: "skip", rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
     await requireSetupOrAdmin(request);
     const body = databaseConfigSchema.parse(request.body);
     const pool = createPgPool({
@@ -69,7 +74,7 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     }
   });
 
-  app.post("/setup/test-redis", { config: { csrf: "skip" } }, async (request) => {
+  app.post("/setup/test-redis", { config: { csrf: "skip", rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
     await requireSetupOrAdmin(request);
     const body = redisConfigSchema.parse(request.body);
     const IORedis = (await import("ioredis")).default as unknown as new (o: Record<string, unknown>) => import("ioredis").Redis;
@@ -93,7 +98,7 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     }
   });
 
-  app.post("/setup/test-proxmox", { config: { csrf: "skip" } }, async (request) => {
+  app.post("/setup/test-proxmox", { config: { csrf: "skip", rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
     await requireSetupOrAdmin(request);
     const body = proxmoxConfigSchema.parse(request.body);
     const client = new ProxmoxClient({
@@ -120,7 +125,7 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     }
   });
 
-  app.post("/setup/test-guacamole", { config: { csrf: "skip" } }, async (request) => {
+  app.post("/setup/test-guacamole", { config: { csrf: "skip", rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
     await requireSetupOrAdmin(request);
     const body = guacamoleConfigSchema.parse(request.body);
     let parsedUrl: string;
@@ -160,7 +165,7 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     }
   });
 
-  app.post("/setup/complete", { config: { csrf: "skip" } }, async (request) => {
+  app.post("/setup/complete", { config: { csrf: "skip", rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
     if (configured) {
       throw AppError.forbidden("Setup is already complete");
     }

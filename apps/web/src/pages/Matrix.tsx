@@ -3,6 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api.js";
 import { PageTitle } from "../components/ui.js";
 
+interface CatalogPermission {
+  code: string;
+  category: string;
+  description: string;
+  scope: string;
+}
+
 interface MatrixUser {
   user: { id: string; username: string; roles: string[]; active: boolean };
   permissions: Array<{ permission: string; sources: string[] }>;
@@ -15,7 +22,7 @@ export default function Matrix() {
     queryKey: ["iam-matrix"],
     queryFn: () =>
       api<{
-        permissions: Array<{ code: string; category: string }>;
+        permissions: CatalogPermission[];
         users: MatrixUser[];
       }>("/iam/matrix"),
     refetchInterval: 30000,
@@ -24,6 +31,7 @@ export default function Matrix() {
   const [category, setCategory] = useState("");
   const [grantedOnly, setGrantedOnly] = useState(false);
   const [permissionFilter, setPermissionFilter] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
 
   const categories = useMemo(
     () => [...new Set((data?.permissions ?? []).map((p) => p.category))],
@@ -35,10 +43,19 @@ export default function Matrix() {
     if (category) list = list.filter((p) => p.category === category);
     if (permissionFilter) {
       const q = permissionFilter.toLowerCase();
-      list = list.filter((p) => p.code.toLowerCase().includes(q));
+      list = list.filter(
+        (p) => p.code.toLowerCase().includes(q) || p.description.toLowerCase().includes(q),
+      );
     }
     return list;
   }, [data, category, permissionFilter]);
+
+  const selectedPerm = useMemo<CatalogPermission | null>(() => {
+    const all = data?.permissions ?? [];
+    if (selected) return all.find((p) => p.code === selected) ?? null;
+    if (permList.length === 1 && permList[0]) return permList[0];
+    return null;
+  }, [data, selected, permList]);
 
   const users = useMemo(() => {
     let list = data?.users ?? [];
@@ -94,14 +111,43 @@ export default function Matrix() {
           Only users holding the filtered permission (pick exactly one)
         </label>
       </div>
+      {selectedPerm && (
+        <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-4">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-lg text-blue-300">{selectedPerm.code}</span>
+            <span className="text-xs text-slate-500">
+              {selectedPerm.category} · scope: {selectedPerm.scope}
+            </span>
+            <button
+              className="ml-auto text-xs text-slate-400 hover:text-slate-200 underline"
+              onClick={() => setSelected(null)}
+            >
+              Close
+            </button>
+          </div>
+          <div className="text-slate-200 text-base mt-2">{selectedPerm.description}</div>
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
               <th className="py-2 pr-4 sticky left-0 bg-slate-950">User</th>
               {permList.map((p) => (
-                <th key={p.code} className="py-2 px-2 font-mono font-normal whitespace-nowrap" title={p.code}>
+                <th key={p.code} className="py-2 px-2 font-mono font-normal whitespace-nowrap" title={p.description || p.code}>
                   {p.code}
+                  <button
+                    className={`ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full border text-[10px] leading-none ${
+                      selectedPerm?.code === p.code
+                        ? "border-blue-400 text-blue-300"
+                        : "border-slate-600 text-slate-400 hover:border-slate-300 hover:text-slate-200"
+                    }`}
+                    title={`About ${p.code}`}
+                    aria-label={`About ${p.code}`}
+                    onClick={() => setSelected(selectedPerm?.code === p.code ? null : p.code)}
+                  >
+                    i
+                  </button>
                 </th>
               ))}
               <th className="py-2 px-2">VMs</th>
@@ -132,7 +178,7 @@ export default function Matrix() {
         </table>
         {!users.length && <div className="text-sm text-slate-500 py-4">No users match the current filters.</div>}
       </div>
-      <div className="text-xs text-slate-500 mt-2">Hover a ✓ to see where each permission comes from (role, group, direct grant).</div>
+      <div className="text-xs text-slate-500 mt-2">Hover a column header for the permission description, or click its ⓘ button for details. Hover a ✓ to see where each permission comes from (role, group, direct grant).</div>
     </div>
   );
 }

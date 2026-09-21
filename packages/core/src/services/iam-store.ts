@@ -1,5 +1,6 @@
 import { isUuid, newId } from "../util/misc.js";
 import type { Queryable } from "../db/pool.js";
+import { isLive, roleEffectivePermissions } from "./iam.js";
 import type { RoleRow } from "./iam.js";
 
 export interface PermissionEntry {
@@ -241,6 +242,43 @@ export async function groupRoles(db: Queryable, groupId: string): Promise<
     [groupId],
   );
   return result.rows.map((r) => ({ roleId: r.role_id, roleName: r.role_name, expiresAt: r.expires_at }));
+}
+
+export interface GroupPermissionEntry extends PermissionEntry {
+  /** Role names (linked to the group) that confer this permission. */
+  roles: string[];
+}
+
+/**
+ * Union of permissions conferred by a group's roles, with provenance.
+ * Handles legacy roles (hardcoded sets) and custom roles (stored rows) via
+ * roleEffectivePermissions; expired group_roles links are ignored, matching
+ * authorization resolution. Ordered like the permission catalog.
+ */
+export async function groupEffectivePermissions(
+  db: Queryable,
+  groupId: string,
+): Promise<GroupPermissionEntry[]> {
+  if (!isUuid(groupId)) return [];
+  const links = await db.query<{ role_id: string; role_name: string; expires_at: Date | null }>(
+    `SELECT gr.role_id, r.name AS role_name, gr.expires_at
+       FROM group_roles gr JOIN roles r ON r.id = gr.role_id
+       WHERE gr.group_id = $1 ORDER BY r.name ASC`,
+    [groupId],
+  );
+  const byPermission = new Map<string, Set<string>>();
+  for (const link of links.rows) {
+    if (!isLive(link.expires_at)) continue;
+    for (const code of await roleEffectivePermissions(db, link.role_id)) {
+      const holders = byPermission.get(code) ?? new Set<string>();
+      holders.add(link.role_name);
+      byPermission.set(code, holders);
+    }
+  }
+  const catalog = await listPermissions(db);
+  return catalog
+    .filter((entry) => byPermission.has(entry.code))
+    .map((entry) => ({ ...entry, roles: [...(byPermission.get(entry.code) ?? [])].sort() }));
 }
 
 export async function groupVms(db: Queryable, groupId: string): Promise<

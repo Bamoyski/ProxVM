@@ -14,6 +14,7 @@ import {
   buildClientLaunchUrl,
   buildLoginUrl,
 } from "../guacamole/api.js";
+import { testConnection, type ConnectionTestResult } from "../guacamole/test-connection.js";
 import type { GuacConnectionRow, GuacUserRow } from "./rows.js";
 
 export interface GuacamoleServiceDeps {
@@ -240,7 +241,15 @@ export class GuacamoleService {
     }
   }
 
-  async launch(vmId: string, appUserId: string, guacApi: GuacamoleApiClient | null, guacUrl: string, publicUrl?: string | null, protocol?: Protocol): Promise<{ url: string; mode: "direct" | "login"; detail?: string }> {
+  async launch(
+    vmId: string,
+    appUserId: string,
+    guacApi: GuacamoleApiClient | null,
+    guacUrl: string,
+    publicUrl?: string | null,
+    protocol?: Protocol,
+    opts?: { trackSessionId?: string },
+  ): Promise<{ url: string; mode: "direct" | "login"; detail?: string }> {
     const connection = await this.findConnectionRecord(vmId, protocol);
     if (!connection) throw AppError.notFound("No Guacamole connection exists for this VM");
     const userRecord = await this.findUserRecord(appUserId);
@@ -261,6 +270,9 @@ export class GuacamoleService {
         if (!identifier) {
           return { url: buildLoginUrl(publicUrl || guacUrl), mode: "login", detail: `Guacamole connection "${connection.guac_connection_name}" could not be found in the Guacamole data source.` };
         }
+        if (opts?.trackSessionId) {
+          await this.trackSessionToken(opts.trackSessionId, token.authToken).catch(() => undefined);
+        }
         return { url: buildClientLaunchUrl(publicUrl || guacUrl, identifier, token.authToken), mode: "direct" };
       } catch (err) {
         return { url: buildLoginUrl(publicUrl || guacUrl), mode: "login", detail: err instanceof Error ? err.message : String(err) };
@@ -269,10 +281,100 @@ export class GuacamoleService {
     return { url: buildLoginUrl(publicUrl || guacUrl), mode: "login", detail: "Guacamole API client is not available." };
   }
 
+  /**
+   * Diagnose one stored connection without revealing secrets: TCP reachability
+   * always, plus an SSH authentication check against the stored credential
+   * (SSH only) or an RDP handshake liveness check (RDP only). Read-only from
+   * the guest's perspective apart from a single login attempt.
+   */
+  async testConnectionRecord(
+    vmId: string,
+    protocol?: Protocol,
+  ): Promise<ConnectionTestResult & { protocol: string; hostname: string; port: number }> {
+    const connection = await this.findConnectionRecord(vmId, protocol);
+    if (!connection) throw AppError.notFound("No Guacamole connection exists for this VM");
+    const password = this.deps.decrypt(connection.password_ciphertext);
+    return {
+      protocol: connection.protocol,
+      hostname: connection.hostname,
+      port: connection.port,
+      ...(await testConnection({
+        protocol: connection.protocol,
+        hostname: connection.hostname,
+        port: connection.port,
+        username: connection.username,
+        password,
+      })),
+    };
+  }
+
+  /**
+   * Remember a Guacamole auth token against a ProxVM session so logout and
+   * revocation paths can invalidate it server-side. Tokens are encrypted at
+   * rest; tracking failures never break launches.
+   */
+  async trackSessionToken(proxvmSessionId: string, token: string): Promise<void> {
+    const ciphertext = this.deps.encrypt(token);
+    await this.db.query(
+      "INSERT INTO guac_session_tokens (id, proxvm_session_id, token_ciphertext, key_id) VALUES ($1, $2, $3, $4)",
+      [newId(), proxvmSessionId, ciphertext, keyIdOf(ciphertext)],
+    );
+  }
+
+  /**
+   * Invalidate every Guacamole token tracked for a ProxVM session (or for all
+   * sessions of a user) and drop the rows. Remote failures are best-effort:
+   * Guacamole's own api-session-timeout bounds any token we cannot reach.
+   * Returns the number of tracked tokens revoked.
+   */
+  async revokeSessionTokens(proxvmSessionId: string, guacApi: GuacamoleApiClient | null): Promise<number> {
+    const rows = await this.db.query<{ token_ciphertext: string }>(
+      "SELECT token_ciphertext FROM guac_session_tokens WHERE proxvm_session_id = $1",
+      [proxvmSessionId],
+    );
+    let revoked = 0;
+    for (const row of rows.rows) {
+      try {
+        if (guacApi) {
+          await guacApi.deleteToken(this.deps.decrypt(row.token_ciphertext));
+          revoked += 1;
+        }
+      } catch {
+        // best-effort; row is still deleted below
+      }
+    }
+    await this.db.query("DELETE FROM guac_session_tokens WHERE proxvm_session_id = $1", [proxvmSessionId]);
+    return revoked;
+  }
+
+  async revokeAllUserTokens(userId: string, guacApi: GuacamoleApiClient | null): Promise<number> {
+    const sessions = await this.db.query<{ id: string }>(
+      "SELECT id FROM sessions WHERE user_id = $1",
+      [userId],
+    );
+    let total = 0;
+    for (const s of sessions.rows) {
+      total += await this.revokeSessionTokens(s.id, guacApi);
+    }
+    return total;
+  }
+
   async removeUserResources(appUserId: string, guacDb: GuacamoleDbClient): Promise<void> {
     const userRecord = await this.findUserRecord(appUserId);
     if (!userRecord) return;
     await guacDb.deleteUser(userRecord.guac_username);
     await this.db.query("DELETE FROM guacamole_users WHERE user_id = $1", [appUserId]);
+  }
+
+  /**
+   * Suspend or restore the user's Guacamole account without deleting it, so
+   * disabling a ProxVM account also stops direct Guacamole logins (which
+   * ProxVM sessions/revocation otherwise do not reach). No-op when the user
+   * has no Guacamole account.
+   */
+  async setGuacUserDisabled(appUserId: string, disabled: boolean, guacDb: GuacamoleDbClient): Promise<void> {
+    const userRecord = await this.findUserRecord(appUserId);
+    if (!userRecord) return;
+    await guacDb.setUserDisabled(userRecord.guac_username, disabled);
   }
 }

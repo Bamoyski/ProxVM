@@ -28,7 +28,10 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
       <form onSubmit={submit} className="bg-slate-900 border border-slate-800 rounded-lg p-8 w-96">
-        <h1 className="text-2xl font-bold text-blue-400 mb-6">ProxVM</h1>
+        <h1 className="text-2xl font-bold text-blue-400 mb-1">ProxVM</h1>
+        <p className="text-xs text-slate-400 mb-4">
+          Open-source virtual-machine management for Proxmox VE and Apache Guacamole.
+        </p>
         <div className="space-y-3">
           <input
             className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
@@ -48,6 +51,16 @@ export default function Login() {
           <button disabled={busy} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm font-medium">
             {busy ? "Signing in…" : "Sign in"}
           </button>
+          <div className="text-xs text-slate-500 mt-4 text-center">
+            <a
+              href="https://github.com/Bamoyski/ProxVM"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:underline"
+            >
+              GitHub repository &amp; documentation
+            </a>
+          </div>
         </div>
       </form>
     </div>

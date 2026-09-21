@@ -12,6 +12,10 @@ async function main(): Promise<void> {
   const config = await loadConfig();
   if (!config) {
     logger.warn({}, "ProxVM is not configured. Starting in setup mode.");
+    // Setup mode is unauthenticated by design (no users exist yet): never
+    // expose an unconfigured instance to untrusted networks. Finish setup
+    // promptly and restart immediately afterward — setup endpoints stay live
+    // until the process restarts into configured mode.
     const app = await buildApp({ setupMode: true, webOrigin });
     await app.listen({ port, host });
     logger.info({ url: `http://localhost:${port}` }, "ProxVM setup wizard available");
@@ -43,6 +47,16 @@ async function main(): Promise<void> {
   redis.on("error", (err: Error) => {
     logger.warn({ error: err.message }, "Redis connection error");
   });
+
+  // Open-internet sanity checks: insecure cookies or a plaintext public
+  // origin silently downgrade session security. Warn loudly instead of
+  // refusing to boot (local HTTP development still needs to work).
+  if (!config.app.cookieSecure) {
+    logger.warn({}, "Session cookies are NOT Secure-flagged. Enable cookieSecure (Settings) before exposing ProxVM to the open internet.");
+  }
+  if (/^http:\/\//i.test(webOrigin) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(webOrigin)) {
+    logger.warn({ webOrigin }, "Public web origin uses plaintext HTTP. Terminate TLS in front of ProxVM for open-internet use.");
+  }
 
   const ctx = await createCore(config, { db: pool, redis, logger });
   const queue = createProvisioningQueue(redis);

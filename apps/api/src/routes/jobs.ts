@@ -15,6 +15,17 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     return queue;
   };
 
+  // Jobs are scoped to their creator for non-privileged users; ADMIN and
+  // OPERATOR retain full visibility (matching the /vms privileged model).
+  const privileged = (user: { roles: string[] }): boolean =>
+    user.roles.includes("ADMIN") || user.roles.includes("OPERATOR");
+
+  const assertJobAccess = (user: { id: string; roles: string[] }, job: { createdByUserId: string | null }): void => {
+    if (!privileged(user) && job.createdByUserId !== user.id) {
+      throw AppError.forbidden("No access to this job");
+    }
+  };
+
   app.get("/jobs", { preHandler: app.requirePermission("jobs.read") }, async (request) => {
     const query = z
       .object({
@@ -23,10 +34,12 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
         status: z.string().optional(),
       })
       .parse(request.query);
+    const user = await app.requireAuth(request);
     const jobs = await ctx.jobs.list({
       limit: query.limit,
       offset: query.offset,
       status: query.status as never,
+      ...(privileged(user) ? {} : { createdByUserId: user.id }),
     });
     return { jobs: jobs.map((j) => ({ ...j, request: undefined })) };
   });
@@ -37,6 +50,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     if (!job) {
       return reply.status(404).send({ code: "NOT_FOUND", message: "Job not found" });
     }
+    assertJobAccess(await app.requireAuth(request), job);
     const steps = await ctx.jobs.getSteps(id);
     const jobRequest = job.request as Record<string, unknown>;
     const safeRequest = jobRequest.password
@@ -49,6 +63,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const { id } = request.params as { id: string };
     const user = await app.requireAuth(request);
     const job = await ctx.jobs.require(id);
+    assertJobAccess(user, job);
     if (job.status === "PENDING" || job.status === "PROVISIONING" || job.status === "WAITING_FOR_GUEST" || job.status === "CREATING" || job.status === "CONFIGURING" || job.status === "VERIFYING" || job.status === "GUACAMOLE_CREATING") {
       throw AppError.conflict("Job is still active; cancel it first");
     }
@@ -90,6 +105,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const { id } = request.params as { id: string };
     const user = await app.requireAuth(request);
     const job = await ctx.jobs.require(id);
+    assertJobAccess(user, job);
     if (job.status === "READY" || job.status === "FAILED" || job.status === "CANCELLED") {
       throw AppError.conflict("Job already finished");
     }
@@ -113,6 +129,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const user = await app.requireAuth(request);
     const body = z.object({ action: z.enum(["delete", "keep"]) }).parse(request.body);
     const job = await ctx.jobs.require(id);
+    assertJobAccess(user, job);
     await ctx.audit.record({
       event: "ROLLBACK",
       actorUserId: user.id,
@@ -157,7 +174,8 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
 
   app.get("/jobs/:id/events", { preHandler: app.requirePermission("jobs.read") }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    await ctx.jobs.require(id);
+    const job = await ctx.jobs.require(id);
+    assertJobAccess(await app.requireAuth(request), job);
     const subscriber = ctx.redis.duplicate();
     const channel = `proxvm:job:${id}`;
     let heartbeat: ReturnType<typeof setInterval> | undefined;

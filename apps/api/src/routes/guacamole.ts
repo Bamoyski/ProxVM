@@ -100,7 +100,9 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
     const resolvedProtocol = body.protocol ?? usable[0]!.protocol;
     const guacApi = await ctx.getGuacApi();
     const guacSettings = await ctx.settings.guacamole();
-    const result = await ctx.guac.launch(vm.id, user.id, guacApi, guacSettings?.url ?? "", guacSettings?.publicUrl ?? null, resolvedProtocol);
+    const result = await ctx.guac.launch(vm.id, user.id, guacApi, guacSettings?.url ?? "", guacSettings?.publicUrl ?? null, resolvedProtocol, {
+      trackSessionId: request.sessionId ?? undefined,
+    });
     if (result.mode === "login") {
       // Server-side only: the user-facing detail is intentionally generic.
       ctx.logger.warn(
@@ -116,6 +118,21 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
       detail: { mode: result.mode, detail: result.detail ?? null, protocol: resolvedProtocol },
     });
     return result;
+  });
+
+  // Diagnostic only: tests one stored connection (TCP always; SSH auth with
+  // the stored credential; RDP handshake liveness) without revealing any
+  // secret. Requires VM access like the credential endpoints, so holders of
+  // vm.read on an assigned VM can self-diagnose "internal error" launches.
+  app.post("/vms/:id/guacamole/test", async (request) => {
+    const { id } = request.params as { id: string };
+    const user = await app.requirePermission("vm.read")(request);
+    const privileged = user.roles.some((r) => r === "ADMIN" || r === "OPERATOR");
+    if (!privileged && !(await ctx.vms.hasAccess(id, user.id))) {
+      throw AppError.forbidden("No access to this VM");
+    }
+    const body = launchSchema.parse(request.body ?? {});
+    return ctx.guac.testConnectionRecord(id, body.protocol);
   });
 
   app.delete("/guacamole/connections/:vmId", async (request) => {

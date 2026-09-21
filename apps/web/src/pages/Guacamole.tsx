@@ -27,7 +27,7 @@ export default function Guacamole() {
   const launch = async (vmId: string, protocol?: string) => {
     try {
       const res = await api<{ url: string }>(`/vms/${vmId}/guacamole/launch`, { method: "POST", body: protocol ? { protocol } : {} });
-      window.open(res.url, "_blank");
+      window.open(res.url, "_blank", "noopener");
     } catch (err) {
       alert(explainDenial(err) ?? (err instanceof Error ? err.message : String(err)));
     }

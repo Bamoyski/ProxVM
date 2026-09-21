@@ -2,10 +2,17 @@ import type { FastifyInstance } from "fastify";
 import type { CoreContext } from "@proxvm/core";
 import { AppError } from "@proxvm/core";
 
+// Proxmox node names are interpolated into upstream API paths: restrict the
+// shape so `?node=` cannot escape into unintended paths or query strings.
+const NODE_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
+
 function requireNode(query: unknown): string {
   const node = (query as { node?: string } | null)?.node;
   if (!node || typeof node !== "string") {
     throw AppError.validation("node query parameter is required");
+  }
+  if (!NODE_PATTERN.test(node)) {
+    throw AppError.validation("Invalid node name");
   }
   return node;
 }

@@ -13,6 +13,7 @@ import {
   findRoleByName,
   getGroup,
   getRole,
+  groupEffectivePermissions,
   groupMembers,
   groupRoles,
   groupVms,
@@ -381,6 +382,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       members: await groupMembers(ctx.db, id),
       roles: await groupRoles(ctx.db, id),
       vms: await groupVms(ctx.db, id),
+      permissions: await groupEffectivePermissions(ctx.db, id),
     };
   });
 
@@ -443,6 +445,17 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       ? await ctx.users.findById(body.userId)
       : await ctx.users.findByUsername(body.username as string);
     if (!target) return reply.status(404).send({ code: "NOT_FOUND", message: "User not found" });
+    // Adding a member confers everything the group's roles grant: the actor
+    // must be allowed to administer the target and must already hold every
+    // permission they would put into circulation (mirrors the DELETE path and
+    // POST /groups/:id/roles). Without this, a delegated group-manager could
+    // add themselves to an ADMIN-role group and self-escalate.
+    await assertCanAdministerTarget(ctx.db, actor, target.id);
+    await assertMayConfer(
+      ctx.db,
+      actor,
+      (await groupEffectivePermissions(ctx.db, id)).map((p) => p.code),
+    );
     const expiresAt = parseExpiresAt(body.expiresAt);
     await ctx.db.query(
       `INSERT INTO group_members (group_id, user_id, expires_at, added_by)
@@ -537,6 +550,10 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
 
   app.post("/groups/:id/vms", async (request, reply) => {
     const actor = await groupsGuard(request);
+    // Granting VM access is VM-access administration: require vm.edit just
+    // like the single-grant POST /vms/:id/access path, so a groups.manage
+    // holder cannot hand themselves (or anyone) VMs they may not confer.
+    await app.requirePermission("vm.edit")(request);
     const { id } = request.params as { id: string };
     const group = await getGroup(ctx.db, id);
     if (!group) return reply.status(404).send({ code: "NOT_FOUND", message: "Group not found" });

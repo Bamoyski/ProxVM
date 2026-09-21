@@ -13,13 +13,11 @@ export interface GuacamoleToken {
   availableDataSources: string[];
 }
 
-import { stripTrailingSlashes } from "../util/misc.js";
-
 export class GuacamoleApiClient {
   constructor(private readonly baseUrl: string) {}
 
   private get url(): string {
-    return stripTrailingSlashes(this.baseUrl);
+    return this.baseUrl.replace(/\/+$/, "");
   }
 
   async requestToken(username: string, password: string): Promise<GuacamoleToken> {
@@ -61,6 +59,21 @@ export class GuacamoleApiClient {
     };
   }
 
+  /**
+   * Invalidate a previously issued auth token (logout). Guacamole also
+   * expires tokens on its own `api-session-timeout`; failure here is
+   * non-fatal for callers, which treat it as best-effort.
+   */
+  async deleteToken(token: string): Promise<void> {
+    const response = await fetch(`${this.url}/api/tokens/${encodeURIComponent(token)}`, {
+      method: "DELETE",
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok && response.status !== 404) {
+      throw new GuacamoleApiError(`Guacamole token invalidation failed (HTTP ${response.status})`);
+    }
+  }
+
   async fetchConnections(token: string, dataSource: string): Promise<Array<{ identifier: string; name: string; protocol: string }>> {
     const response = await fetch(
       `${this.url}/api/session/data/${encodeURIComponent(dataSource)}/connections?token=${encodeURIComponent(token)}`,
@@ -90,11 +103,11 @@ export function buildClientLaunchUrl(
   identifier: string,
   authToken: string,
 ): string {
-  return `${stripTrailingSlashes(guacamoleUrl)}/#/client/${encodeURIComponent(identifier)}?token=${encodeURIComponent(authToken)}`;
+  return `${guacamoleUrl.replace(/\/+$/, "")}/#/client/${encodeURIComponent(identifier)}?token=${encodeURIComponent(authToken)}`;
 }
 
 export function buildLoginUrl(guacamoleUrl: string): string {
-  return `${stripTrailingSlashes(guacamoleUrl)}/`;
+  return `${guacamoleUrl.replace(/\/+$/, "")}/`;
 }
 
 async function safeText(response: Response): Promise<string> {
