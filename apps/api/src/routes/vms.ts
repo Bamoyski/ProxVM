@@ -3,11 +3,24 @@ import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import {
   AppError,
+  isAdmin,
+  createSchedule,
+  createShareLink,
+  deleteSchedule,
   enqueueProvisioningJob,
+  getShareLink,
+  listSchedules,
+  listShareLinks,
+  listVmServices,
+  redeemShareLink,
+  revokeShareLink,
   reconcileUserVmGuacAccess,
   resolveProvisionDefaults,
   resolveProvisionRequest,
+  scanVmServices,
   selectUsableIpv4,
+  setScheduleEnabled,
+  storeVmServices,
   toPublicUser,
   type EnqueueJobData,
 } from "@proxvm/core";
@@ -332,6 +345,383 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       vmId: vm.id,
     });
     return { ok: true };
+  });
+
+  // -- One-click clone ------------------------------------------------------
+  app.post("/vms/:id/clone", async (request) => {
+    const { id } = request.params as { id: string };
+    const access = await resolveVmAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden();
+    const user = await app.requirePermission("vm.create")(request);
+    const body = z
+      .object({
+        name: z.string().min(1).max(128),
+        target: z.string().min(1).max(128).optional(),
+        storage: z.string().min(1).max(128).optional(),
+      })
+      .parse(request.body);
+    const vm = await ctx.vms.requireById(id);
+    const client = await ctx.getProxmoxClient();
+    // Allocate a free VMID without colliding with tracked rows.
+    const taken = new Set(await ctx.vms.listVmidsByNode(body.target ?? vm.node));
+    let vmid = await client.nextId();
+    let guard = 0;
+    while (taken.has(vmid) && guard++ < 1000) vmid += 1;
+    if (guard >= 1000) throw AppError.conflict(`No free VM ID found on node ${body.target ?? vm.node}.`);
+    const upid = await client.clone({
+      node: vm.node,
+      templateVmid: vm.vmid,
+      newVmid: vmid,
+      name: body.name,
+      full: true,
+      storage: body.storage,
+      target: body.target,
+    });
+    if (upid) await client.waitForTask(vm.node, upid, 900000);
+    const record = await ctx.vms.create({
+      vmid,
+      node: body.target ?? vm.node,
+      name: body.name,
+      status: "stopped",
+      osType: vm.osType ?? undefined,
+      createdByUserId: user.id,
+    });
+    await ctx.vms.setAccess(record.id, user.id);
+    await ctx.audit.record({
+      event: "VM_CLONED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      vmId: record.id,
+      detail: { sourceVmId: vm.id, sourceVmid: vm.vmid, newVmid: vmid, target: body.target ?? vm.node },
+    });
+    return { vm: record };
+  });
+
+  // -- Save running VM as template -------------------------------------------
+  app.post("/vms/:id/make-template", async (request) => {
+    const { id } = request.params as { id: string };
+    const access = await resolveVmAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden();
+    const user = await app.requirePermission("templates.manage")(request);
+    const body = z.object({ name: z.string().min(1).max(128) }).parse(request.body);
+    const vm = await ctx.vms.requireById(id);
+    if (vm.status === "running") {
+      throw AppError.validation("Stop the VM before converting it into a template");
+    }
+    const client = await ctx.getProxmoxClient();
+    const upid = await client.makeTemplate(vm.node, vm.vmid);
+    if (upid) await client.waitForTask(vm.node, upid, 600000);
+    const osType = vm.osType ?? "linux";
+    const template = await ctx.templates.register({
+      name: body.name,
+      node: vm.node,
+      proxmoxVmid: vm.vmid,
+      osType,
+      provisioningMethod: osType === "windows" ? "cloudbase-init" : "cloud-init",
+      cloudInitSupport: true,
+      guestAgentRequired: true,
+      defaultCpu: 2,
+      defaultRamMb: 2048,
+      defaultDiskGb: 20,
+      supportedProtocols: [osType === "windows" ? "rdp" : "ssh"] as ("ssh" | "rdp" | "vnc")[],
+    });
+    await ctx.audit.record({
+      event: "TEMPLATE_CREATED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      detail: { name: body.name, vmid: vm.vmid, node: vm.node, sourceVmId: vm.id },
+    });
+    return { template };
+  });
+
+  // -- Live/offline migration --------------------------------------------------
+  app.post("/vms/:id/migrate", async (request) => {
+    const { id } = request.params as { id: string };
+    const access = await resolveVmAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden();
+    const user = await app.requirePermission("vm.manage")(request);
+    const body = z
+      .object({ target: z.string().min(1).max(128), online: z.boolean().optional() })
+      .parse(request.body);
+    const vm = await ctx.vms.requireById(id);
+    if (body.target === vm.node) throw AppError.validation("Target node must differ from the current node");
+    const client = await ctx.getProxmoxClient();
+    const online = body.online ?? vm.status === "running";
+    const upid = await client.migrate(vm.node, vm.vmid, body.target, online);
+    if (upid) await client.waitForTask(vm.node, upid, 1800000);
+    await ctx.vms.updateNode(vm.id, body.target);
+    await ctx.audit.record({
+      event: "VM_MIGRATED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      vmId: vm.id,
+      detail: { from: vm.node, to: body.target, online },
+    });
+    return { ok: true, node: body.target };
+  });
+
+  // -- Resource graphs ---------------------------------------------------------
+  app.get("/vms/:id/stats", async (request) => {
+    const { id } = request.params as { id: string };
+    const access = await resolveVmAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden();
+    await app.requirePermission("vm.read")(request);
+    const query = z
+      .object({ timeframe: z.enum(["hour", "day", "week", "month", "year"]).default("day") })
+      .parse(request.query);
+    const vm = await ctx.vms.requireById(id);
+    const client = await ctx.getProxmoxClient();
+    const points = await client.rrddata(vm.node, vm.vmid, query.timeframe);
+    return { points };
+  });
+
+  // -- Bulk power actions --------------------------------------------------------
+  // Static segment wins over /vms/:id in Fastify routing; per-item results so
+  // one failure never aborts the rest. Each item enforces the same permission
+  // and access rules as the single-VM endpoints.
+  app.post("/vms/bulk-action", async (request) => {
+    const body = z
+      .object({ ids: z.array(z.string().uuid()).min(1).max(50), action: z.enum(["start", "stop", "restart"]) })
+      .parse(request.body);
+    const perm: ("vm.manage" | "vm.start" | "vm.stop" | "vm.restart")[] =
+      body.action === "start" ? ["vm.manage", "vm.start"] : body.action === "stop" ? ["vm.manage", "vm.stop"] : ["vm.manage", "vm.restart"];
+    const user = await app.requirePermission(perm)(request);
+    const client = await ctx.getProxmoxClient();
+    const results: Array<{ vmId: string; ok: boolean; error?: string }> = [];
+    for (const vmId of [...new Set(body.ids)]) {
+      try {
+        const access = await resolveVmAccess(request, vmId);
+        if (!access.allowed) throw AppError.forbidden("No access to this VM");
+        const vm = await ctx.vms.requireById(vmId);
+        let upid: string | null = null;
+        if (body.action === "start") {
+          upid = await client.start(vm.node, vm.vmid);
+          if (upid) await client.waitForTask(vm.node, upid, 120000);
+          await ctx.vms.updateStatus(vm.id, "running");
+          await ctx.audit.record({ event: "VM_STARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+        } else if (body.action === "stop") {
+          upid = await client.shutdown(vm.node, vm.vmid);
+          if (upid) await client.waitForTask(vm.node, upid, 120000);
+          await ctx.vms.updateStatus(vm.id, "stopped");
+          await ctx.audit.record({ event: "VM_STOPPED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+        } else {
+          upid = await client.reboot(vm.node, vm.vmid);
+          if (upid) await client.waitForTask(vm.node, upid, 180000);
+          await ctx.audit.record({ event: "VM_RESTARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+        }
+        results.push({ vmId, ok: true });
+      } catch (err) {
+        results.push({ vmId, ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { results };
+  });
+
+  // -- Scheduled power actions -----------------------------------------------------
+  app.get("/schedules", async (request) => {
+    const user = await app.requirePermission("vm.manage")(request);
+    const schedules = await listSchedules(ctx.db);
+    if (isAdmin(user)) return { schedules };
+    const visible: typeof schedules = [];
+    for (const schedule of schedules) {
+      const access = await resolveVmAccess(request, schedule.vmId);
+      if (access.allowed) visible.push(schedule);
+    }
+    return { schedules: visible };
+  });
+
+  app.post("/schedules", async (request) => {
+    const user = await app.requirePermission("vm.manage")(request);
+    const body = z
+      .object({
+        vmId: z.string().uuid(),
+        action: z.enum(["start", "stop", "restart"]),
+        hour: z.number().int().min(0).max(23),
+        minute: z.number().int().min(0).max(59),
+        days: z.string().max(32).optional(),
+      })
+      .parse(request.body);
+    const access = await resolveVmAccess(request, body.vmId);
+    if (!access.allowed) throw AppError.forbidden("No access to this VM");
+    await ctx.vms.requireById(body.vmId);
+    const schedule = await createSchedule(ctx.db, { ...body, createdBy: user.id });
+    await ctx.audit.record({
+      event: "SCHEDULE_CREATED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      vmId: body.vmId,
+      detail: { scheduleId: schedule.id, action: body.action, hour: body.hour, minute: body.minute, days: schedule.days },
+    });
+    return { schedule };
+  });
+
+  app.delete("/schedules/:id", async (request, reply) => {
+    const user = await app.requirePermission("vm.manage")(request);
+    const { id } = request.params as { id: string };
+    const schedules = await listSchedules(ctx.db);
+    const schedule = schedules.find((s) => s.id === id);
+    if (!schedule) return reply.status(404).send({ code: "NOT_FOUND", message: "Schedule not found" });
+    const access = await resolveVmAccess(request, schedule.vmId);
+    if (!access.allowed) throw AppError.forbidden("No access to this VM");
+    await deleteSchedule(ctx.db, id);
+    await ctx.audit.record({
+      event: "SCHEDULE_DELETED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      vmId: schedule.vmId,
+      detail: { scheduleId: id },
+    });
+    return { ok: true };
+  });
+
+  app.patch("/schedules/:id", async (request, reply) => {
+    const user = await app.requirePermission("vm.manage")(request);
+    const { id } = request.params as { id: string };
+    const body = z.object({ enabled: z.boolean() }).parse(request.body);
+    const schedules = await listSchedules(ctx.db);
+    const schedule = schedules.find((s) => s.id === id);
+    if (!schedule) return reply.status(404).send({ code: "NOT_FOUND", message: "Schedule not found" });
+    const access = await resolveVmAccess(request, schedule.vmId);
+    if (!access.allowed) throw AppError.forbidden("No access to this VM");
+    await setScheduleEnabled(ctx.db, id, body.enabled);
+    return { ok: true };
+  });
+
+  // -- Share links -----------------------------------------------------------------
+  // Creating/revoking requires vm.edit (access management); redeeming is
+  // intentionally unauthenticated (that's the point of a share link) and
+  // rate-limited against token guessing — tokens are 256-bit regardless.
+  app.post("/vms/:id/share", async (request) => {
+    const { id } = request.params as { id: string };
+    const access = await resolveVmAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden();
+    const user = await app.requirePermission("vm.edit")(request);
+    const body = z
+      .object({
+        protocol: z.enum(["ssh", "rdp", "vnc"]),
+        expiresInMinutes: z.number().int().min(5).max(10080),
+        maxUses: z.number().int().min(1).max(1000).optional(),
+      })
+      .parse(request.body);
+    const vm = await ctx.vms.requireById(id);
+    const records = await ctx.guac.listConnectionRecords(vm.id);
+    if (!records.some((r) => r.protocol === body.protocol)) {
+      throw AppError.notFound(`No Guacamole connection exists for this VM for protocol ${body.protocol}`);
+    }
+    const { link, token } = await createShareLink(ctx.db, {
+      vmId: vm.id,
+      protocol: body.protocol,
+      expiresInMinutes: body.expiresInMinutes,
+      maxUses: body.maxUses ?? null,
+      createdBy: user.id,
+    });
+    await ctx.audit.record({
+      event: "SHARE_CREATED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      vmId: vm.id,
+      detail: { shareId: link.id, protocol: body.protocol, expiresAt: link.expiresAt, maxUses: link.maxUses },
+    });
+    return { link, token };
+  });
+
+  app.get("/share", async (request) => {
+    const user = await app.requirePermission("vm.edit")(request);
+    const links = await listShareLinks(ctx.db, isAdmin(user) ? undefined : user.id);
+    return { links };
+  });
+
+  app.delete("/share/:id", async (request, reply) => {
+    const user = await app.requirePermission("vm.edit")(request);
+    const { id } = request.params as { id: string };
+    const link = await getShareLink(ctx.db, id);
+    if (!link) return reply.status(404).send({ code: "NOT_FOUND", message: "Share link not found" });
+    if (!isAdmin(user) && link.createdBy !== user.id) {
+      throw AppError.forbidden("Only the creator or an administrator can revoke this link");
+    }
+    await revokeShareLink(ctx.db, id);
+    await ctx.audit.record({
+      event: "SHARE_REVOKED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      vmId: link.vmId,
+      detail: { shareId: id },
+    });
+    return { ok: true };
+  });
+
+  app.get(
+    "/s/:token",
+    { config: { csrf: "skip", rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const { token } = request.params as { token: string };
+      const link = await redeemShareLink(ctx.db, token);
+      if (!link) {
+        return reply.status(410).send({ code: "GONE", message: "This share link is invalid, expired, revoked, or used up." });
+      }
+      const vm = await ctx.vms.requireById(link.vmId);
+      // The link rides the creator's Guacamole identity: mint a fresh token
+      // now so the shared URL itself never contains a Guacamole credential.
+      // If the creator lost Guacamole access, shares die with it.
+      const creatorId = link.createdBy;
+      const userRecord = creatorId ? await ctx.guac.findUserRecord(creatorId) : null;
+      if (!creatorId || !userRecord) {
+        return reply.status(410).send({ code: "GONE", message: "This share link is no longer usable." });
+      }
+      const guacApi = await ctx.getGuacApi();
+      const guacSettings = await ctx.settings.guacamole();
+      const result = await ctx.guac.launch(
+        vm.id,
+        creatorId,
+        guacApi,
+        guacSettings?.url ?? "",
+        guacSettings?.publicUrl ?? null,
+        link.protocol as "ssh" | "rdp" | "vnc",
+      );
+      if (result.mode !== "direct") {
+        return reply.status(502).send({ code: "GUACAMOLE_ERROR", message: "Guacamole direct launch is unavailable right now." });
+      }
+      await ctx.audit.record({
+        event: "SHARE_REDEEMED",
+        vmId: vm.id,
+        detail: { shareId: link.id, protocol: link.protocol },
+      });
+      return reply.redirect(result.url);
+    },
+  );
+
+  // -- Service discovery ---------------------------------------------------------------
+  app.post("/discovery/run", async (request) => {
+    const user = await app.requirePermission("proxmox.read")(request);
+    const body = z.object({ vmId: z.string().uuid().optional() }).parse(request.body ?? {});
+    const privileged = user.roles.includes("ADMIN") || user.roles.includes("OPERATOR");
+    const targets = body.vmId
+      ? [await ctx.vms.requireById(body.vmId)]
+      : privileged
+        ? await ctx.vms.list()
+        : await ctx.vms.listAssignedToUser(user.id);
+    const scanned: Array<{ vmId: string; services: Array<{ port: number; service: string }> }> = [];
+    for (const vm of targets) {
+      if (!vm.ipAddress) continue;
+      const access = await resolveVmAccess(request, vm.id);
+      if (!access.allowed) continue;
+      const found = await scanVmServices(vm.ipAddress);
+      await storeVmServices(ctx.db, vm.id, found);
+      scanned.push({ vmId: vm.id, services: found.map(({ port, service }) => ({ port, service })) });
+    }
+    return { scanned };
+  });
+
+  app.get("/vm-services", async (request) => {
+    const user = await app.requirePermission("vm.read")(request);
+    const privileged = user.roles.includes("ADMIN") || user.roles.includes("OPERATOR");
+    const vms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
+    const out: Array<{ vmId: string; services: Array<{ port: number; service: string }> }> = [];
+    for (const vm of vms) {
+      const services = await listVmServices(ctx.db, vm.id);
+      if (services.length) out.push({ vmId: vm.id, services: services.map(({ port, service }) => ({ port, service })) });
+    }
+    return { vmServices: out };
   });
 
   app.put("/vms/:id", async (request) => {

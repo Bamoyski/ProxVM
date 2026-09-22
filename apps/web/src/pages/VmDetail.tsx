@@ -56,9 +56,39 @@ export default function VmDetail({ me }: { me: Me }) {
   const [progress, setProgress] = useState<string | null>(null);
   const [launchProtocol, setLaunchProtocol] = useState<string | null>(null);
   const [connTest, setConnTest] = useState<Record<string, { testing: boolean; text?: string; ok?: boolean }>>({});
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneName, setCloneName] = useState("");
+  const [cloneTarget, setCloneTarget] = useState("");
+  const [migrateTarget, setMigrateTarget] = useState("");
+  const [migrateOnline, setMigrateOnline] = useState(true);
+  const [templateName, setTemplateName] = useState("");
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [timeframe, setTimeframe] = useState("day");
+  const [shareProtocol, setShareProtocol] = useState("");
+  const [shareExpiry, setShareExpiry] = useState("60");
+  const [shareMaxUses, setShareMaxUses] = useState("");
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
   // Hooks must run before any early return (Rules of Hooks): permission
   // resolution stays unconditional and only gates rendering below.
   const can = makeCan(useEffectivePermissions(), (perm) => hasPermission(me, perm));
+  const canManageEarly = can("vm.manage");
+  const canReadNodesEarly = can("proxmox.read");
+
+  const { data: nodesData } = useQuery({
+    queryKey: ["proxmox-nodes"],
+    queryFn: () => api<{ nodes: Array<{ node: string; status: string }> }>("/proxmox/nodes"),
+    enabled: canManageEarly && canReadNodesEarly,
+    staleTime: 60000,
+  });
+  const { data: statsData } = useQuery({
+    queryKey: ["vm-stats", id, timeframe],
+    queryFn: () => api<{ points: Array<Record<string, unknown>> }>(`/vms/${id}/stats?timeframe=${timeframe}`),
+    staleTime: 60000,
+  });
+  const { data: sharesData } = useQuery({
+    queryKey: ["vm-shares", id],
+    queryFn: () => api<{ links: Array<{ id: string; vmId: string; protocol: string; expiresAt: string; maxUses: number | null; useCount: number; revokedAt: string | null; createdAt: string }> }>("/share"),
+  });
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["vm", id] });
@@ -177,6 +207,74 @@ export default function VmDetail({ me }: { me: Me }) {
   const canReveal = can("cred.reveal");
   const canRotate = can("cred.rotate");
   const canLaunch = can("guac.launch");
+  const canClone = can("vm.create");
+  const canTemplate = can("templates.manage");
+
+  const doClone = async () => {
+    try {
+      const res = await api<{ vm: { id: string; name: string } }>(`/vms/${id}/clone`, {
+        method: "POST",
+        body: { name: cloneName, target: cloneTarget || undefined },
+      });
+      alert(`Clone started as ${res.vm.name}.`);
+      setCloneOpen(false);
+      setCloneName("");
+      refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const doMigrate = async () => {
+    try {
+      await api(`/vms/${id}/migrate`, { method: "POST", body: { target: migrateTarget, online: migrateOnline } });
+      alert(`Migration to ${migrateTarget} started.`);
+      refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const doMakeTemplate = async () => {
+    try {
+      const res = await api<{ template: { name: string } }>(`/vms/${id}/make-template`, {
+        method: "POST",
+        body: { name: templateName },
+      });
+      alert(`Template ${res.template.name} registered.`);
+      setTemplateOpen(false);
+      setTemplateName("");
+      refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const doShare = async (protocol: string) => {
+    try {
+      const res = await api<{ token: string }>(`/vms/${id}/share`, {
+        method: "POST",
+        body: {
+          protocol,
+          expiresInMinutes: Number(shareExpiry),
+          maxUses: shareMaxUses ? Number(shareMaxUses) : undefined,
+        },
+      });
+      setShareUrl(`${window.location.origin}/api/s/${res.token}`);
+      void qc.invalidateQueries({ queryKey: ["vm-shares", id] });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const doRevokeShare = async (shareId: string) => {
+    try {
+      await api(`/share/${shareId}`, { method: "DELETE" });
+      void qc.invalidateQueries({ queryKey: ["vm-shares", id] });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   return (
     <div>
@@ -264,6 +362,127 @@ export default function VmDetail({ me }: { me: Me }) {
             ))}
           </div>
         </div>
+      )}
+
+      {(canClone || canTemplate || canManage) && (
+        <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
+          <div className="text-sm font-medium text-slate-300 mb-3">Clone, migrate & template</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            {canClone && (
+              <div>
+                <div className="text-xs font-medium text-slate-400 mb-2">Clone this VM</div>
+                {!cloneOpen ? (
+                  <button onClick={() => { setCloneOpen(true); setCloneName(`${vm.name}-copy`); }} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+                    Clone…
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <input
+                      className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+                      placeholder="Clone name"
+                      value={cloneName}
+                      onChange={(e) => setCloneName(e.target.value)}
+                    />
+                    {(nodesData?.nodes ?? []).length > 0 && (
+                      <select
+                        className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+                        value={cloneTarget}
+                        onChange={(e) => setCloneTarget(e.target.value)}
+                      >
+                        <option value="">Same node ({vm.node})</option>
+                        {(nodesData?.nodes ?? []).filter((n) => n.node !== vm.node).map((n) => (
+                          <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
+                        ))}
+                      </select>
+                    )}
+                    <div className="flex gap-2">
+                      <button onClick={() => void doClone()} disabled={!cloneName.trim()} className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded">
+                        Clone
+                      </button>
+                      <button onClick={() => setCloneOpen(false)} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {canManage && (
+              <div>
+                <div className="text-xs font-medium text-slate-400 mb-2">Migrate to another node</div>
+                {(nodesData?.nodes ?? []).filter((n) => n.node !== vm.node).length > 0 ? (
+                  <div className="space-y-2">
+                    <select
+                      className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+                      value={migrateTarget}
+                      onChange={(e) => setMigrateTarget(e.target.value)}
+                    >
+                      <option value="">Select target…</option>
+                      {(nodesData?.nodes ?? []).filter((n) => n.node !== vm.node).map((n) => (
+                        <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
+                      ))}
+                    </select>
+                    <label className="flex items-center gap-2 text-xs text-slate-400">
+                      <input type="checkbox" checked={migrateOnline} onChange={(e) => setMigrateOnline(e.target.checked)} />
+                      Online migration (running VMs)
+                    </label>
+                    <button onClick={() => void doMigrate()} disabled={!migrateTarget} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded">
+                      Migrate
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-500">Single-node cluster or node list unavailable.</div>
+                )}
+              </div>
+            )}
+            {canTemplate && (
+              <div>
+                <div className="text-xs font-medium text-slate-400 mb-2">Save as template</div>
+                {!templateOpen ? (
+                  <button onClick={() => { setTemplateOpen(true); setTemplateName(`${vm.name}-template`); }} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+                    New template…
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <input
+                      className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+                      placeholder="Template name"
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                    />
+                    <div className="text-xs text-slate-500">The VM must be stopped; Proxmox converts it in place.</div>
+                    <div className="flex gap-2">
+                      <button onClick={() => void doMakeTemplate()} disabled={!templateName.trim()} className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded">
+                        Convert
+                      </button>
+                      <button onClick={() => setTemplateOpen(false)} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <VmGraphs points={statsData?.points ?? []} timeframe={timeframe} setTimeframe={setTimeframe} />
+
+      {canEdit && (
+        <VmShareSection
+          connections={(guac?.connections ?? []).map((c) => c.protocol)}
+          links={(sharesData?.links ?? []).filter((l) => l.vmId === id)}
+          shareProtocol={shareProtocol}
+          setShareProtocol={setShareProtocol}
+          shareExpiry={shareExpiry}
+          setShareExpiry={setShareExpiry}
+          shareMaxUses={shareMaxUses}
+          setShareMaxUses={setShareMaxUses}
+          shareUrl={shareUrl}
+          onShare={doShare}
+          onRevoke={doRevokeShare}
+        />
       )}
 
       {revealed && (
@@ -560,6 +779,159 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <div className="bg-slate-900 border border-slate-800 rounded p-4">
       <div className="text-sm font-medium text-slate-300 mb-2">{title}</div>
       {children}
+    </div>
+  );
+}
+
+const GRAPH_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee"];
+
+function VmGraphs({ points, timeframe, setTimeframe }: {
+  points: Array<Record<string, unknown>>;
+  timeframe: string;
+  setTimeframe: (t: string) => void;
+}) {
+  const series = (() => {
+    if (!points.length) return [];
+    const keys = Object.keys(points[0] ?? {}).filter((k) => k !== "time" && typeof points[0]?.[k] === "number");
+    return keys.slice(0, 6).map((key, i) => {
+      const values = points.map((p) => Number(p[key] ?? 0));
+      const max = Math.max(1, ...values);
+      const coords = values.map((v, j) => {
+        const x = points.length < 2 ? 0 : (j / (points.length - 1)) * 560;
+        const y = 140 - (v / max) * 130;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      });
+      return { key, color: GRAPH_COLORS[i % GRAPH_COLORS.length]!, max, last: values[values.length - 1] ?? 0, coords: coords.join(" ") };
+    });
+  })();
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-medium text-slate-300">Resource graphs</div>
+        <select
+          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
+          value={timeframe}
+          onChange={(e) => setTimeframe(e.target.value)}
+        >
+          {["hour", "day", "week", "month"].map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+      </div>
+      {!series.length ? (
+        <div className="text-xs text-slate-500">No data points yet for this range.</div>
+      ) : (
+        <>
+          <svg viewBox="0 0 560 150" className="w-full h-36 bg-slate-950 border border-slate-800 rounded">
+            {[0.25, 0.5, 0.75].map((f) => (
+              <line key={f} x1="0" x2="560" y1={150 * f} y2={150 * f} stroke="#1e293b" strokeWidth="1" />
+            ))}
+            {series.map((s) => (
+              <polyline key={s.key} points={s.coords} fill="none" stroke={s.color} strokeWidth="1.5" />
+            ))}
+          </svg>
+          <div className="flex flex-wrap gap-3 mt-2 text-xs">
+            {series.map((s) => (
+              <span key={s.key} className="text-slate-400">
+                <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: s.color }} />
+                <span className="font-mono">{s.key}</span>: {s.last.toFixed(s.max < 10 ? 3 : 1)}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface ShareLinkRow {
+  id: string;
+  vmId: string;
+  protocol: string;
+  expiresAt: string;
+  maxUses: number | null;
+  useCount: number;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+function VmShareSection({ connections, links, shareProtocol, setShareProtocol, shareExpiry, setShareExpiry, shareMaxUses, setShareMaxUses, shareUrl, onShare, onRevoke }: {
+  connections: string[];
+  links: ShareLinkRow[];
+  shareProtocol: string;
+  setShareProtocol: (v: string) => void;
+  shareExpiry: string;
+  setShareExpiry: (v: string) => void;
+  shareMaxUses: string;
+  setShareMaxUses: (v: string) => void;
+  shareUrl: string | null;
+  onShare: (protocol: string) => void;
+  onRevoke: (shareId: string) => void;
+}) {
+  const active = links.filter((l) => !l.revokedAt && new Date(l.expiresAt).getTime() > Date.now());
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
+      <div className="text-sm font-medium text-slate-300 mb-1">Shareable session links</div>
+      <div className="text-xs text-slate-500 mb-3">
+        Time-boxed links anyone can open — no account needed. Opening mints a fresh Guacamole session
+        under your identity; revoke anytime to kill them instantly.
+      </div>
+      <div className="flex flex-wrap gap-2 items-center mb-3">
+        <select
+          className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+          value={shareProtocol}
+          onChange={(e) => setShareProtocol(e.target.value)}
+        >
+          <option value="">Select protocol…</option>
+          {connections.map((p) => (
+            <option key={p} value={p}>{p.toUpperCase()}</option>
+          ))}
+        </select>
+        <select
+          className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+          value={shareExpiry}
+          onChange={(e) => setShareExpiry(e.target.value)}
+          title="Link lifetime"
+        >
+          <option value="60">1 hour</option>
+          <option value="1440">1 day</option>
+          <option value="10080">7 days</option>
+        </select>
+        <input
+          className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm w-28"
+          placeholder="Max uses (∞)"
+          inputMode="numeric"
+          value={shareMaxUses}
+          onChange={(e) => setShareMaxUses(e.target.value.replace(/[^0-9]/g, ""))}
+        />
+        <button
+          onClick={() => shareProtocol && onShare(shareProtocol)}
+          disabled={!shareProtocol}
+          className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
+        >
+          Create link
+        </button>
+      </div>
+      {shareUrl && (
+        <div className="bg-slate-800 border border-slate-700 rounded p-3 mb-3 text-sm">
+          <div className="text-xs text-slate-400 mb-1">Share this URL (shown once — copy it now):</div>
+          <code className="select-all font-mono text-xs text-green-300 break-all">{shareUrl}</code>
+        </div>
+      )}
+      {active.length > 0 ? (
+        <div className="space-y-1">
+          {active.map((l) => (
+            <div key={l.id} className="flex flex-wrap items-center gap-2 text-xs py-1 border-b border-slate-800/50">
+              <span className="font-mono uppercase text-blue-300">{l.protocol}</span>
+              <span className="text-slate-400">expires {new Date(l.expiresAt).toLocaleString()}</span>
+              <span className="text-slate-400">used {l.useCount}{l.maxUses === null ? "" : `/${l.maxUses}`}</span>
+              <button onClick={() => onRevoke(l.id)} className="text-red-300 underline ml-auto">Revoke</button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-slate-500">No active share links for this VM.</div>
+      )}
     </div>
   );
 }

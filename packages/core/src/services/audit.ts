@@ -1,6 +1,7 @@
 import type { Queryable } from "../db/pool.js";
 import type { AuditEvent, AuditRecord } from "@proxvm/shared";
 import { newId } from "../util/misc.js";
+import { AppError } from "../util/errors.js";
 
 export interface AuditEntryInput {
   event: AuditEvent;
@@ -81,6 +82,18 @@ export class AuditService {
       detail: typeof r.detail === "object" ? (r.detail as Record<string, unknown>) : null,
       createdAt: r.created_at,
     }));
+  }
+
+  /** Delete entries older than the given retention window. Returns rows removed. */
+  async prune(olderThanDays: number): Promise<number> {
+    if (!Number.isFinite(olderThanDays) || olderThanDays < 1) {
+      throw AppError.validation("retention must be at least 1 day");
+    }
+    const result = await this.db.query(
+      "DELETE FROM audit_logs WHERE created_at < NOW() - ($1 || ' days')::interval",
+      [Math.floor(olderThanDays)],
+    );
+    return result.rowCount ?? 0;
   }
 }
 

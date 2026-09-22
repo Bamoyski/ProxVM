@@ -13,12 +13,14 @@ export default function Audit() {
   const [event, setEvent] = useState("");
   const [limit, setLimit] = useState(100);
   const { data, isFetching } = useQuery({
-    queryKey: ["audit", event],
-    queryFn: () => api<{ entries: Array<Record<string, unknown>> }>(`/audit?limit=100${event ? `&event=${event}` : ""}`),
+    queryKey: ["audit", event, limit],
+    queryFn: () => api<{ entries: Array<Record<string, unknown>> }>(`/audit?limit=${limit}${event ? `&event=${event}` : ""}`),
     refetchInterval: 15000,
   });
 
   const input = "bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-xs";
+
+  const exportHref = `/api/audit/export?limit=${Math.min(5000, Math.max(limit, 100))}${event ? `&event=${encodeURIComponent(event)}` : ""}`;
 
   return (
     <div>
@@ -28,6 +30,15 @@ export default function Audit() {
             <option key={e} value={e}>{e || "All events"}</option>
           ))}
         </select>
+        <select className={input} value={limit} onChange={(e) => setLimit(Number(e.target.value))} title="Rows shown">
+          {[50, 100, 200].map((n) => (
+            <option key={n} value={n}>{n} rows</option>
+          ))}
+        </select>
+        <a href={exportHref} className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded" title="Download the current filter as CSV">
+          Export CSV
+        </a>
+        {isFetching && <span className="text-xs text-slate-500">Refreshing…</span>}
       </PageTitle>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">

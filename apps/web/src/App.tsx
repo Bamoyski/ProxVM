@@ -20,6 +20,9 @@ import Jobs from "./pages/Jobs.js";
 import Settings from "./pages/Settings.js";
 import Health from "./pages/Health.js";
 import Help from "./pages/Help.js";
+import Legal from "./pages/Legal.js";
+import Schedules from "./pages/Schedules.js";
+import CommandPalette from "./components/CommandPalette.js";
 
 export interface Me {
   user: { id: string; username: string; roles: string[] } | null;
@@ -57,13 +60,27 @@ const NAV = [
   { to: "/jobs", label: "Jobs" },
   { to: "/settings", label: "Settings" },
   { to: "/health", label: "Health" },
+  { to: "/schedules", label: "Schedules" },
   { to: "/help", label: "Help" },
+  { to: "/legal", label: "Legal" },
 ];
+
+function initialTheme(): "dark" | "light" {
+  try {
+    return window.localStorage.getItem("proxvm-theme") === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
 
 export default function App() {
   const { data: me, isLoading } = useMe();
   const [setupMode, setSetupMode] = useState<boolean | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">(initialTheme);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     api<{ mode: string; restartRequired?: boolean }>("/setup/status")
@@ -72,6 +89,26 @@ export default function App() {
         setRestartRequired(!!r.restartRequired);
       })
       .catch(() => setSetupMode(null));
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("light", theme === "light");
+    try {
+      window.localStorage.setItem("proxvm-theme", theme);
+    } catch {
+      // private mode: theme just won't persist
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   // Hooks must run unconditionally on every render (Rules of Hooks): this
@@ -142,29 +179,48 @@ export default function App() {
     return true;
   };
 
+  const visibleNav = NAV.filter((n) => {
+    if (n.to === "/users") return canNav("users.manage", isAdmin);
+    if (n.to === "/settings") return canNav("settings.manage", isAdmin);
+    if (n.to === "/roles") return canNav("roles.manage", isAdmin);
+    if (n.to === "/groups") return canNav("groups.manage", isAdmin);
+    if (n.to === "/matrix") return canNav("users.manage", isAdmin);
+    if (n.to === "/credentials") return canNav("cred.reveal", isAdmin);
+    if (n.to === "/jobs") return canNav("jobs.read", privileged);
+    if (n.to === "/templates") return canNav("templates.manage", privileged);
+    if (n.to === "/audit") return canNav("audit.read", hasAuditRead);
+    if (n.to === "/schedules") return canNav("vm.manage", privileged);
+    return true;
+  });
+
   return (
     <div className="min-h-screen flex">
-      <aside className="w-56 shrink-0 bg-slate-900 border-r border-slate-800 p-4 flex flex-col">
-        <div className="text-xl font-bold text-blue-400 mb-6">ProxVM</div>
+      <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between">
+        <span className="text-lg font-bold text-blue-400">ProxVM</span>
+        <button
+          className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded"
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-label="Toggle navigation"
+        >
+          ☰
+        </button>
+      </div>
+      {menuOpen && (
+        <div className="md:hidden fixed inset-0 z-20 bg-black/60" onClick={() => setMenuOpen(false)} />
+      )}
+      <aside
+        className={`w-56 shrink-0 bg-slate-900 border-r border-slate-800 p-4 flex-col z-30 ${
+          menuOpen ? "flex fixed inset-y-0 left-0" : "hidden"
+        } md:flex md:static pt-16 md:pt-4`}
+      >
+        <div className="text-xl font-bold text-blue-400 mb-6 hidden md:block">ProxVM</div>
         <nav className="flex flex-col gap-1">
-          {NAV.filter((n) => {
-            if (n.to === "/users") return canNav("users.manage", isAdmin);
-            if (n.to === "/settings") return canNav("settings.manage", isAdmin);
-            if (n.to === "/roles") return canNav("roles.manage", isAdmin);
-            if (n.to === "/groups") return canNav("groups.manage", isAdmin);
-            if (n.to === "/matrix") return canNav("users.manage", isAdmin);
-            // The vault listing requires cred.reveal (ADMIN); operators rotate
-            // per-VM credentials from the VM detail page instead.
-            if (n.to === "/credentials") return canNav("cred.reveal", isAdmin);
-            if (n.to === "/jobs") return canNav("jobs.read", privileged);
-            if (n.to === "/templates") return canNav("templates.manage", privileged);
-            if (n.to === "/audit") return canNav("audit.read", hasAuditRead);
-            return true;
-          }).map((n) => (
+          {visibleNav.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
               end={n.to === "/"}
+              onClick={() => setMenuOpen(false)}
               className={({ isActive }) =>
                 `px-3 py-2 rounded text-sm ${location.pathname === n.to ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800"}`
               }
@@ -173,8 +229,27 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto pt-4 border-t border-slate-800">
-          <div className="text-sm text-slate-400 mb-2">
+        <div className="mt-auto pt-4 border-t border-slate-800 space-y-2">
+          <div className="flex gap-2">
+            <button
+              className="flex-1 px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              title="Toggle dark / light theme"
+            >
+              {theme === "dark" ? "☀ Light" : "☾ Dark"}
+            </button>
+            <button
+              className="flex-1 px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded"
+              onClick={() => {
+                setMenuOpen(false);
+                setPaletteOpen(true);
+              }}
+              title="Command palette (Ctrl+K)"
+            >
+              ⌘K
+            </button>
+          </div>
+          <div className="text-sm text-slate-400">
             {me.username} <span className="text-slate-500">({me.roles.join(", ")})</span>
           </div>
           <button
@@ -188,7 +263,18 @@ export default function App() {
           </button>
         </div>
       </aside>
-      <main className="flex-1 p-8 overflow-x-auto">
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        nav={visibleNav}
+        canViewUsers={canNav("users.manage", isAdmin)}
+        go={(to) => {
+          setPaletteOpen(false);
+          setMenuOpen(false);
+          navigate(to);
+        }}
+      />
+      <main className="flex-1 p-4 md:p-8 pt-16 md:pt-8 overflow-x-auto">
         <Routes>
           <Route path="/" element={<Dashboard me={me} />} />
           <Route path="/vms" element={<Vms me={me} />} />
@@ -206,6 +292,8 @@ export default function App() {
           <Route path="/jobs/:jobId" element={<Jobs me={me} />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/health" element={<Health />} />
+          <Route path="/schedules" element={<Schedules />} />
+          <Route path="/legal" element={<Legal />} />
           <Route path="/help" element={<Help can={(perm) => canNav(perm, helpLegacy(perm))} />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

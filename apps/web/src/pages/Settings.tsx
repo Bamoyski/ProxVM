@@ -142,7 +142,63 @@ export default function Settings() {
             <button onClick={saveGuacamole} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">Save</button>
           </div>
         </div>
+        <div className="bg-slate-900 border border-slate-800 rounded p-4">
+          <h2 className="text-sm font-medium text-slate-300 mb-3">Application</h2>
+          <AppSettings />
+        </div>
       </div>
+    </div>
+  );
+}
+
+function AppSettings() {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const { data } = useQuery({
+    queryKey: ["settings-app"],
+    queryFn: () => api<{ app: Record<string, unknown>; settings: { retentionDays: number | null } }>("/settings/app"),
+  });
+  const [retention, setRetention] = useState("");
+  const [touched, setTouched] = useState(false);
+  const current = data?.settings?.retentionDays ?? null;
+  const shown = touched ? retention : current === null ? "" : String(current);
+
+  const save = async () => {
+    setError(null);
+    setSaved(null);
+    try {
+      const value = shown.trim() === "" ? null : Number(shown);
+      if (value !== null && (!Number.isInteger(value) || value < 1 || value > 3650)) {
+        throw new Error("Retention must be blank (keep forever) or 1-3650 days");
+      }
+      await api("/settings/app", { method: "PUT", body: { retentionDays: value } });
+      setSaved("Application settings saved");
+      setTouched(false);
+      void qc.invalidateQueries({ queryKey: ["settings-app"] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {error && <ErrorBox error={error} />}
+      {saved && <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-3 text-sm">{saved}</div>}
+      <Field label="Audit retention (days, blank = keep forever)">
+        <input
+          type="number"
+          className={input}
+          placeholder="e.g. 180"
+          value={shown}
+          onChange={(e) => {
+            setRetention(e.target.value);
+            setTouched(true);
+          }}
+        />
+      </Field>
+      <div className="text-xs text-slate-500">Entries older than this are pruned hourly.</div>
+      <button onClick={save} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">Save</button>
     </div>
   );
 }

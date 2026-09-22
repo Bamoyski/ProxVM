@@ -5,3 +5,61 @@
 body {
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
+
+/* Light theme: override the slate-based dark surfaces globally so every page
+ * follows the toggle without per-component changes. Accent colors are kept,
+ * only surfaces and text are remapped. Tables scroll horizontally on narrow
+ * screens (mobile pass) instead of breaking layout. */
+html.light .bg-slate-950 {
+  background-color: #f1f5f9;
+}
+html.light .bg-slate-900 {
+  background-color: #ffffff;
+}
+html.light .bg-slate-800 {
+  background-color: #e2e8f0;
+}
+html.light .hover\:bg-slate-800:hover {
+  background-color: #e2e8f0;
+}
+html.light .hover\:bg-slate-700:hover {
+  background-color: #cbd5e1;
+}
+html.light .text-slate-100,
+html.light .text-slate-200 {
+  color: #0f172a;
+}
+html.light .text-slate-300 {
+  color: #334155;
+}
+html.light .text-slate-400,
+html.light .text-slate-500 {
+  color: #64748b;
+}
+html.light .border-slate-800,
+html.light .border-slate-700 {
+  border-color: #cbd5e1;
+}
+html.light .text-blue-400 {
+  color: #1d4ed8;
+}
+html.light .text-blue-300 {
+  color: #1e40af;
+}
+html.light .text-green-400,
+html.light .text-green-300,
+html.light .text-green-200 {
+  color: #15803d;
+}
+html.light .text-red-300,
+html.light .text-red-200 {
+  color: #b91c1c;
+}
+html.light input::placeholder {
+  color: #94a3b8;
+}
+html.light input,
+html.light select,
+html.light textarea {
+  color-scheme: light;
+}

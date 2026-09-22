@@ -126,6 +126,10 @@ export class VmsRepository {
     await this.db.query("UPDATE vms SET name = $2, updated_at = NOW() WHERE id = $1", [id, name]);
   }
 
+  async updateNode(id: string, node: string): Promise<void> {
+    await this.db.query("UPDATE vms SET node = $2, updated_at = NOW() WHERE id = $1", [id, node]);
+  }
+
   async softDelete(id: string): Promise<void> {
     await this.db.query("UPDATE vms SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1", [id]);
   }

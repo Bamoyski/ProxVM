@@ -5,6 +5,7 @@ import {
   allowedProtocols,
   AppError,
   checkAccess,
+  listConnectionHealth,
   resolveEffectiveAccess,
 } from "@proxvm/core";
 
@@ -42,6 +43,20 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
 
   const launchSchema = z.object({
     protocol: z.enum(["ssh", "rdp", "vnc"]).optional(),
+  });
+
+  // Latest health snapshots per VM+protocol (written by the periodic checker).
+  // Same visibility as the connections list; the VM detail Test button covers
+  // on-demand checks.
+  app.get("/connection-health", async (request) => {
+    const user = await app.requireAuth(request);
+    const privileged = user.roles.some((r) => r === "ADMIN" || r === "OPERATOR");
+    const vms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
+    const health = await listConnectionHealth(
+      ctx.db,
+      vms.map((vm) => vm.id).filter((id): id is string => id !== null),
+    );
+    return { health };
   });
 
   app.post("/vms/:id/guacamole/launch", async (request) => {

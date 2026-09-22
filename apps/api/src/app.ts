@@ -3,7 +3,7 @@ import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, checkVmHealth, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
@@ -145,6 +145,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(iamRoutes, { prefix: "/api", ctx });
     startSessionCleanup(app, ctx);
     startIamSweep(app, ctx);
+    startHomelabTickers(app, ctx);
   } else {
     await app.register(setupRoutes, { prefix: "/api", setupMode: true });
   }
@@ -163,6 +164,76 @@ const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
  * sessions table grows without bound (every login inserts a row; logout
  * only marks revoked). Exported for testing.
  */
+const SCHEDULE_TICK_MS = 60 * 1000;
+const HEALTH_TICK_MS = 5 * 60 * 1000;
+
+/**
+ * Background homelab tickers: scheduled power actions every minute,
+ * connection-health snapshots every 5 minutes (first health pass starts on
+ * the first tick to avoid hammering Guacamole at boot). Exported for testing.
+ */
+export function startHomelabTickers(
+  app: FastifyInstance,
+  ctx: CoreContext,
+  scheduleIntervalMs = SCHEDULE_TICK_MS,
+  healthIntervalMs = HEALTH_TICK_MS,
+): void {
+  const runSchedules = async (): Promise<void> => {
+    try {
+      const result = await runDueSchedules({
+        db: ctx.db,
+        vms: ctx.vms,
+        getProxmoxClient: () => ctx.getProxmoxClient(),
+        audit: ctx.audit,
+        logger: ctx.logger,
+      });
+      if (result.ran > 0) ctx.logger.info(result, "scheduled power actions completed");
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "scheduled power actions failed",
+      );
+    }
+  };
+  const runHealth = async (): Promise<void> => {
+    try {
+      const vms = await ctx.vms.list();
+      let checked = 0;
+      for (const vm of vms) {
+        try {
+          await checkVmHealth(ctx.db, ctx.guac, vm.id);
+          checked += 1;
+        } catch (err) {
+          ctx.logger.warn(
+            { vmId: vm.id, error: err instanceof Error ? err.message : String(err) },
+            "connection health check failed",
+          );
+        }
+      }
+      if (checked > 0) ctx.logger.debug({ checked }, "connection health pass completed");
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "connection health pass failed",
+      );
+    }
+  };
+  void runSchedules();
+  const scheduleTimer = setInterval(() => {
+    void runSchedules();
+  }, scheduleIntervalMs);
+  const healthTimer = setInterval(() => {
+    void runHealth();
+  }, healthIntervalMs);
+  for (const timer of [scheduleTimer, healthTimer]) {
+    (timer as unknown as { unref?: () => void }).unref?.();
+  }
+  app.addHook("onClose", async () => {
+    clearInterval(scheduleTimer);
+    clearInterval(healthTimer);
+  });
+}
+
 export function startIamSweep(app: FastifyInstance, ctx: CoreContext, intervalMs = SESSION_CLEANUP_INTERVAL_MS): void {
   // Prunes expired IAM rows and revokes leftover Guacamole permissions.
   // Authorization never depends on this (resolution ignores expired rows);
@@ -202,6 +273,20 @@ export function startSessionCleanup(
       ctx.logger.warn(
         { error: err instanceof Error ? err.message : String(err) },
         "session cleanup failed",
+      );
+    }
+    // Optional audit retention (audit.retention_days setting, unset = keep forever).
+    try {
+      const retention = await ctx.settings.get("audit.retention_days");
+      const days = retention ? Number(retention.value) : NaN;
+      if (Number.isFinite(days) && days >= 1) {
+        const removed = await ctx.audit.prune(Math.floor(days));
+        if (removed > 0) ctx.logger.info({ removed }, "audit retention prune completed");
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "audit retention prune failed",
       );
     }
   };

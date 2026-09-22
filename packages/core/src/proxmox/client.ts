@@ -325,6 +325,38 @@ export class ProxmoxClient {
     return typeof result === "string" ? result : "";
   }
 
+  /**
+   * Live-migrate (online) or offline-migrate a VM to another cluster node.
+   * Node names are encoded: they originate from user input on some paths.
+   */
+  async migrate(node: string, vmid: number, target: string, online = false): Promise<string> {
+    const result = await this.request<string>(`/nodes/${encodeURIComponent(node)}/qemu/${vmid}/migrate`, {
+      method: "POST",
+      body: { target, online: online ? 1 : 0 },
+    });
+    return typeof result === "string" ? result : "";
+  }
+
+  /** Convert a stopped VM into a Proxmox template (for template-from-VM). */
+  async makeTemplate(node: string, vmid: number): Promise<string> {
+    const result = await this.request<string>(`/nodes/${encodeURIComponent(node)}/qemu/${vmid}/template`, {
+      method: "POST",
+    });
+    return typeof result === "string" ? result : "";
+  }
+
+  /** RRD time-series for CPU/memory/disk/network graphs. */
+  async rrddata(
+    node: string,
+    vmid: number,
+    timeframe: "hour" | "day" | "week" | "month" | "year" = "day",
+    cf: "AVERAGE" | "MAX" = "AVERAGE",
+  ): Promise<Array<Record<string, unknown>>> {
+    return this.request<Array<Record<string, unknown>>>(
+      `/nodes/${encodeURIComponent(node)}/qemu/${vmid}/rrddata?timeframe=${timeframe}&cf=${cf}`,
+    );
+  }
+
   async updateConfig(node: string, vmid: number, config: Record<string, unknown>): Promise<string> {
     const result = await this.request<string>(`/nodes/${node}/qemu/${vmid}/config`, {
       method: "PUT",

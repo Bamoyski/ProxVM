@@ -25,4 +25,34 @@ export async function auditRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       return { entries };
     },
   );
+
+  // CSV export honoring the same filters. Capped to keep exports bounded;
+  // page through with offset for full retention dumps.
+  app.get(
+    "/audit/export",
+    { preHandler: app.requirePermission("audit.read") },
+    async (request, reply) => {
+      const query = querySchema.extend({ limit: z.coerce.number().int().min(1).max(5000).default(1000) }).parse(
+        request.query,
+      );
+      const entries = await ctx.audit.list({
+        limit: query.limit,
+        offset: query.offset,
+        event: query.event,
+        vmId: query.vmId,
+      });
+      const cell = (value: unknown): string => {
+        const text = value === null || value === undefined ? "" : String(value instanceof Date ? value.toISOString() : typeof value === "object" ? JSON.stringify(value) : value);
+        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+      };
+      const header = "id,created_at,event,actor_username,vm_id,job_id,ip,detail";
+      const lines = entries.map((e) =>
+        [e.id, e.createdAt, e.event, e.actorUsername, e.vmId, e.jobId, e.ip, e.detail].map(cell).join(","),
+      );
+      return reply
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header("Content-Disposition", 'attachment; filename="proxvm-audit.csv"')
+        .send([header, ...lines].join("\n"));
+    },
+  );
 }

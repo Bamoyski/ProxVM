@@ -25,8 +25,11 @@ No mock data, no simulated infrastructure. If a service is unreachable, the UI s
 - **Credential vault**: per-VM guest credentials encrypted with AES-256-GCM; audited reveal/copy/rotation; SSH verification (Linux) and RDP port probing (Windows)
 - **Guacamole integration**: real connections written to the Guacamole SQL database with per-protocol (SSH/RDP/VNC) entries; session launch via the Guacamole REST token API with per-user synchronization
 - **IAM & RBAC**: roles, groups, per-VM access grants, temporary (expiring) access, and per-protocol permissions — deny-by-default, backend-authoritative
-- **Jobs & audit**: BullMQ provisioning pipeline with retry/reschedule/rollback, SSE progress streaming, and a tamper-evident audit log with secret redaction
+- **Jobs & audit**: BullMQ provisioning pipeline with retry/reschedule/rollback, SSE progress streaming, and a tamper-evident audit log with secret redaction, CSV export, and retention pruning
 - **Setup wizard**: guided first-run configuration with live connection tests for Proxmox, Guacamole, PostgreSQL, and Redis
+- **Homelab operations**: one-click cloning, save-as-template, live migration, bulk power actions, scheduled power, RRD resource graphs, service auto-discovery, node balance guidance, and per-connection health checks
+- **Shareable sessions**: time-boxed, revocable, usage-capped Guacamole links that mint fresh tokens on open
+- **Everyday luxuries**: light/dark theme, mobile layout, Ctrl+K command palette, arrangeable dashboard, in-app help tutorials, and privacy/terms pages
 
 ## Architecture
 
@@ -149,6 +152,14 @@ Integration tests run against your REAL Proxmox/Guacamole once the app is config
 ## Security
 
 See [SECURITY.md](SECURITY.md) for how to report vulnerabilities. Summary of controls: deny-by-default RBAC, server-side sessions with httpOnly SameSite=strict cookies, per-session CSRF tokens, login rate limiting + account lockout, AES-256-GCM credential encryption, Argon2id password hashing, audit log with secret redaction, and security regression tests (`iam-adversarial`, `rbac-authorization`, foundation auth tests).
+
+## Privacy
+
+ProxVM is self-hosted: all accounts, credentials, configuration, and audit
+data stay on the operator's infrastructure. The application sends nothing to
+third parties (no telemetry, analytics, or tracking), sets a single
+strictly-necessary session cookie, and never logs plaintext secrets. The
+in-app **Legal** page carries the full privacy policy and terms of use.
 
 ## License
 

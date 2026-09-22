@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
@@ -95,6 +95,13 @@ export default function Vms({ me }: { me: Me }) {
   const { confirm, dialog } = useConfirm();
 
   const [provisionOpen, setProvisionOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
+  const { data: healthData } = useQuery({
+    queryKey: ["connection-health"],
+    queryFn: () => api<{ health: Array<{ vmId: string; protocol: string; reachable: boolean; authenticated: boolean | null; detail: string }> }>("/connection-health"),
+    refetchInterval: 60000,
+  });
   const [provisionMode, setProvisionMode] = useState<"basic" | "advanced">("basic");
   const [assignIds, setAssignIds] = useState<string[]>([]);
   const [basic, setBasic] = useState({
@@ -302,6 +309,47 @@ export default function Vms({ me }: { me: Me }) {
     }
   };
 
+  const healthByVm = new Map<string, Array<{ protocol: string; reachable: boolean; authenticated: boolean | null; detail: string }>>();
+  for (const h of healthData?.health ?? []) {
+    const list = healthByVm.get(h.vmId) ?? [];
+    list.push(h);
+    healthByVm.set(h.vmId, list);
+  }
+
+  const healthDot = (vmId: string | null): ReactNode => {
+    if (!vmId) return <span className="text-slate-700">—</span>;
+    const entries = healthByVm.get(vmId);
+    if (!entries?.length) return <span className="text-slate-700" title="No health data yet">—</span>;
+    const bad = entries.filter((e) => !e.reachable || e.authenticated === false);
+    const title = entries.map((e) => `${e.protocol.toUpperCase()}: ${e.detail}`).join("\n");
+    if (!bad.length) return <span className="text-green-400" title={title}>●</span>;
+    return <span className="text-red-400" title={title}>●</span>;
+  };
+
+  const toggleSelect = (id: string): void => {
+    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  };
+
+  const doBulk = async (action: "start" | "stop" | "restart") => {
+    setBulkResult(null);
+    try {
+      const res = await api<{ results: Array<{ vmId: string; ok: boolean; error?: string }> }>("/vms/bulk-action", {
+        method: "POST",
+        body: { ids: selected, action },
+      });
+      const failed = res.results.filter((r) => !r.ok);
+      setBulkResult(
+        failed.length
+          ? `${res.results.length - failed.length}/${res.results.length} ${action}ed. Failures: ${failed.map((r) => `${r.vmId.slice(0, 8)} (${r.error})`).join("; ")}`
+          : `${res.results.length} VM(s) ${action}ed successfully.`,
+      );
+      setSelected([]);
+      void qc.invalidateQueries({ queryKey: ["vms"] });
+    } catch (err) {
+      setBulkResult(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const del = (row: VmRow) => {
     confirm(`Delete VM ${row.name} (Proxmox VM ${row.vmid} on ${row.node}) and its Guacamole connection.`, `DELETE ${row.name}`, async () => {
       await api(`/vms/${row.id}`, { method: "DELETE", body: { confirmText: `DELETE ${row.name}` } });
@@ -328,6 +376,19 @@ export default function Vms({ me }: { me: Me }) {
           Proxmox API unreachable — showing stored data only. Error: {data.proxmoxError}
         </div>
       )}
+
+      {canManage && selected.length > 0 && (
+        <div className="bg-slate-900 border border-slate-700 rounded p-3 mb-4 text-sm flex flex-wrap items-center gap-2">
+          <span className="text-slate-300">{selected.length} selected</span>
+          {(["start", "stop", "restart"] as const).map((a) => (
+            <button key={a} className={btn} onClick={() => void doBulk(a)}>
+              {a.toUpperCase()} ALL
+            </button>
+          ))}
+          <button className="text-xs text-slate-400 underline" onClick={() => setSelected([])}>Clear</button>
+        </div>
+      )}
+      {bulkResult && <div className="bg-slate-900 border border-slate-700 rounded p-3 mb-4 text-sm">{bulkResult}</div>}
 
       {provisionOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-40 p-4">
@@ -520,6 +581,7 @@ export default function Vms({ me }: { me: Me }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
+              {canManage && <th className="py-2 pr-2">✓</th>}
               <th className="py-2">Status</th>
               <th className="py-2">Name</th>
               <th className="py-2">VM ID</th>
@@ -530,12 +592,20 @@ export default function Vms({ me }: { me: Me }) {
               <th className="py-2">RAM</th>
               <th className="py-2">Disk</th>
               <th className="py-2">Guacamole</th>
+              <th className="py-2" title="Last connection health check">Health</th>
               <th className="py-2">Actions</th>
             </tr>
           </thead>
           <tbody>
             {(data?.vms ?? []).map((row) => (
               <tr key={`${row.vmid}@${row.node}`} className="border-b border-slate-800/50 hover:bg-slate-900/50">
+                {canManage && (
+                  <td className="py-2 pr-2">
+                    {row.id ? (
+                      <input type="checkbox" checked={selected.includes(row.id)} onChange={() => toggleSelect(row.id as string)} />
+                    ) : null}
+                  </td>
+                )}
                 <td className="py-2"><StatusBadge status={row.status} /></td>
                 <td>
                   {row.id ? (
@@ -573,6 +643,7 @@ export default function Vms({ me }: { me: Me }) {
                     <span className="text-xs text-slate-600">none</span>
                   )}
                 </td>
+                <td>{healthDot(row.id)}</td>
                 <td>
                   <div className="flex flex-wrap gap-1">
                     {row.id && row.guacamole?.created && canLaunch && (

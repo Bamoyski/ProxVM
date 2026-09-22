@@ -28,6 +28,7 @@ export * from "./services/guacamole.js";
 export * from "./services/iam.js";
 export * from "./services/iam-store.js";
 export * from "./services/queue.js";
+export * from "./services/homelab.js";
 export * from "./provisioning/pipeline.js";
 export * from "./provisioning/defaults.js";
 export * from "./provisioning/reschedule.js";

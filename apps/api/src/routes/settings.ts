@@ -29,6 +29,23 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
   const ctx = opts.ctx;
   const guard = app.requirePermission("settings.manage");
 
+  app.put("/settings/app", async (request) => {
+    const actor = await guard(request);
+    const body = z.object({ retentionDays: z.number().int().min(1).max(3650).nullable() }).parse(request.body);
+    if (body.retentionDays === null) {
+      await ctx.db.query("DELETE FROM settings WHERE key = 'audit.retention_days'");
+    } else {
+      await ctx.settings.set("audit.retention_days", String(body.retentionDays), { category: "system" });
+    }
+    await ctx.audit.record({
+      event: "SETTINGS_CHANGED",
+      actorUserId: actor.id,
+      actorUsername: actor.username,
+      detail: { section: "app", retentionDays: body.retentionDays },
+    });
+    return { ok: true };
+  });
+
   app.get("/settings/proxmox", { preHandler: guard }, async () => {
     const s = await ctx.settings.proxmox();
     if (!s) return { configured: false, settings: null };
@@ -123,12 +140,14 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
   });
 
   app.get("/settings/app", { preHandler: guard }, async () => {
+    const retention = await ctx.settings.get("audit.retention_days");
     return {
       app: {
         cookieSecure: ctx.localConfig.app.cookieSecure,
         sessionDurationHours: ctx.localConfig.app.sessionDurationHours,
         sessionIdleTimeoutMinutes: ctx.localConfig.app.sessionIdleTimeoutMinutes,
       },
+      settings: { retentionDays: retention ? Number(retention.value) : null },
     };
   });
 }
