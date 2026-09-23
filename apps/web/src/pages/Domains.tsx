@@ -27,13 +27,20 @@ export default function Domains() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [cf, setCf] = useState({ apiToken: "", zoneId: "" });
-  const [canonicalInput, setCanonicalInput] = useState("");
-  const [switchForm, setSwitchForm] = useState({ name: "", target: "", proxied: true });
+  const [switchName, setSwitchName] = useState("");
   const [search, setSearch] = useState("");
 
   const { data: config } = useQuery({
     queryKey: ["domains-config"],
     queryFn: () => api<DomainConfig>("/domains/config"),
+  });
+  // Confirm the key works as soon as the page loads (no click needed).
+  const { data: cfTest, isFetching: cfTesting } = useQuery({
+    queryKey: ["domains-cf-test"],
+    queryFn: () => api<{ ok: boolean; zone: { name: string; status: string } }>("/domains/cloudflare/test", { method: "POST" }),
+    enabled: !!config?.cloudflare.zoneId,
+    retry: false,
+    staleTime: 60000,
   });
   const { data: dns } = useQuery({
     queryKey: ["domains-dns", search],
@@ -43,6 +50,7 @@ export default function Domains() {
 
   const reload = () => {
     void qc.invalidateQueries({ queryKey: ["domains-config"] });
+    void qc.invalidateQueries({ queryKey: ["domains-cf-test"] });
     void qc.invalidateQueries({ queryKey: ["domains-dns"] });
   };
 
@@ -57,31 +65,23 @@ export default function Domains() {
         body: { apiToken: cf.apiToken || undefined, zoneId: cf.zoneId || undefined },
       });
       setCf({ apiToken: "", zoneId: "" });
-      setStatus("Cloudflare connection saved. The token is stored encrypted and never shown again.");
+      setStatus("Saved. Key status re-checks automatically.");
       reload();
     } catch (err) {
       fail(err);
     }
   };
 
-  const testCf = async () => {
+  const doSwitch = async () => {
     setError(null);
     setStatus(null);
     try {
-      const res = await api<{ ok: boolean; zone: { name: string; status: string } }>("/domains/cloudflare/test", { method: "POST" });
-      setStatus(`Cloudflare OK — zone ${res.zone.name} (${res.zone.status}).`);
-    } catch (err) {
-      fail(err);
-    }
-  };
-
-  const setCanonical = async () => {
-    setError(null);
-    setStatus(null);
-    try {
-      const res = await api<DomainConfig>("/domains/config", { method: "PUT", body: { canonical: canonicalInput } });
-      setCanonicalInput("");
-      setStatus(`Canonical domain is now ${res.canonical}. The previous domain keeps working via redirect.`);
+      const res = await api<{ record: DnsRecord; canonical: string; aliases: string[] }>("/domains/switch", {
+        method: "POST",
+        body: { name: switchName },
+      });
+      setSwitchName("");
+      setStatus(`Boom — now serving ${res.canonical} (${res.record.name} → ${res.record.content}). Old URLs redirect automatically.`);
       reload();
     } catch (err) {
       fail(err);
@@ -98,127 +98,106 @@ export default function Domains() {
     }
   };
 
-  const doSwitch = async () => {
-    setError(null);
-    setStatus(null);
-    try {
-      const res = await api<{ record: DnsRecord; canonical: string; aliases: string[] }>("/domains/switch", {
-        method: "POST",
-        body: { name: switchForm.name, target: switchForm.target || undefined, proxied: switchForm.proxied },
-      });
-      setSwitchForm({ name: "", target: "", proxied: true });
-      setStatus(`DNS updated (${res.record.name} → ${res.record.content}) and canonical domain is now ${res.canonical}. Old URLs redirect automatically.`);
-      reload();
-    } catch (err) {
-      fail(err);
-    }
-  };
+  const keyOk = cfTest?.ok === true;
 
   return (
-    <div>
-      <PageTitle title="Domains & Cloudflare" />
+    <div className="max-w-3xl">
+      <PageTitle title="Domains" />
       {error && <ErrorBox error={error} />}
       {status && <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-3 mb-4 text-sm">{status}</div>}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="space-y-6">
-          <div className="bg-slate-900 border border-slate-800 rounded p-4">
-            <h2 className="text-sm font-medium text-slate-300 mb-1">Canonical domain & redirects</h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Current: <span className="font-mono text-blue-300">{config?.canonical ?? "(none set)"}</span>. Old
-              domains stay listed below and automatically redirect here — never delete their DNS records.
-            </p>
-            <div className="flex gap-2 mb-3">
-              <input
-                className={input}
-                placeholder="app.example.com"
-                value={canonicalInput}
-                onChange={(e) => setCanonicalInput(e.target.value)}
-              />
-              <button onClick={setCanonical} disabled={!canonicalInput.trim()} className={btn}>Set</button>
-            </div>
-            <div className="space-y-1">
-              {(config?.aliases ?? []).map((a) => (
-                <div key={a} className="flex justify-between text-sm py-0.5">
-                  <span className="font-mono text-slate-300">{a} <span className="text-xs text-slate-500">→ redirects</span></span>
-                  <button className="text-xs text-red-300 underline" onClick={() => void removeAlias(a)}>Remove</button>
-                </div>
-              ))}
-              {!(config?.aliases ?? []).length && <div className="text-xs text-slate-500">No redirect aliases.</div>}
-            </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded p-5 mb-4">
+        <div className="space-y-2 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 w-36">API key</span>
+            {!config?.cloudflare.zoneId ? (
+              <span className="text-slate-500">not connected — expand setup below</span>
+            ) : cfTesting ? (
+              <span className="text-slate-400">checking…</span>
+            ) : keyOk ? (
+              <span className="text-green-300">✓ works{cfTest?.zone ? ` (zone ${cfTest.zone.name})` : ""}</span>
+            ) : (
+              <span className="text-red-300">✗ not working — check the token and Zone ID below</span>
+            )}
           </div>
-          <div className="bg-slate-900 border border-slate-800 rounded p-4">
-            <h2 className="text-sm font-medium text-slate-300 mb-1">Cloudflare connection</h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Needs an API token with DNS edit permission and the Zone ID (both on the zone's Cloudflare dashboard).
-              Status: {config?.cloudflare.configured ? <span className="text-green-300">token saved</span> : <span className="text-slate-400">no token</span>}
-              {config?.cloudflare.zoneId ? <span className="text-slate-400"> · zone <span className="font-mono">{config.cloudflare.zoneId}</span></span> : null}
-            </p>
-            <div className="space-y-3">
-              <div>
-                <label className={label}>API token (stored encrypted, leave blank to keep)</label>
-                <input type="password" className={input} value={cf.apiToken} onChange={(e) => setCf({ ...cf, apiToken: e.target.value })} />
-              </div>
-              <div>
-                <label className={label}>Zone ID</label>
-                <input className={input} value={cf.zoneId} onChange={(e) => setCf({ ...cf, zoneId: e.target.value })} placeholder={config?.cloudflare.zoneId ?? ""} />
-              </div>
-              <div className="flex gap-2">
-                <button onClick={saveCf} className={btn}>Save</button>
-                <button onClick={testCf} className="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">Test</button>
-              </div>
-            </div>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 w-36">Current domain</span>
+            <span className="font-mono text-blue-300">{config?.canonical ?? "(none set yet)"}</span>
           </div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-1">Switch domain</h2>
-          <p className="text-xs text-slate-500 mb-3">
-            Point a name at the same target as the current domain, then flip canonical in one step.
-            The old DNS record is kept so old URLs redirect instead of dying.
-          </p>
-          {!config?.cloudflare.zoneId ? (
-            <div className="text-xs text-slate-500">Save a Zone ID first to manage DNS records.</div>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-2 mb-3">
-                <div>
-                  <label className={label}>New name (short or full)</label>
-                  <input className={input} placeholder="proxvm1" value={switchForm.name} onChange={(e) => setSwitchForm({ ...switchForm, name: e.target.value })} />
-                </div>
-                <div>
-                  <label className={label}>Target (blank = copy current)</label>
-                  <input className={input} placeholder="203.0.113.10" value={switchForm.target} onChange={(e) => setSwitchForm({ ...switchForm, target: e.target.value })} />
-                </div>
-              </div>
-              <label className="flex items-center gap-2 text-xs text-slate-400 mb-3">
-                <input type="checkbox" checked={switchForm.proxied} onChange={(e) => setSwitchForm({ ...switchForm, proxied: e.target.checked })} />
-                Proxied through Cloudflare (orange cloud)
-              </label>
-              <button onClick={doSwitch} disabled={!switchForm.name.trim()} className={`${btn} mb-4`}>Switch domain</button>
-              <div>
-                <label className={label}>DNS records (A / AAAA / CNAME)</label>
-                <input className={`${input} mb-2`} placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} />
-                <div className="space-y-1 max-h-96 overflow-y-auto">
-                  {(dns?.records ?? []).map((r) => (
-                    <div key={r.id} className="flex flex-wrap gap-2 items-center text-xs py-1 border-b border-slate-800/50">
-                      <span className="font-mono text-slate-500 w-14">{r.type}</span>
-                      <span className="font-mono text-slate-200">{r.name}</span>
-                      <span className="font-mono text-slate-500">→ {r.content}</span>
-                      {r.proxied && <span className="text-amber-300">☁ proxied</span>}
-                      {config?.canonical && r.name.toLowerCase() === config.canonical && (
-                        <span className="text-green-300">● canonical</span>
-                      )}
-                      {(config?.aliases ?? []).includes(r.name.toLowerCase()) && (
-                        <span className="text-blue-300">↪ redirect</span>
-                      )}
-                    </div>
-                  ))}
-                  {!(dns?.records ?? []).length && <div className="text-xs text-slate-500">No records match.</div>}
-                </div>
-              </div>
-            </>
+          {(config?.aliases ?? []).length > 0 && (
+            <div className="flex items-start gap-2">
+              <span className="text-slate-400 w-36">Redirecting</span>
+              <span className="font-mono text-slate-300">{config?.aliases.join(", ")}</span>
+            </div>
           )}
         </div>
       </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded p-5 mb-4">
+        <h2 className="text-sm font-medium text-slate-300 mb-3">Switch domain</h2>
+        <div className="flex gap-2">
+          <input
+            className={input}
+            placeholder="proxvm2 (target auto-copied from current)"
+            value={switchName}
+            onChange={(e) => setSwitchName(e.target.value)}
+          />
+          <button onClick={doSwitch} disabled={!switchName.trim() || !keyOk} className={btn}>
+            Switch
+          </button>
+        </div>
+        {!keyOk && <div className="text-xs text-slate-500 mt-2">Connect Cloudflare below first.</div>}
+      </div>
+
+      <details className="bg-slate-900 border border-slate-800 rounded p-5 mb-4 text-sm">
+        <summary className="cursor-pointer text-slate-300 font-medium">Cloudflare connection & DNS records</summary>
+        <div className="space-y-3 mt-3">
+          <div>
+            <label className={label}>API token (stored encrypted, leave blank to keep)</label>
+            <input type="password" className={input} value={cf.apiToken} onChange={(e) => setCf({ ...cf, apiToken: e.target.value })} />
+          </div>
+          <div>
+            <label className={label}>Zone ID</label>
+            <input className={input} value={cf.zoneId} onChange={(e) => setCf({ ...cf, zoneId: e.target.value })} placeholder={config?.cloudflare.zoneId ?? ""} />
+          </div>
+          <button onClick={saveCf} className={btn}>Save</button>
+          <div>
+            <label className={label}>DNS records (A / AAAA / CNAME)</label>
+            <input className={`${input} mb-2`} placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <div className="space-y-1 max-h-72 overflow-y-auto">
+              {(dns?.records ?? []).map((r) => (
+                <div key={r.id} className="flex flex-wrap gap-2 items-center text-xs py-1 border-b border-slate-800/50">
+                  <span className="font-mono text-slate-500 w-14">{r.type}</span>
+                  <span className="font-mono text-slate-200">{r.name}</span>
+                  <span className="font-mono text-slate-500">→ {r.content}</span>
+                  {r.proxied && <span className="text-amber-300">☁</span>}
+                  {config?.canonical && r.name.toLowerCase() === config.canonical && (
+                    <span className="text-green-300">● current</span>
+                  )}
+                  {(config?.aliases ?? []).includes(r.name.toLowerCase()) && (
+                    <span className="text-blue-300">↪ redirect</span>
+                  )}
+                </div>
+              ))}
+              {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <div className="text-xs text-slate-500">No records match.</div>}
+              {!config?.cloudflare.zoneId && <div className="text-xs text-slate-500">Save a Zone ID to list records.</div>}
+            </div>
+          </div>
+          {(config?.aliases ?? []).length > 0 && (
+            <div>
+              <label className={label}>Stop redirecting (old URLs will die)</label>
+              <div className="space-y-1">
+                {(config?.aliases ?? []).map((a) => (
+                  <div key={a} className="flex justify-between text-sm py-0.5">
+                    <span className="font-mono text-slate-300">{a}</span>
+                    <button className="text-xs text-red-300 underline" onClick={() => void removeAlias(a)}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   );
 }
