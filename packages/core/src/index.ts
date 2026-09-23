@@ -17,6 +17,7 @@ export * from "./ssh/client.js";
 export * from "./services/audit.js";
 export * from "./services/settings.js";
 export * from "./services/users.js";
+export * from "./services/registration.js";
 export * from "./services/sessions.js";
 export * from "./services/rbac.js";
 export * from "./services/vms.js";

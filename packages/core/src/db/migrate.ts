@@ -16,6 +16,7 @@ import { vmAccessActorMigration } from "./migrations/006_vm_access_actor.js";
 import { iamMigration } from "./migrations/007_iam.js";
 import { guacSessionTokensMigration } from "./migrations/008_guac_session_tokens.js";
 import { homelabMigration } from "./migrations/009_homelab.js";
+import { registrationMigration } from "./migrations/010_registration.js";
 
 export const MIGRATIONS: Migration[] = [
   { id: "001", name: "initial", sql: initialMigration },
@@ -27,6 +28,7 @@ export const MIGRATIONS: Migration[] = [
   { id: "007", name: "iam", sql: iamMigration },
   { id: "008", name: "guac_session_tokens", sql: guacSessionTokensMigration },
   { id: "009", name: "homelab", sql: homelabMigration },
+  { id: "010", name: "registration", sql: registrationMigration },
 ];
 
 export async function runMigrations(db: Queryable, logger: Logger): Promise<string[]> {

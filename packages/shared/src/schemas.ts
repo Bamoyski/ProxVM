@@ -45,6 +45,28 @@ export const createUserSchema = z.object({
 
 export const roleSchema = z.enum(ROLES);
 
+// Self-service account request. Same identity/password rules as admin
+// creation; approval (by an administrator) is a separate, authenticated step.
+export const registrationSchema = z.object({
+  username: z
+    .string()
+    .min(3)
+    .max(64)
+    .regex(/^[a-zA-Z0-9._-]+$/, "Username may contain letters, numbers, dots, dashes, underscores"),
+  email: z.string().email().optional().or(z.literal("").transform(() => undefined)),
+  password: passwordComplexity,
+});
+
+// Client-side checklist mirror of passwordComplexity (backend authoritative).
+// Kept as data so the signup form can render each rule with live feedback.
+export const PASSWORD_RULES: Array<{ id: string; label: string; test: RegExp | null; minLength: number | null }> = [
+  { id: "length", label: "At least 12 characters", test: null, minLength: 12 },
+  { id: "lower", label: "A lowercase letter (a–z)", test: /[a-z]/, minLength: null },
+  { id: "upper", label: "An uppercase letter (A–Z)", test: /[A-Z]/, minLength: null },
+  { id: "number", label: "A number (0–9)", test: /[0-9]/, minLength: null },
+  { id: "symbol", label: "A special character (!@#…)", test: /[^A-Za-z0-9]/, minLength: null },
+];
+
 export const setupAdminSchema = z.object({
   username: z
     .string()

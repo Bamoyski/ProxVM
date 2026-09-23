@@ -1,6 +1,7 @@
 import https from "node:https";
 import http from "node:http";
 import type { ProxmoxAgentInfo, ProxmoxNodeStatus, ProxmoxQemuResource, ProxmoxVmConfig } from "@proxvm/shared";
+import { stripTrailingSlashes } from "../util/misc.js";
 
 export class ProxmoxApiError extends Error {
   readonly statusCode: number;
@@ -90,7 +91,7 @@ export class ProxmoxClient {
   private readonly fetchImpl: typeof fetch | null;
 
   constructor(opts: ProxmoxClientOptions) {
-    this.baseUrl = opts.url.replace(/\/+$/, "");
+    this.baseUrl = stripTrailingSlashes(opts.url);
     this.tokenId = opts.tokenId;
     this.tokenSecret = opts.tokenSecret;
     this.verifySsl = opts.verifySsl;

@@ -208,4 +208,57 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
     });
     return { ok: true };
   });
+
+  // -- Registration approval queue -------------------------------------------
+  app.get("/registration-requests", async (request) => {
+    await guard(request);
+    const query = z.object({ status: z.enum(["pending", "approved", "rejected"]).optional() }).parse(request.query);
+    return { requests: await ctx.registration.list(query.status) };
+  });
+
+  app.post("/registration-requests/:id/approve", async (request, reply) => {
+    const actor = await guard(request);
+    const { id } = request.params as { id: string };
+    const body = z.object({ role: z.enum(["ADMIN", "OPERATOR", "USER"]).default("USER") }).parse(request.body ?? {});
+    // Approving with a role confers that role's permissions.
+    await assertMayConfer(ctx.db, actor, await roleEffectivePermissions(ctx.db, ROLE_IDS[body.role]));
+    try {
+      const { userId } = await ctx.registration.approve(id, actor.id, [body.role]);
+      const created = await ctx.users.findById(userId);
+      await ctx.audit.record({
+        event: "REGISTRATION_APPROVED",
+        actorUserId: actor.id,
+        actorUsername: actor.username,
+        detail: { username: created?.username, role: body.role },
+      });
+      return { user: created ? toPublicUser(created) : null };
+    } catch (err) {
+      if ((err as { code?: string })?.code === "CONFLICT") {
+        return reply.status(409).send({ code: "CONFLICT", message: err instanceof Error ? err.message : String(err) });
+      }
+      throw err;
+    }
+  });
+
+  app.post("/registration-requests/:id/reject", async (request, reply) => {
+    const actor = await guard(request);
+    const { id } = request.params as { id: string };
+    try {
+      await ctx.registration.reject(id, actor.id);
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (code === "NOT_FOUND") return reply.status(404).send({ code: "NOT_FOUND", message: "Registration request not found" });
+      if (code === "CONFLICT") {
+        return reply.status(409).send({ code: "CONFLICT", message: err instanceof Error ? err.message : String(err) });
+      }
+      throw err;
+    }
+    await ctx.audit.record({
+      event: "REGISTRATION_REJECTED",
+      actorUserId: actor.id,
+      actorUsername: actor.username,
+      detail: { requestId: id },
+    });
+    return { ok: true };
+  });
 }

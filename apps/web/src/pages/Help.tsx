@@ -122,6 +122,7 @@ const SECTIONS: HelpSection[] = [
       "Assign a base role (ADMIN, OPERATOR, or USER) — most people should be USER plus targeted grants.",
       "Open a user's permissions page to see exactly what they hold and where each permission comes from.",
       "Disable rather than delete accounts you might need again; five failed logins lock an account automatically.",
+      "New people request accounts from the login page (password rules are shown live); approve or reject them in the pending-requests box with the role they should start with.",
     ],
   },
   {

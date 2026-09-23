@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import { hashPassword, verifyPassword, toPublicUser } from "@proxvm/core";
-import { loginSchema } from "@proxvm/shared";
+import { loginSchema, registrationSchema } from "@proxvm/shared";
 import { SESSION_COOKIE } from "../plugins/auth.js";
 
 const changePasswordSchema = z.object({
@@ -101,6 +101,38 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
         user: toPublicUser(user),
         csrfToken: session.csrfToken,
       };
+    },
+  );
+
+  // Self-service account request. Unauthenticated by design; tightly
+  // rate-limited (bots) and inert until an administrator approves it.
+  // Duplicate usernames (accounts or pending requests) get a 409.
+  app.post(
+    "/auth/register",
+    {
+      config: { csrf: "skip", rateLimit: { max: 5, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const body = registrationSchema.parse(request.body);
+      try {
+        const created = await ctx.registration.request({
+          username: body.username,
+          email: body.email,
+          passwordHash: await hashPassword(body.password),
+        });
+        await ctx.audit.record({
+          event: "REGISTRATION_REQUESTED",
+          actorUsername: body.username,
+          ip: request.ip,
+          detail: { username: body.username },
+        });
+        return reply.status(201).send({ ok: true, id: created.id });
+      } catch (err) {
+        if ((err as { code?: string })?.code === "CONFLICT") {
+          return reply.status(409).send({ code: "CONFLICT", message: "Username already exists or has a pending request" });
+        }
+        throw err;
+      }
     },
   );
 

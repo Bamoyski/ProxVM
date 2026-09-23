@@ -13,11 +13,13 @@ export interface GuacamoleToken {
   availableDataSources: string[];
 }
 
+import { stripTrailingSlashes } from "../util/misc.js";
+
 export class GuacamoleApiClient {
   constructor(private readonly baseUrl: string) {}
 
   private get url(): string {
-    return this.baseUrl.replace(/\/+$/, "");
+    return stripTrailingSlashes(this.baseUrl);
   }
 
   async requestToken(username: string, password: string): Promise<GuacamoleToken> {
@@ -103,11 +105,11 @@ export function buildClientLaunchUrl(
   identifier: string,
   authToken: string,
 ): string {
-  return `${guacamoleUrl.replace(/\/+$/, "")}/#/client/${encodeURIComponent(identifier)}?token=${encodeURIComponent(authToken)}`;
+  return `${stripTrailingSlashes(guacamoleUrl)}/#/client/${encodeURIComponent(identifier)}?token=${encodeURIComponent(authToken)}`;
 }
 
 export function buildLoginUrl(guacamoleUrl: string): string {
-  return `${guacamoleUrl.replace(/\/+$/, "")}/`;
+  return `${stripTrailingSlashes(guacamoleUrl)}/`;
 }
 
 async function safeText(response: Response): Promise<string> {

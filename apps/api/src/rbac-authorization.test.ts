@@ -394,6 +394,46 @@ describe("RBAC authorization model", () => {
     expect(adminIds).toEqual(expect.arrayContaining([aliceJob.id, othersJob.id, adminJob.id]));
   });
 
+  it("guacamole connection test requires VM access and diagnoses endpoints", async () => {
+    const ciphertext = ctx.encrypt("irrelevant");
+    const { keyIdOf } = await import("@proxvm/core");
+    await ctx.db.query(
+      `INSERT INTO guacamole_connections
+        (id, vm_id, protocol, hostname, port, username, password_ciphertext, key_id, guac_connection_name, guac_identifier, status)
+       VALUES ($1, $2, 'ssh', '127.0.0.1', 1, 'deploy', $3, $4, 'diag-conn', NULL, 'ACTIVE')`,
+      ["33333333-3333-4333-8333-333333333333", assignedVmId, ciphertext, keyIdOf(ciphertext)],
+    );
+
+    // Alice has vm.read + access: 200 with an unreachable-endpoint diagnosis.
+    const ok = await app.inject({
+      method: "POST",
+      url: `/api/vms/${assignedVmId}/guacamole/test`,
+      headers: { cookie: user.cookie, "x-csrf-token": user.csrf },
+      payload: { protocol: "ssh" },
+    });
+    expect(ok.statusCode).toBe(200);
+    const body = ok.json() as { reachable: boolean; authenticated: boolean | null; detail: string };
+    expect(body.reachable).toBe(false);
+    expect(body.authenticated).toBeNull();
+    expect(body.detail.length).toBeGreaterThan(0);
+    expect(JSON.stringify(body)).not.toMatch(/irrelevant/);
+
+    // Erin has vm.read (legacy USER) but no VM access: 403, and the response leaks nothing.
+    await ctx.users.create({
+      username: "erin",
+      passwordHash: await hashPassword("Erin-Password-1!"),
+      roles: ["USER"],
+    });
+    const erinSession = await login(app, "erin", "Erin-Password-1!");
+    const denied = await app.inject({
+      method: "POST",
+      url: `/api/vms/${assignedVmId}/guacamole/test`,
+      headers: { cookie: erinSession.cookie, "x-csrf-token": erinSession.csrf },
+      payload: { protocol: "ssh" },
+    });
+    expect(denied.statusCode).toBe(403);
+  });
+
   it("credential rotate requires VM access for bare permission holders", async () => {
     // A bare user granted only cred.rotate (no VM access, no operator bypass) -> 403.
     const bob = await ctx.users.create({

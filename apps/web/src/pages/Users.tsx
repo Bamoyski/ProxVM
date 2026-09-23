@@ -17,6 +17,12 @@ export default function Users() {
   const [notice, setNotice] = useState<string | null>(null);
   const [resetId, setResetId] = useState<string | null>(null);
   const [resetPw, setResetPw] = useState({ a: "", b: "" });
+  const [approveRole, setApproveRole] = useState<Record<string, string>>({});
+  const { data: requestsData } = useQuery({
+    queryKey: ["registration-requests"],
+    queryFn: () => api<{ requests: Array<{ id: string; username: string; email: string | null; status: string; createdAt: string }> }>("/registration-requests?status=pending"),
+    refetchInterval: 30000,
+  });
   const { data: matrix } = useQuery({
     queryKey: ["iam-matrix"],
     queryFn: () =>
@@ -84,6 +90,27 @@ export default function Users() {
     }
   };
 
+  const decideRegistration = async (id: string, approve: boolean) => {
+    setError(null);
+    setNotice(null);
+    try {
+      if (approve) {
+        await api(`/registration-requests/${id}/approve`, {
+          method: "POST",
+          body: { role: approveRole[id] ?? "USER" },
+        });
+        setNotice("Account approved — the user can now sign in.");
+      } else {
+        await api(`/registration-requests/${id}/reject`, { method: "POST" });
+        setNotice("Request rejected.");
+      }
+      void qc.invalidateQueries({ queryKey: ["registration-requests"] });
+      void qc.invalidateQueries({ queryKey: ["users"] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const del = (username: string, id: string) => {
     if (window.confirm(`Delete user ${username}? Their Guacamole account will also be removed.`)) {
       api(`/users/${id}`, { method: "DELETE" })
@@ -98,6 +125,38 @@ export default function Users() {
       {error && <ErrorBox error={error} />}
       {notice && (
         <div className="bg-yellow-900/50 border border-yellow-700 text-yellow-200 rounded p-3 mb-4 text-sm">{notice}</div>
+      )}
+      {(requestsData?.requests ?? []).length > 0 && (
+        <div className="bg-slate-900 border border-amber-700/60 rounded p-4 mb-4">
+          <h2 className="text-sm font-medium text-slate-300 mb-1">
+            Pending account requests ({requestsData?.requests.length})
+          </h2>
+          <div className="text-xs text-slate-500 mb-3">Approving creates the account immediately with the chosen role.</div>
+          <div className="space-y-2">
+            {(requestsData?.requests ?? []).map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <span>
+                  {r.username}
+                  {r.email && <span className="text-xs text-slate-500 ml-1">{r.email}</span>}
+                </span>
+                <span className="text-xs text-slate-500">requested {new Date(r.createdAt).toLocaleString()}</span>
+                <select
+                  className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
+                  value={approveRole[r.id] ?? "USER"}
+                  onChange={(e) => setApproveRole({ ...approveRole, [r.id]: e.target.value })}
+                >
+                  {ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                </select>
+                <button className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded" onClick={() => void decideRegistration(r.id, true)}>
+                  Approve
+                </button>
+                <button className="text-xs text-red-300 underline" onClick={() => void decideRegistration(r.id, false)}>
+                  Reject
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-slate-900 border border-slate-800 rounded p-4">

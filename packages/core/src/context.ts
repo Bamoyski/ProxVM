@@ -8,6 +8,7 @@ import { encryptSecret, decryptSecret } from "./crypto/cipher.js";
 import { SettingsService } from "./services/settings.js";
 import { AuditService } from "./services/audit.js";
 import { UsersService } from "./services/users.js";
+import { RegistrationService } from "./services/registration.js";
 import { SessionsService } from "./services/sessions.js";
 import { VmsRepository } from "./services/vms.js";
 import { CredentialsService } from "./services/credentials.js";
@@ -39,6 +40,7 @@ export interface CoreContext {
   settings: SettingsService;
   audit: AuditService;
   users: UsersService;
+  registration: RegistrationService;
   sessions: SessionsService;
   vms: VmsRepository;
   creds: CredentialsService;
@@ -96,6 +98,7 @@ export async function createCore(
     settings,
     audit: new AuditService(db),
     users: usersService,
+    registration: new RegistrationService(db, usersService),
     sessions: new SessionsService(
       db,
       localConfig.app.sessionDurationHours,
