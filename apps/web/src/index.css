@@ -37,7 +37,89 @@ html.light .text-slate-500 {
   color: #64748b;
 }
 html.light .border-slate-800,
-html.light .border-slate-700 {
+html.light .border-slate-700,
+html.light .border-slate-800\/50 {
+  border-color: #cbd5e1;
+}
+html.light .bg-slate-900\/50 {
+  background-color: rgba(255, 255, 255, 0.7);
+}
+html.light .bg-slate-800\/50 {
+  background-color: rgba(226, 232, 240, 0.7);
+}
+html.light .bg-black\/60 {
+  background-color: rgba(15, 23, 42, 0.4);
+}
+html.light .bg-blue-950 {
+  background-color: #dbeafe;
+}
+html.light .bg-blue-950 .text-blue-200,
+html.light .text-blue-200 {
+  color: #1e40af;
+}
+html.light .bg-green-900,
+html.light .bg-green-900\/50 {
+  background-color: #dcfce7;
+}
+html.light .bg-green-900 .text-green-200,
+html.light .border-green-700 {
+  border-color: #86efac;
+}
+html.light .bg-red-900,
+html.light .bg-red-900\/50 {
+  background-color: #fee2e2;
+}
+html.light .bg-red-900 .text-red-200,
+html.light .border-red-700,
+html.light .border-red-800 {
+  border-color: #fca5a5;
+}
+html.light .bg-yellow-900,
+html.light .bg-yellow-900\/50,
+html.light .bg-yellow-900\/40 {
+  background-color: #fef9c3;
+}
+html.light .bg-yellow-900 .text-yellow-200,
+html.light .text-yellow-200,
+html.light .text-yellow-300,
+html.light .border-yellow-700,
+html.light .border-yellow-700\/60 {
+  border-color: #fde047;
+}
+html.light .bg-yellow-900 .text-yellow-200,
+html.light .text-yellow-200,
+html.light .text-yellow-300 {
+  color: #854d0e;
+}
+html.light .text-amber-200\/90,
+html.light .text-amber-300 {
+  color: #92400e;
+}
+html.light .bg-amber-900\/30 {
+  background-color: #fef3c7;
+}
+html.light .border-amber-700\/50 {
+  border-color: #fcd34d;
+}
+html.light .bg-red-600 {
+  background-color: #dc2626;
+}
+html.light .bg-red-700,
+html.light .hover\:bg-red-700:hover {
+  background-color: #b91c1c;
+}
+html.light .bg-green-700,
+html.light .hover\:bg-green-600:hover {
+  background-color: #16a34a;
+}
+html.light .bg-blue-600,
+html.light .hover\:bg-blue-500:hover {
+  background-color: #2563eb;
+}
+html.light .text-white {
+  color: #ffffff;
+}
+html.light table thead tr {
   border-color: #cbd5e1;
 }
 html.light .text-blue-400 {

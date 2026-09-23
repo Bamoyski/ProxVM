@@ -783,30 +783,112 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-const GRAPH_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee"];
+function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[u]}`;
+}
+
+function fmtTime(ts: number): string {
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function MetricChart({ title, current, series, color, series2, color2, label2, format }: {
+  title: string;
+  current: string;
+  series: Array<{ t: number; v: number }>;
+  color: string;
+  series2?: Array<{ t: number; v: number }>;
+  color2?: string;
+  label2?: string;
+  format: (v: number) => string;
+}) {
+  const W = 560;
+  const H = 150;
+  const PAD = 8;
+  if (!series.length) {
+    return (
+      <div>
+        <div className="flex justify-between text-xs mb-1">
+          <span className="font-medium text-slate-300">{title}</span>
+          <span className="text-slate-400">no data</span>
+        </div>
+      </div>
+    );
+  }
+  const all = series2 ? [...series.map((s) => s.v), ...series2.map((s) => s.v)] : series.map((s) => s.v);
+  const max = Math.max(...all, 1e-9);
+  const top = max * 1.1;
+  const x = (i: number, n: number): number => (n < 2 ? PAD : PAD + (i / (n - 1)) * (W - PAD * 2));
+  const y = (v: number): number => H - PAD - (v / top) * (H - PAD * 2);
+  const toLine = (s: Array<{ t: number; v: number }>): string =>
+    s.map((p, i) => `${x(i, s.length).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+  const line = toLine(series);
+  const area = `${PAD},${H - PAD} ${line} ${x(series.length - 1, series.length).toFixed(1)},${H - PAD}`;
+  const ticks = [0, Math.floor(series.length / 2), series.length - 1]
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .map((i) => ({ x: x(i, series.length), label: fmtTime(series[i]!.t) }));
+  return (
+    <div>
+      <div className="flex justify-between text-xs mb-1">
+        <span className="font-medium text-slate-300">{title}</span>
+        <span className="font-mono" style={{ color }}>{current}</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-32 bg-slate-950 border border-slate-800 rounded">
+        {[0.25, 0.5, 0.75].map((f) => (
+          <line key={f} x1="0" x2={W} y1={H * f} y2={H * f} stroke="#1e293b" strokeWidth="1" />
+        ))}
+        <polygon points={area} fill={color} opacity="0.18" />
+        <polyline points={line} fill="none" stroke={color} strokeWidth="1.5" />
+        {series2 && color2 && (
+          <polyline points={toLine(series2)} fill="none" stroke={color2} strokeWidth="1.5" strokeDasharray="4 2" />
+        )}
+        {ticks.map((t) => (
+          <text key={t.label} x={t.x} y={H - 1} fontSize="9" fill="#64748b" textAnchor="middle">
+            {t.label}
+          </text>
+        ))}
+        <text x={W - 3} y={12} fontSize="9" fill="#64748b" textAnchor="end">
+          max {format(top)}
+        </text>
+      </svg>
+      {label2 && <div className="text-[10px] text-slate-500 mt-1">solid: in/read · dashed {label2}</div>}
+    </div>
+  );
+}
 
 function VmGraphs({ points, timeframe, setTimeframe }: {
   points: Array<Record<string, unknown>>;
   timeframe: string;
   setTimeframe: (t: string) => void;
 }) {
-  const series = (() => {
-    if (!points.length) return [];
-    const keys = Object.keys(points[0] ?? {}).filter((k) => k !== "time" && typeof points[0]?.[k] === "number");
-    return keys.slice(0, 6).map((key, i) => {
-      const values = points.map((p) => Number(p[key] ?? 0));
-      const max = Math.max(1, ...values);
-      const coords = values.map((v, j) => {
-        const x = points.length < 2 ? 0 : (j / (points.length - 1)) * 560;
-        const y = 140 - (v / max) * 130;
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      });
-      return { key, color: GRAPH_COLORS[i % GRAPH_COLORS.length]!, max, last: values[values.length - 1] ?? 0, coords: coords.join(" ") };
-    });
-  })();
+  const rows = points
+    .map((p) => ({
+      t: Number(p.time ?? 0),
+      cpu: Number(p.cpu ?? 0),
+      maxcpu: Number(p.maxcpu ?? 0),
+      mem: Number(p.mem ?? 0),
+      maxmem: Number(p.maxmem ?? 0),
+      netin: Number(p.netin ?? 0),
+      netout: Number(p.netout ?? 0),
+      diskread: Number(p.diskread ?? 0),
+      diskwrite: Number(p.diskwrite ?? 0),
+    }))
+    .filter((r) => r.t > 0)
+    .sort((a, b) => a.t - b.t);
+  const last = rows[rows.length - 1];
+  const cpuPct = last && last.maxcpu > 0 ? (last.cpu / last.maxcpu) * 100 : last ? last.cpu * 100 : 0;
+  const memPct = last && last.maxmem > 0 ? (last.mem / last.maxmem) * 100 : 0;
   return (
     <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-medium text-slate-300">Resource graphs</div>
         <select
           className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
@@ -818,27 +900,45 @@ function VmGraphs({ points, timeframe, setTimeframe }: {
           ))}
         </select>
       </div>
-      {!series.length ? (
+      {!rows.length ? (
         <div className="text-xs text-slate-500">No data points yet for this range.</div>
       ) : (
-        <>
-          <svg viewBox="0 0 560 150" className="w-full h-36 bg-slate-950 border border-slate-800 rounded">
-            {[0.25, 0.5, 0.75].map((f) => (
-              <line key={f} x1="0" x2="560" y1={150 * f} y2={150 * f} stroke="#1e293b" strokeWidth="1" />
-            ))}
-            {series.map((s) => (
-              <polyline key={s.key} points={s.coords} fill="none" stroke={s.color} strokeWidth="1.5" />
-            ))}
-          </svg>
-          <div className="flex flex-wrap gap-3 mt-2 text-xs">
-            {series.map((s) => (
-              <span key={s.key} className="text-slate-400">
-                <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: s.color }} />
-                <span className="font-mono">{s.key}</span>: {s.last.toFixed(s.max < 10 ? 3 : 1)}
-              </span>
-            ))}
-          </div>
-        </>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <MetricChart
+            title={`CPU${last && last.maxcpu > 0 ? ` (${last.maxcpu} cores)` : ""}`}
+            current={`${cpuPct.toFixed(1)}%`}
+            color="#60a5fa"
+            format={(v) => `${v.toFixed(1)}%`}
+            series={rows.map((r) => ({ t: r.t, v: r.maxcpu > 0 ? (r.cpu / r.maxcpu) * 100 : r.cpu * 100 }))}
+          />
+          <MetricChart
+            title={`Memory (${fmtBytes(last?.maxmem ?? 0)} total)`}
+            current={`${fmtBytes(last?.mem ?? 0)} · ${memPct.toFixed(0)}%`}
+            color="#34d399"
+            format={(v) => fmtBytes(v)}
+            series={rows.map((r) => ({ t: r.t, v: r.mem }))}
+          />
+          <MetricChart
+            title="Network in / out"
+            current={`↓ ${fmtBytes(last?.netin ?? 0)}/s · ↑ ${fmtBytes(last?.netout ?? 0)}/s`}
+            color="#22d3ee"
+            color2="#a78bfa"
+            label2=": out"
+            format={(v) => `${fmtBytes(v)}/s`}
+            series={rows.map((r) => ({ t: r.t, v: r.netin }))}
+            series2={rows.map((r) => ({ t: r.t, v: r.netout }))}
+          />
+          <MetricChart
+            title="Disk read / write"
+            current={`R ${fmtBytes(last?.diskread ?? 0)}/s · W ${fmtBytes(last?.diskwrite ?? 0)}/s`}
+            color="#fbbf24"
+            color2="#f87171"
+            label2=": write"
+            format={(v) => `${fmtBytes(v)}/s`}
+            series={rows.map((r) => ({ t: r.t, v: r.diskread }))}
+            series2={rows.map((r) => ({ t: r.t, v: r.diskwrite }))}
+          />
+        </div>
       )}
     </div>
   );

@@ -19,6 +19,7 @@ import { rotateVmCredential, type RotationOptions, type RotationActor, type Rota
 import { ProxmoxClient } from "./proxmox/client.js";
 import { createGuacamoleDbClient, type GuacamoleDbClient } from "./guacamole/db.js";
 import { GuacamoleApiClient } from "./guacamole/api.js";
+import { CloudflareClient } from "./cloudflare/client.js";
 import { createPgPool } from "./db/pool.js";
 import { parseDbHost } from "./util/misc.js";
 
@@ -49,6 +50,7 @@ export interface CoreContext {
   getProxmoxClient: () => Promise<ProxmoxClient>;
   getGuacDb: () => Promise<GuacamoleDbClient>;
   getGuacApi: () => Promise<GuacamoleApiClient | null>;
+  getCloudflareClient: () => Promise<CloudflareClient>;
   runHealthChecks: () => ReturnType<typeof runHealthChecks>;
   rotateCredential: (
     vmId: string,
@@ -174,6 +176,17 @@ export async function createCore(
       if (!g) return null;
       cache.guacApi = new GuacamoleApiClient(g.url);
       return cache.guacApi;
+    },
+    getCloudflareClient: async () => {
+      const token = await settings.get("cloudflare.api_token");
+      if (!token?.value) {
+        throw new AppError(
+          "CONFIGURATION_ERROR",
+          "Cloudflare is not configured. Save an API token on the Domains page.",
+          400,
+        );
+      }
+      return new CloudflareClient({ token: token.value });
     },
     runHealthChecks: async () =>
       runHealthChecks({

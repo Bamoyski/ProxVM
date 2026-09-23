@@ -21,6 +21,7 @@ export default function Audit() {
   const input = "bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-xs";
 
   const exportHref = `/api/audit/export?limit=${Math.min(5000, Math.max(limit, 100))}${event ? `&event=${encodeURIComponent(event)}` : ""}`;
+  const exportAllHref = `/api/audit/export?limit=50000${event ? `&event=${encodeURIComponent(event)}` : ""}`;
 
   return (
     <div>
@@ -37,6 +38,9 @@ export default function Audit() {
         </select>
         <a href={exportHref} className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded" title="Download the current filter as CSV">
           Export CSV
+        </a>
+        <a href={exportAllHref} className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded" title="Download up to 50,000 entries for the current filter as CSV">
+          Export all
         </a>
         {isFetching && <span className="text-xs text-slate-500">Refreshing…</span>}
       </PageTitle>

@@ -4,6 +4,13 @@ ProxVM keeps almost no domain state, so moving to a new domain (with or
 without Cloudflare in front) is a short checklist rather than a migration.
 Do the steps in order; nothing below requires database surgery.
 
+> **Shortcut:** the **Domains** page (Settings → Domains, administrators
+> only) automates most of this when Cloudflare manages your DNS: connect an
+> API token + Zone ID, then use **Switch domain** to point a name at the
+> current target, flip canonical, and keep the old domain redirecting — in
+> one audited step. The manual checklist below remains the fallback (and the
+> only path without Cloudflare).
+
 ## What is domain-dependent (complete list)
 
 | # | Touchpoint | Where it lives | Change requires |

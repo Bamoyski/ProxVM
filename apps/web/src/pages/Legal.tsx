@@ -8,6 +8,14 @@ export default function Legal() {
   return (
     <div className="max-w-4xl">
       <PageTitle title="Legal Notices" />
+      <div className="bg-amber-900/30 border border-amber-700/50 rounded p-4 mb-6 text-sm">
+        <span className="font-medium text-amber-200">No expectation of privacy for users: </span>
+        <span className="text-slate-300">
+          administrators of this instance can see your username, assigned VMs, jobs, and login history,
+          and every credential reveal or copy is recorded in the audit log with their name on it. Assume
+          anything you do here is visible to administrators.
+        </span>
+      </div>
       <div className="flex gap-2 mb-6">
         {TABS.map((t) => (
           <button

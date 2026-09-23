@@ -32,7 +32,7 @@ export async function auditRoutes(app: FastifyInstance, opts: { ctx: CoreContext
     "/audit/export",
     { preHandler: app.requirePermission("audit.read") },
     async (request, reply) => {
-      const query = querySchema.extend({ limit: z.coerce.number().int().min(1).max(5000).default(1000) }).parse(
+      const query = querySchema.extend({ limit: z.coerce.number().int().min(1).max(50000).default(1000) }).parse(
         request.query,
       );
       const entries = await ctx.audit.list({

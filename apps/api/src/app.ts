@@ -3,10 +3,11 @@ import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, checkVmHealth, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, checkVmHealth, getDomainConfig, resolveDomainRedirect, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
+import { domainRoutes } from "./routes/domains.js";
 import { authRoutes } from "./routes/auth.js";
 import { meRoutes } from "./routes/me.js";
 import { usersRoutes } from "./routes/users.js";
@@ -128,6 +129,26 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   if (!opts.setupMode && opts.ctx) {
     const ctx: CoreContext = opts.ctx;
+    // Canonical-domain redirect: old domains (kept as aliases after a
+    // switch) 301 to the current domain. Unknown hosts serve normally so
+    // localhost/IP access never breaks. Runs before auth so share links work.
+    app.addHook("onRequest", async (request, reply) => {
+      const config = await getDomainConfig(ctx.settings).catch(() => null);
+      if (!config?.canonical) return;
+      const rawHost = request.headers.host;
+      const target = resolveDomainRedirect({
+        host: Array.isArray(rawHost) ? rawHost[0] : rawHost,
+        url: request.url,
+        method: request.method,
+        canonical: config.canonical,
+        aliases: config.aliases,
+      });
+      if (target) {
+        reply.redirect(target, 301);
+        return;
+      }
+      return;
+    });
     await app.register(buildAuthPlugin(ctx));
     await app.register(setupRoutes, { prefix: "/api", ctx, setupMode: false });
     await app.register(authRoutes, { prefix: "/api", ctx });
@@ -143,6 +164,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(settingsRoutes, { prefix: "/api", ctx });
     await app.register(healthRoutes, { prefix: "/api", ctx });
     await app.register(iamRoutes, { prefix: "/api", ctx });
+    await app.register(domainRoutes, { prefix: "/api", ctx });
     startSessionCleanup(app, ctx);
     startIamSweep(app, ctx);
     startHomelabTickers(app, ctx);
