@@ -11,8 +11,7 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
 
   const resolveAccess = async (request: Parameters<typeof app.requireAuth>[0], vmId: string) => {
     const user = await app.requireAuth(request);
-    if (user.roles.some((r) => r === "ADMIN" || r === "OPERATOR")) return { user, allowed: true };
-    const allowed = await ctx.vms.hasAccess(vmId, user.id);
+    const { allowed } = await ctx.vms.visibleTo(user.id, user.roles, vmId);
     return { user, allowed };
   };
 

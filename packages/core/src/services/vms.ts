@@ -88,6 +88,9 @@ export class VmsRepository {
   }
 
   async listAssignedToUser(userId: string): Promise<VmRecord[]> {
+    // Creators always see their own VMs (implicit ownership): this is what
+    // makes privacy flags usable without pre-configured grant rows, and it
+    // also fixes owners losing list visibility when their only row expires.
     const result = await this.db.query<VmRow>(
       `SELECT DISTINCT v.* FROM vms v
         LEFT JOIN vm_access va ON va.vm_id = v.id
@@ -98,7 +101,7 @@ export class VmsRepository {
         LEFT JOIN group_members gm ON gm.group_id = gva.group_id
           AND gm.user_id = $1
           AND (gm.expires_at IS NULL OR gm.expires_at > NOW())
-        WHERE v.deleted_at IS NULL AND (va.user_id IS NOT NULL OR gm.user_id IS NOT NULL)
+        WHERE v.deleted_at IS NULL AND (va.user_id IS NOT NULL OR gm.user_id IS NOT NULL OR v.created_by_user_id = $1)
         ORDER BY v.created_at DESC`,
       [userId],
     );
@@ -293,6 +296,43 @@ export class VmsRepository {
     );
     return Number(grouped.rows[0]?.c ?? "0") > 0;
   }
+
+  async setPrivacyFlag(id: string, enabled: boolean): Promise<void> {
+    await this.db.query("UPDATE vms SET privacy_flag = $2, updated_at = NOW() WHERE id = $1", [id, enabled]);
+  }
+
+  /**
+   * Concrete grant (direct/group row, unexpired) or creator-ownership.
+   * Ownership is implicit so flagging a VM never requires pre-configuring
+   * grant rows: whoever provisioned it always counts.
+   */
+  async hasAccessOrOwns(vmId: string, userId: string): Promise<boolean> {
+    if (await this.hasAccess(vmId, userId)) return true;
+    const vm = await this.findById(vmId);
+    return !!vm && vm.createdByUserId === userId;
+  }
+
+  /**
+   * Flag-aware visibility shared by every VM-scoped route. The legacy
+   * ADMIN/OPERATOR bypass applies ONLY to non-private VMs; a privacy-flagged
+   * VM requires a concrete grant — or creator-ownership — from anyone,
+   * including administrators. Missing VMs deny (callers 404/403 as before
+   * based on `allowed`).
+   */
+  async visibleTo(
+    userId: string,
+    roles: string[],
+    vmId: string,
+  ): Promise<{ allowed: boolean; private: boolean }> {
+    const privileged = roles.includes("ADMIN") || roles.includes("OPERATOR");
+    const vm = await this.findById(vmId);
+    if (!vm) return { allowed: privileged, private: false };
+    if (vm.privacyFlag) {
+      return { allowed: await this.hasAccessOrOwns(vmId, userId), private: true };
+    }
+    if (privileged) return { allowed: true, private: false };
+    return { allowed: await this.hasAccess(vmId, userId), private: false };
+  }
 }
 
 function toVmRecord(row: VmRow): VmRecord {
@@ -310,5 +350,6 @@ function toVmRecord(row: VmRow): VmRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
+    privacyFlag: row.privacy_flag ?? false,
   };
 }

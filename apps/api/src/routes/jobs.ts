@@ -20,9 +20,20 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
   const privileged = (user: { roles: string[] }): boolean =>
     user.roles.includes("ADMIN") || user.roles.includes("OPERATOR");
 
-  const assertJobAccess = (user: { id: string; roles: string[] }, job: { createdByUserId: string | null }): void => {
+  const assertJobAccess = async (
+    user: { id: string; roles: string[] },
+    job: { createdByUserId: string | null; vmId: string | null },
+  ): Promise<void> => {
     if (!privileged(user) && job.createdByUserId !== user.id) {
       throw AppError.forbidden("No access to this job");
+    }
+    // Jobs on privacy-flagged VMs stay invisible without a concrete grant,
+    // even to privileged users.
+    if (job.vmId) {
+      const vm = await ctx.vms.findById(job.vmId);
+      if (vm?.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) {
+        throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
+      }
     }
   };
 
@@ -41,7 +52,18 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       status: query.status as never,
       ...(privileged(user) ? {} : { createdByUserId: user.id }),
     });
-    return { jobs: jobs.map((j) => ({ ...j, request: undefined })) };
+    // Jobs on privacy-flagged VMs are listed only with a concrete grant.
+    const visible = [];
+    for (const job of jobs) {
+      if (!job.vmId) {
+        visible.push(job);
+        continue;
+      }
+      const vm = await ctx.vms.findById(job.vmId);
+      if (vm?.privacyFlag && !(await ctx.vms.hasAccess(vm.id, user.id))) continue;
+      visible.push(job);
+    }
+    return { jobs: visible.map((j) => ({ ...j, request: undefined })) };
   });
 
   app.get("/jobs/:id", { preHandler: app.requirePermission("jobs.read") }, async (request, reply) => {
@@ -50,7 +72,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     if (!job) {
       return reply.status(404).send({ code: "NOT_FOUND", message: "Job not found" });
     }
-    assertJobAccess(await app.requireAuth(request), job);
+    await assertJobAccess(await app.requireAuth(request), job);
     const steps = await ctx.jobs.getSteps(id);
     const jobRequest = job.request as Record<string, unknown>;
     const safeRequest = jobRequest.password
@@ -63,7 +85,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const { id } = request.params as { id: string };
     const user = await app.requireAuth(request);
     const job = await ctx.jobs.require(id);
-    assertJobAccess(user, job);
+    await assertJobAccess(user, job);
     if (job.status === "PENDING" || job.status === "PROVISIONING" || job.status === "WAITING_FOR_GUEST" || job.status === "CREATING" || job.status === "CONFIGURING" || job.status === "VERIFYING" || job.status === "GUACAMOLE_CREATING") {
       throw AppError.conflict("Job is still active; cancel it first");
     }
@@ -105,7 +127,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const { id } = request.params as { id: string };
     const user = await app.requireAuth(request);
     const job = await ctx.jobs.require(id);
-    assertJobAccess(user, job);
+    await assertJobAccess(user, job);
     if (job.status === "READY" || job.status === "FAILED" || job.status === "CANCELLED") {
       throw AppError.conflict("Job already finished");
     }
@@ -129,7 +151,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const user = await app.requireAuth(request);
     const body = z.object({ action: z.enum(["delete", "keep"]) }).parse(request.body);
     const job = await ctx.jobs.require(id);
-    assertJobAccess(user, job);
+    await assertJobAccess(user, job);
     await ctx.audit.record({
       event: "ROLLBACK",
       actorUserId: user.id,
@@ -175,7 +197,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
   app.get("/jobs/:id/events", { preHandler: app.requirePermission("jobs.read") }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const job = await ctx.jobs.require(id);
-    assertJobAccess(await app.requireAuth(request), job);
+    await assertJobAccess(await app.requireAuth(request), job);
     const subscriber = ctx.redis.duplicate();
     const channel = `proxvm:job:${id}`;
     let heartbeat: ReturnType<typeof setInterval> | undefined;

@@ -434,6 +434,163 @@ describe("RBAC authorization model", () => {
     expect(denied.statusCode).toBe(403);
   });
 
+  it("privacy flag hides a VM from ungranted admins until invited", async () => {
+    const authA = { cookie: admin.cookie, "x-csrf-token": admin.csrf };
+    const authO = { cookie: operator.cookie, "x-csrf-token": operator.csrf };
+    const authU = { cookie: user.cookie, "x-csrf-token": user.csrf };
+
+    // Neither op (vm.edit, no grant) nor alice (grant, no vm.edit) can enable.
+    for (const headers of [authO, authU]) {
+      const denied = await app.inject({
+        method: "PATCH",
+        url: `/api/vms/${assignedVmId}/privacy`,
+        headers,
+        payload: { enabled: true },
+      });
+      expect(denied.statusCode).toBe(403);
+    }
+
+    // Admin enables blind via audited override.
+    const on = await app.inject({
+      method: "PATCH",
+      url: `/api/vms/${assignedVmId}/privacy`,
+      headers: authA,
+      payload: { enabled: true },
+    });
+    expect(on.statusCode).toBe(200);
+    expect((on.json() as { private: boolean }).private).toBe(true);
+
+    // Ungranted admins/operators: detail, list, launch, reveal all deny.
+    expect((await app.inject({ method: "GET", url: `/api/vms/${assignedVmId}`, headers: authA })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: `/api/vms/${assignedVmId}`, headers: authO })).statusCode).toBe(403);
+    const list = await app.inject({ method: "GET", url: "/api/vms", headers: authA });
+    expect((list.json() as { vms: Array<{ id: string | null }> }).vms.map((v) => v.id)).not.toContain(assignedVmId);
+    expect(
+      (await app.inject({ method: "POST", url: `/api/vms/${assignedVmId}/guacamole/launch`, headers: authA, payload: {} })).statusCode,
+    ).toBe(403);
+    expect(
+      (await app.inject({ method: "POST", url: `/api/vms/${assignedVmId}/credentials/reveal`, headers: authA })).statusCode,
+    ).toBe(403);
+
+    // Granted alice is unaffected and sees the flag plus her own grant.
+    const aliceDetail = await app.inject({ method: "GET", url: `/api/vms/${assignedVmId}`, headers: authU });
+    expect(aliceDetail.statusCode).toBe(200);
+    expect(aliceDetail.json() as object).toMatchObject({ vm: { private: true, viewerAccess: true } });
+
+    // The PRIVACY_ENABLED entry exists but is invisible to the ungranted
+    // admin, while unrelated entries (no VM) remain visible.
+    const adminAudit = await app.inject({ method: "GET", url: "/api/audit?limit=200", headers: authA });
+    expect(adminAudit.statusCode).toBe(200);
+    const adminEntries = (adminAudit.json() as { entries: Array<{ vmId: string | null }> }).entries;
+    expect(adminEntries.filter((e) => e.vmId === assignedVmId)).toHaveLength(0);
+    expect(adminEntries.length).toBeGreaterThan(0);
+
+    // Alice invites admin; admin is in.
+    const invite = await app.inject({
+      method: "POST",
+      url: `/api/vms/${assignedVmId}/invite`,
+      headers: authU,
+      payload: { username: "admin" },
+    });
+    expect(invite.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/vms/${assignedVmId}`, headers: authA })).statusCode).toBe(200);
+
+    // Jobs on the flagged VM vanish for ungranted privileged users.
+    const opJobs = await app.inject({ method: "GET", url: "/api/jobs?limit=200", headers: authO });
+    const opJobIds = (opJobs.json() as { jobs: Array<{ id: string }> }).jobs.map((j) => j.id);
+    const aliceJobId = (
+      await ctx.db.query<{ id: string }>("SELECT id FROM provisioning_jobs WHERE vm_id = $1 LIMIT 1", [assignedVmId])
+    ).rows[0]?.id;
+    if (aliceJobId) expect(opJobIds).not.toContain(aliceJobId);
+
+    // A stranger cannot revoke someone else's grant, invite or not.
+    const adminId = (await ctx.users.findByUsername("admin"))!.id;
+    await ctx.users.create({
+      username: "mallory",
+      passwordHash: await hashPassword("Mallory-Pass-1!"),
+      roles: ["USER"],
+    });
+    const mallorySession = await login(app, "mallory", "Mallory-Pass-1!");
+    const strangerRevoke = await app.inject({
+      method: "DELETE",
+      url: `/api/vms/${assignedVmId}/access/${adminId}`,
+      headers: { cookie: mallorySession.cookie, "x-csrf-token": mallorySession.csrf },
+    });
+    expect(strangerRevoke.statusCode).toBe(403);
+
+    // Withdrawing fails closed when Guacamole is unreachable (as here): the
+    // error surfaces and the grant row is kept, never silently dropped.
+    const uninvite = await app.inject({
+      method: "DELETE",
+      url: `/api/vms/${assignedVmId}/access/${adminId}`,
+      headers: authU,
+    });
+    expect([400, 500, 502]).toContain(uninvite.statusCode);
+    expect(await ctx.vms.hasAccess(assignedVmId, adminId)).toBe(true);
+
+    // Admin override-off restores normal visibility.
+    const off = await app.inject({
+      method: "PATCH",
+      url: `/api/vms/${assignedVmId}/privacy`,
+      headers: authA,
+      payload: { enabled: false },
+    });
+    expect(off.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/vms/${assignedVmId}`, headers: authA })).statusCode).toBe(200);
+  });
+
+  it("privacy needs no grant rows: the creator always counts", async () => {
+    const mallory = (await ctx.users.findByUsername("mallory"))!;
+    const mallorySession = await login(app, "mallory", "Mallory-Pass-1!");
+    const authM = { cookie: mallorySession.cookie, "x-csrf-token": mallorySession.csrf };
+    const authA = { cookie: admin.cookie, "x-csrf-token": admin.csrf };
+
+    const vm = await ctx.vms.create({
+      vmid: 203,
+      node: "node1",
+      name: "maker-vm",
+      status: "stopped",
+      osType: "linux",
+      createdByUserId: mallory.id,
+    });
+
+    // Admin flags it blind; nobody holds any grant row.
+    const on = await app.inject({
+      method: "PATCH",
+      url: `/api/vms/${vm.id}/privacy`,
+      headers: authA,
+      payload: { enabled: true },
+    });
+    expect(on.statusCode).toBe(200);
+
+    // Creator sees everything with zero configured grants.
+    const detail = await app.inject({ method: "GET", url: `/api/vms/${vm.id}`, headers: authM });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json() as object).toMatchObject({ vm: { private: true, viewerAccess: true } });
+    const list = await app.inject({ method: "GET", url: "/api/vms", headers: authM });
+    expect((list.json() as { vms: Array<{ id: string | null }> }).vms.map((v) => v.id)).toContain(vm.id);
+
+    // Admin still locked out; creator can invite without any role.
+    expect((await app.inject({ method: "GET", url: `/api/vms/${vm.id}`, headers: authA })).statusCode).toBe(403);
+    const invite = await app.inject({
+      method: "POST",
+      url: `/api/vms/${vm.id}/invite`,
+      headers: authM,
+      payload: { username: "admin" },
+    });
+    expect(invite.statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/vms/${vm.id}`, headers: authA })).statusCode).toBe(200);
+
+    // Cleanup: unflag so later tests see a normal VM.
+    const off = await app.inject({
+      method: "PATCH",
+      url: `/api/vms/${vm.id}/privacy`,
+      headers: authA,
+      payload: { enabled: false },
+    });
+    expect(off.statusCode).toBe(200);
+  });
+
   it("credential rotate requires VM access for bare permission holders", async () => {
     // A bare user granted only cred.rotate (no VM access, no operator bypass) -> 403.
     const bob = await ctx.users.create({

@@ -42,12 +42,11 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     return queue;
   };
 
+  // Flag-aware: delegates to the shared helper so the privacy bypass-removal
+  // applies to every endpoint below uniformly.
   const resolveVmAccess = async (request: Parameters<typeof app.requireAuth>[0], vmId: string) => {
     const user = await app.requireAuth(request);
-    if (user.roles.includes("ADMIN") || user.roles.includes("OPERATOR")) {
-      return { user, allowed: true };
-    }
-    const allowed = await ctx.vms.hasAccess(vmId, user.id);
+    const { allowed } = await ctx.vms.visibleTo(user.id, user.roles, vmId);
     return { user, allowed };
   };
 
@@ -133,7 +132,15 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   app.get("/vms", async (request) => {
     const user = await app.requireAuth(request);
     const privileged = user.roles.some((r) => r === "ADMIN" || r === "OPERATOR");
-    const dbVms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
+    let dbVms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
+    if (privileged) {
+      // Privacy-flagged VMs are invisible without a concrete grant, even here.
+      const visible = [];
+      for (const vm of dbVms) {
+        if (!vm.privacyFlag || (await ctx.vms.hasAccessOrOwns(vm.id, user.id))) visible.push(vm);
+      }
+      dbVms = visible;
+    }
 
     let resources: Array<Record<string, unknown>> = [];
     let proxmoxConnected = true;
@@ -159,6 +166,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         node: vm.node,
         name: res?.name !== undefined && res.name !== "" ? String(res.name) : vm.name,
         tracked: true,
+        private: vm.privacyFlag,
         status: res ? String(res.status ?? "unknown") : vm.status,
         osType: vm.osType,
         osName: vm.osName,
@@ -229,6 +237,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       proxmoxError = err instanceof Error ? err.message : String(err);
     }
     const guac = await ctx.guac.listConnectionRecords(vm.id);
+    const viewerAccess = await ctx.vms.hasAccessOrOwns(vm.id, access.user.id);
     const primaryGuac = guac.length ? guac[0] : null;
     const cred = await ctx.creds.findByVm(vm.id);
     const jobs = (await ctx.jobs.list({ vmId: vm.id, limit: 10 })).map((j) => ({ ...j, request: undefined }));
@@ -246,6 +255,8 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         os: vm.osName ?? friendlyOsType(vm.osType),
         ip: vm.ipAddress,
         createdAt: vm.createdAt,
+        private: vm.privacyFlag,
+        viewerAccess,
       },
       proxmox,
       proxmoxError,
@@ -817,8 +828,11 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
 
   app.get("/vms/:id/access", async (request) => {
     const { id } = request.params as { id: string };
-    await app.requirePermission("vm.edit")(request);
+    const actor = await app.requirePermission("vm.edit")(request);
     const vm = await ctx.vms.requireById(id);
+    if (vm.privacyFlag && !(await ctx.vms.hasAccess(vm.id, actor.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged: access management requires a direct grant");
+    }
     const entries = await ctx.vms.listAccessEntries(vm.id);
     const access = [];
     for (const entry of entries) {
@@ -842,6 +856,9 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const { id } = request.params as { id: string };
     const actor = await app.requirePermission("vm.edit")(request);
     const vm = await ctx.vms.requireById(id);
+    if (vm.privacyFlag && !(await ctx.vms.hasAccess(vm.id, actor.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged: access management requires a direct grant");
+    }
     const body = z
       .object({
         userId: z.string().uuid().optional(),
@@ -925,12 +942,107 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     };
   });
 
+  // Self-service invites: anyone holding access (even without vm.edit) may
+  // bring exactly one more person in. This is the path by which a user lets
+  // an administrator into a privacy-flagged VM. Invites are audited with the
+  // inviter attributed; adjusting or removing other people's rows still needs
+  // the vm.edit management endpoints below.
+  app.post("/vms/:id/invite", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const inviter = await app.requireAuth(request);
+    const vm = await ctx.vms.requireById(id);
+    if (!(await ctx.vms.hasAccessOrOwns(vm.id, inviter.id))) {
+      throw AppError.forbidden("Only someone with access to this VM can invite others");
+    }
+    const body = z
+      .object({
+        userId: z.string().uuid().optional(),
+        username: z.string().min(1).max(128).optional(),
+        protocols: z.array(z.enum(["ssh", "rdp", "vnc"])).max(3).optional(),
+        expiresAt: z.string().datetime({ offset: true }).optional(),
+      })
+      .refine((b) => b.userId !== undefined || b.username !== undefined, {
+        message: "Either userId or username is required",
+      })
+      .parse(request.body);
+    const target = body.userId
+      ? await ctx.users.findById(body.userId)
+      : await ctx.users.findByUsername(body.username as string);
+    if (!target) {
+      return reply.status(404).send({ code: "NOT_FOUND", message: "User not found" });
+    }
+    if (await ctx.vms.hasAccess(vm.id, target.id)) {
+      return reply.status(409).send({ code: "CONFLICT", message: "That user already has access; ask a manager to adjust it" });
+    }
+    let expiresAt: Date | null = null;
+    if (body.expiresAt !== undefined) {
+      expiresAt = new Date(body.expiresAt);
+      if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+        throw AppError.validation("expiresAt must be a future date-time");
+      }
+    }
+    const protocols = body.protocols !== undefined ? [...new Set(body.protocols)] : null;
+    await ctx.vms.replaceAccess(vm.id, target.id, { protocols, expiresAt, createdBy: inviter.id });
+    // Best-effort Guacamole sync (group-grant philosophy, NOT the managed
+    // POST /access rollback): the grant row is the invite itself and must
+    // survive Guacamole outages — launch-time sync and the periodic sweep
+    // converge permissions later. The outcome is audited honestly either way.
+    let effective: string[] | null = protocols;
+    let guacSynced = true;
+    let guacError: string | null = null;
+    try {
+      ({ protocols: effective } = await reconcileUserVmGuacAccess(ctx, target.id, vm.id));
+    } catch (err) {
+      guacSynced = false;
+      guacError = err instanceof Error ? err.message : String(err);
+      ctx.logger.error(
+        { vmId: vm.id, targetUserId: target.id, error: guacError },
+        "vm invite Guacamole sync deferred; vm_access row kept",
+      );
+    }
+    await ctx.audit.record({
+      event: "VM_ACCESS_GRANTED",
+      actorUserId: inviter.id,
+      actorUsername: inviter.username,
+      vmId: vm.id,
+      detail: {
+        targetUserId: target.id,
+        username: target.username,
+        guacSynced,
+        ...(guacError ? { guacError } : {}),
+        protocols: effective,
+        expiresAt: expiresAt?.toISOString() ?? null,
+        invited: true,
+      },
+    });
+    if (expiresAt) {
+      await ctx.audit.record({
+        event: "TEMPORARY_ACCESS_GRANTED",
+        actorUserId: inviter.id,
+        actorUsername: inviter.username,
+        vmId: vm.id,
+        detail: { targetUserId: target.id, username: target.username, expiresAt: expiresAt.toISOString(), protocols: effective },
+      });
+    }
+    return { ok: true, guacSynced: true, protocols: effective, user: toPublicUser(target) };
+  });
+
   app.delete("/vms/:id/access/:userId", async (request, reply) => {
     const { id, userId } = request.params as { id: string; userId: string };
-    const actor = await app.requirePermission("vm.edit")(request);
+    const actor = await app.requireAuth(request);
     const vm = await ctx.vms.requireById(id);
     if (!z.string().uuid().safeParse(userId).success) {
       return reply.status(400).send({ code: "VALIDATION_ERROR", message: "userId must be a valid UUID" });
+    }
+    // Inviters may withdraw their own invite without vm.edit; everything
+    // else goes through the managed path below.
+    const entries = await ctx.vms.listAccessEntries(vm.id);
+    const ownInvite = entries.find((e) => e.source === "direct" && e.userId === userId && e.createdBy === actor.id);
+    if (!ownInvite) {
+      await app.requirePermission("vm.edit")(request);
+      if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, actor.id))) {
+        throw AppError.forbidden("This VM is privacy-flagged: access management requires a direct grant");
+      }
     }
     const assigned = await ctx.vms.hasAccess(vm.id, userId);
     const target = await ctx.users.findById(userId);
@@ -970,10 +1082,39 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     return { ok: true, changed: assigned, guacSynced: true };
   });
 
+  // -- Privacy flag ---------------------------------------------------------------
+  // Toggling requires vm.edit plus (a concrete grant, creator-ownership, OR
+  // administrator) — a plain default switch for admins. Flipping the flag
+  // grants no data by itself: viewing or managing still needs a grant or
+  // ownership. Ownership is implicit so flagging never needs pre-configured
+  // grant rows: whoever provisioned the VM always counts.
+  app.patch("/vms/:id/privacy", async (request) => {
+    const { id } = request.params as { id: string };
+    const actor = await app.requirePermission("vm.edit")(request);
+    const vm = await ctx.vms.requireById(id);
+    const body = z.object({ enabled: z.boolean() }).parse(request.body);
+    const granted = await ctx.vms.hasAccessOrOwns(vm.id, actor.id);
+    if (!granted && !actor.roles.includes("ADMIN")) {
+      throw AppError.forbidden("Toggling privacy requires a direct grant for this VM");
+    }
+    await ctx.vms.setPrivacyFlag(vm.id, body.enabled);
+    await ctx.audit.record({
+      event: body.enabled ? "PRIVACY_ENABLED" : "PRIVACY_DISABLED",
+      actorUserId: actor.id,
+      actorUsername: actor.username,
+      vmId: vm.id,
+      detail: { granted },
+    });
+    return { ok: true, private: body.enabled };
+  });
+
   app.put("/vms/:id/ip", async (request) => {
     const { id } = request.params as { id: string };
     const user = await app.requirePermission("vm.edit")(request);
     const vm = await ctx.vms.requireById(id);
+      if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
+    }
     const body = ipOverrideSchema.parse(request.body);
     await ctx.vms.updateIp(vm.id, body.ip);
     await ctx.audit.record({
@@ -988,8 +1129,11 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
 
   app.post("/vms/:id/detect-ip", async (request) => {
     const { id } = request.params as { id: string };
-    await app.requirePermission("vm.edit")(request);
+    const user = await app.requirePermission("vm.edit")(request);
     const vm = await ctx.vms.requireById(id);
+      if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
+    }
     const client = await ctx.getProxmoxClient();
     let status: Record<string, unknown> = {};
     try {
@@ -1020,6 +1164,9 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const { id } = request.params as { id: string };
     const user = await app.requirePermission("vm.delete")(request);
     const vm = await ctx.vms.requireById(id);
+      if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
+    }
     const body = deleteBody.parse(request.body);
     if (body.confirmText !== `DELETE ${vm.name}`) {
       return reply.status(400).send({

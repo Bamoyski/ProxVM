@@ -59,6 +59,7 @@ export interface VmRow {
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
+  privacy_flag: boolean;
 }
 
 export interface CredentialRow {

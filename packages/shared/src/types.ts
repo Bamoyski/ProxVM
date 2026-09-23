@@ -91,6 +91,7 @@ export interface VmRecord {
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
+  privacyFlag: boolean;
 }
 
 export interface VmCredentialRecord {

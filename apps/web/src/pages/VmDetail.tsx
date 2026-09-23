@@ -196,7 +196,7 @@ export default function VmDetail({ me }: { me: Me }) {
 
   if (!data) return error ? <ErrorBox error={error} /> : <div className="text-slate-400">Loading…</div>;
 
-  const vm = data.vm as { name: string; vmid: number; node: string; status: string; ip: string | null; osType: string | null };
+  const vm = data.vm as { name: string; vmid: number; node: string; status: string; ip: string | null; osType: string | null; private?: boolean; viewerAccess?: boolean };
   const proxmox = data.proxmox as Record<string, unknown> | null;
   const cred = data.credential as Record<string, unknown> | null;
   const guac = data.guacamole as { connections?: Array<{ protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string }>; active?: { protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string } | null } | null;
@@ -229,6 +229,32 @@ export default function VmDetail({ me }: { me: Me }) {
     try {
       await api(`/vms/${id}/migrate`, { method: "POST", body: { target: migrateTarget, online: migrateOnline } });
       alert(`Migration to ${migrateTarget} started.`);
+      refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const [inviteUser, setInviteUser] = useState("");
+
+  const doInvite = async () => {
+    try {
+      await api(`/vms/${id}/invite`, { method: "POST", body: { username: inviteUser.trim() } });
+      alert(`${inviteUser.trim()} now has access.`);
+      setInviteUser("");
+      refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const togglePrivacy = async () => {
+    try {
+      const res = await api<{ private: boolean }>(`/vms/${id}/privacy`, {
+        method: "PATCH",
+        body: { enabled: !vm.private },
+      });
+      alert(res.private ? "Privacy flag on — only granted users can see this VM now." : "Privacy flag off.");
       refresh();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -282,7 +308,9 @@ export default function VmDetail({ me }: { me: Me }) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <Link to="/vms" className="text-blue-400 text-sm hover:underline">← Virtual Machines</Link>
-          <h1 className="text-2xl font-semibold mt-1">{vm.name} <span className="text-slate-500 text-lg font-mono">({vm.vmid} @ {vm.node})</span></h1>
+          <h1 className="text-2xl font-semibold mt-1">
+            {vm.private && <span title="Privacy-flagged: invisible without a direct grant">🔒 </span>}{vm.name} <span className="text-slate-500 text-lg font-mono">({vm.vmid} @ {vm.node})</span>
+          </h1>
         </div>
         <div className="flex gap-2">
           {canLaunch && guac?.connections?.length && (
@@ -364,9 +392,9 @@ export default function VmDetail({ me }: { me: Me }) {
         </div>
       )}
 
-      {(canClone || canTemplate || canManage) && (
+      {(canClone || canTemplate || canManage || canEdit) && (
         <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
-          <div className="text-sm font-medium text-slate-300 mb-3">Clone, migrate & template</div>
+          <div className="text-sm font-medium text-slate-300 mb-3">Clone, migrate, template & privacy</div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
             {canClone && (
               <div>
@@ -463,6 +491,46 @@ export default function VmDetail({ me }: { me: Me }) {
                 )}
               </div>
             )}
+            {canEdit && (vm.viewerAccess || !vm.private || me.roles.includes("ADMIN")) && (
+              <div>
+                <div className="text-xs font-medium text-slate-400 mb-2">Privacy flag</div>
+                <div className="text-xs text-slate-500 mb-2">
+                  {vm.private
+                    ? "🔒 On — invisible to everyone without a direct grant, including administrators."
+                    : "Off — administrators can see and manage this VM without a grant."}
+                </div>
+                <button
+                  onClick={() => void togglePrivacy()}
+                  className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded"
+                >
+                  Turn {vm.private ? "off" : "on"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {vm.viewerAccess && (
+        <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
+          <div className="text-sm font-medium text-slate-300 mb-1">Invite someone</div>
+          <div className="text-xs text-slate-500 mb-3">
+            Anyone with access can bring one more person in — including an administrator on a privacy-flagged VM.
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm w-56"
+              placeholder="Username to invite…"
+              value={inviteUser}
+              onChange={(e) => setInviteUser(e.target.value)}
+            />
+            <button
+              onClick={() => void doInvite()}
+              disabled={!inviteUser.trim()}
+              className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
+            >
+              Invite
+            </button>
           </div>
         </div>
       )}

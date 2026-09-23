@@ -18,6 +18,8 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
     const vms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
     const connections = [];
     for (const vm of vms) {
+      // Privacy-flagged VMs stay invisible without a concrete grant.
+      if (privileged && vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) continue;
       const records = await ctx.guac.listConnectionRecords(vm.id);
       for (const record of records) {
         connections.push({
@@ -51,7 +53,14 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
   app.get("/connection-health", async (request) => {
     const user = await app.requireAuth(request);
     const privileged = user.roles.some((r) => r === "ADMIN" || r === "OPERATOR");
-    const vms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
+    let vms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
+    if (privileged) {
+      const visible = [];
+      for (const vm of vms) {
+        if (!vm.privacyFlag || (await ctx.vms.hasAccessOrOwns(vm.id, user.id))) visible.push(vm);
+      }
+      vms = visible;
+    }
     const health = await listConnectionHealth(
       ctx.db,
       vms.map((vm) => vm.id).filter((id): id is string => id !== null),
@@ -64,11 +73,11 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
     const user = await app.requirePermission("guac.launch")(request);
     const body = launchSchema.parse(request.body ?? {});
     const privileged = user.roles.some((r) => r === "ADMIN" || r === "OPERATOR");
-    // Privileged users bypass VM-access checks exactly as before; everyone
-    // else goes through the IAM engine (direct + group access, expiry,
-    // protocol scoping).
+    // Privileged users bypass VM-access checks exactly as before — EXCEPT on
+    // privacy-flagged VMs, where everyone needs a concrete grant.
+    const visibility = await ctx.vms.visibleTo(user.id, user.roles, id);
     let effectiveProtocols: string[] | null = null;
-    if (!privileged) {
+    if (!privileged || visibility.private) {
       const verdict = await checkAccess(ctx.db, user, { vmId: id, protocol: body.protocol });
       if (!verdict.allowed) {
         if (verdict.reason === "access_expired") {
@@ -102,7 +111,7 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
     await ctx.guac.grantVmAccess(vm.id, user.id, guacDb);
     const records = await ctx.guac.listConnectionRecords(vm.id);
     const usable =
-      privileged || effectiveProtocols === null
+      effectiveProtocols === null
         ? records
         : records.filter((r) => (effectiveProtocols as string[]).includes(r.protocol));
     if (body.protocol && !usable.some((r) => r.protocol === body.protocol)) {
@@ -142,8 +151,8 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
   app.post("/vms/:id/guacamole/test", async (request) => {
     const { id } = request.params as { id: string };
     const user = await app.requirePermission("vm.read")(request);
-    const privileged = user.roles.some((r) => r === "ADMIN" || r === "OPERATOR");
-    if (!privileged && !(await ctx.vms.hasAccess(id, user.id))) {
+    const { allowed } = await ctx.vms.visibleTo(user.id, user.roles, id);
+    if (!allowed) {
       throw AppError.forbidden("No access to this VM");
     }
     const body = launchSchema.parse(request.body ?? {});
@@ -154,6 +163,9 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
     const user = await app.requirePermission("guac.manage")(request);
     const { vmId } = request.params as { vmId: string };
     const vm = await ctx.vms.requireById(vmId);
+    if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
+    }
     const body = z.object({ confirmText: z.string().min(1) }).parse(request.body);
     if (body.confirmText !== `DELETE ${vm.name}`) {
       throw AppError.validation(`Confirmation text must be exactly: DELETE ${vm.name}`);
