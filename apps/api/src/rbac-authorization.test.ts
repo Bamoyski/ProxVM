@@ -439,8 +439,14 @@ describe("RBAC authorization model", () => {
     const authO = { cookie: operator.cookie, "x-csrf-token": operator.csrf };
     const authU = { cookie: user.cookie, "x-csrf-token": user.csrf };
 
-    // Neither op (vm.edit, no grant) nor alice (grant, no vm.edit) can enable.
-    for (const headers of [authO, authU]) {
+    // Strangers cannot touch the flag, with or without vm.edit.
+    const mallory = await ctx.users.create({
+      username: "mallory",
+      passwordHash: await hashPassword("Mallory-Pass-1!"),
+      roles: ["USER"],
+    });
+    const strangerSession = await login(app, "mallory", "Mallory-Pass-1!");
+    for (const headers of [authO, { cookie: strangerSession.cookie, "x-csrf-token": strangerSession.csrf }]) {
       const denied = await app.inject({
         method: "PATCH",
         url: `/api/vms/${assignedVmId}/privacy`,
@@ -450,11 +456,11 @@ describe("RBAC authorization model", () => {
       expect(denied.statusCode).toBe(403);
     }
 
-    // Admin enables blind via audited override.
+    // Alice (holder, no vm.edit) can: no management rights needed.
     const on = await app.inject({
       method: "PATCH",
       url: `/api/vms/${assignedVmId}/privacy`,
-      headers: authA,
+      headers: authU,
       payload: { enabled: true },
     });
     expect(on.statusCode).toBe(200);
@@ -504,17 +510,12 @@ describe("RBAC authorization model", () => {
     if (aliceJobId) expect(opJobIds).not.toContain(aliceJobId);
 
     // A stranger cannot revoke someone else's grant, invite or not.
+    // (mallory was created earlier in this test for the toggle-denial check.)
     const adminId = (await ctx.users.findByUsername("admin"))!.id;
-    await ctx.users.create({
-      username: "mallory",
-      passwordHash: await hashPassword("Mallory-Pass-1!"),
-      roles: ["USER"],
-    });
-    const mallorySession = await login(app, "mallory", "Mallory-Pass-1!");
     const strangerRevoke = await app.inject({
       method: "DELETE",
       url: `/api/vms/${assignedVmId}/access/${adminId}`,
-      headers: { cookie: mallorySession.cookie, "x-csrf-token": mallorySession.csrf },
+      headers: { cookie: strangerSession.cookie, "x-csrf-token": strangerSession.csrf },
     });
     expect(strangerRevoke.statusCode).toBe(403);
 

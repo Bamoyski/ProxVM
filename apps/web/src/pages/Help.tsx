@@ -158,8 +158,8 @@ const SECTIONS: HelpSection[] = [
     about:
       "A privacy-flagged VM is invisible to everyone without a direct grant — including administrators and operators. The normal admin bypass does not apply.",
     steps: [
-      "Open the VM and use Turn on in the privacy section — no user setup needed. Whoever created the VM always counts, so there is nothing to configure first.",
-      "Turning it on needs editing rights plus your own access (ownership counts); administrators may flip it blind in an emergency, audited.",
+      "Open the VM and use Turn on in the privacy section — no user setup needed, and no special rights: anyone who can see the VM can flip it. Whoever created the VM always counts, so there is nothing to configure first.",
+      "Administrators can also flip it blind; flipping never grants data by itself, and every change is audited.",
       "Let people in with the Invite action or the access section: only someone the VM is shared with can bring in the next person.",
       "Administrators without a grant see nothing: no list row, no detail, no launch, no credentials, no jobs, no audit entries.",
       "Withdrawing your own invite, or expiry of a temporary grant, locks the person out again immediately.",

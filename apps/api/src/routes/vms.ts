@@ -1083,14 +1083,14 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   });
 
   // -- Privacy flag ---------------------------------------------------------------
-  // Toggling requires vm.edit plus (a concrete grant, creator-ownership, OR
-  // administrator) — a plain default switch for admins. Flipping the flag
-  // grants no data by itself: viewing or managing still needs a grant or
-  // ownership. Ownership is implicit so flagging never needs pre-configured
-  // grant rows: whoever provisioned the VM always counts.
+  // Toggling needs no permission beyond being able to see the VM: a concrete
+  // grant, creator-ownership, or administrator. Deliberately no vm.edit
+  // requirement — regular users must be able to flag their own VMs without
+  // being handed management rights. Flipping the flag grants no data by
+  // itself: viewing or managing still needs a grant or ownership.
   app.patch("/vms/:id/privacy", async (request) => {
     const { id } = request.params as { id: string };
-    const actor = await app.requirePermission("vm.edit")(request);
+    const actor = await app.requireAuth(request);
     const vm = await ctx.vms.requireById(id);
     const body = z.object({ enabled: z.boolean() }).parse(request.body);
     const granted = await ctx.vms.hasAccessOrOwns(vm.id, actor.id);

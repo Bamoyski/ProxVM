@@ -491,7 +491,7 @@ export default function VmDetail({ me }: { me: Me }) {
                 )}
               </div>
             )}
-            {canEdit && (vm.viewerAccess || !vm.private || me.roles.includes("ADMIN")) && (
+            {(vm.viewerAccess || !vm.private || me.roles.includes("ADMIN")) && (
               <div>
                 <div className="text-xs font-medium text-slate-400 mb-2">Privacy flag</div>
                 <div className="text-xs text-slate-500 mb-2">
