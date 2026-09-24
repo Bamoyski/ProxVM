@@ -68,6 +68,7 @@ export default function VmDetail({ me }: { me: Me }) {
   const [shareExpiry, setShareExpiry] = useState("60");
   const [shareMaxUses, setShareMaxUses] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [inviteUser, setInviteUser] = useState("");
   // Hooks must run before any early return (Rules of Hooks): permission
   // resolution stays unconditional and only gates rendering below.
   const can = makeCan(useEffectivePermissions(), (perm) => hasPermission(me, perm));
@@ -234,8 +235,6 @@ export default function VmDetail({ me }: { me: Me }) {
       alert(err instanceof Error ? err.message : String(err));
     }
   };
-
-  const [inviteUser, setInviteUser] = useState("");
 
   const doInvite = async () => {
     try {
