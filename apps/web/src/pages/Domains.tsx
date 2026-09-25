@@ -72,16 +72,32 @@ export default function Domains() {
     }
   };
 
+  const applyCopyFrom = (id: string): void => {
+    setCopyFrom(id);
+    const rec = (dns?.records ?? []).find((r) => r.id === id);
+    if (rec) {
+      setTargetInput(rec.content);
+      setRecordType(rec.type);
+    }
+  };
+
   const doSwitch = async () => {
     setError(null);
     setStatus(null);
     try {
       const res = await api<{ record: DnsRecord; canonical: string; aliases: string[] }>("/domains/switch", {
         method: "POST",
-        body: { name: switchName, target: targetInput.trim() || undefined },
+        body: {
+          name: switchName,
+          target: targetInput.trim() || undefined,
+          recordType: (recordType || undefined) as "A" | "AAAA" | "CNAME" | undefined,
+          copyFrom: copyFrom || undefined,
+        },
       });
       setSwitchName("");
       setTargetInput("");
+      setCopyFrom("");
+      setRecordType("");
       setStatus(`Boom — now serving ${res.canonical} (${res.record.name} → ${res.record.content}). Old URLs redirect automatically.`);
       reload();
     } catch (err) {
@@ -103,6 +119,8 @@ export default function Domains() {
   // First switch ever: nothing to copy the target from, so require it.
   const needsTarget = !config?.canonical;
   const [targetInput, setTargetInput] = useState("");
+  const [copyFrom, setCopyFrom] = useState("");
+  const [recordType, setRecordType] = useState("");
 
   return (
     <div className="max-w-3xl">
@@ -146,16 +164,33 @@ export default function Domains() {
             value={switchName}
             onChange={(e) => setSwitchName(e.target.value)}
           />
+          <select
+            className={input}
+            value={copyFrom}
+            onChange={(e) => applyCopyFrom(e.target.value)}
+          >
+            <option value="">Copy settings from… (recommended)</option>
+            {(dns?.records ?? []).map((r) => (
+              <option key={r.id} value={r.id}>{r.name} ({r.type} → {r.content})</option>
+            ))}
+          </select>
           <input
             className={input}
             placeholder={needsTarget ? "Target IP/hostname (required first time)" : "Target (blank = copy current)"}
             value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
+            onChange={(e) => { setTargetInput(e.target.value); setCopyFrom(""); }}
           />
+          <select className={input} value={recordType} onChange={(e) => setRecordType(e.target.value)}>
+            <option value="">Type: auto</option>
+            <option value="A">A (IPv4)</option>
+            <option value="AAAA">AAAA (IPv6)</option>
+            <option value="CNAME">CNAME (hostname)</option>
+          </select>
         </div>
         {needsTarget && (
           <div className="text-xs text-slate-500 mt-2">
-            No current domain set yet, so copy the target from an existing record below (e.g. what proxvm2 points at).
+            No current domain set yet — pick “copy from” above (easiest) or type the public target by hand.
+            Never a URL, never a 192.168.x LAN address.
           </div>
         )}
         <button onClick={doSwitch} disabled={!switchName.trim() || !keyOk || (needsTarget && !targetInput.trim())} className={`${btn} mt-3`}>

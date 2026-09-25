@@ -231,4 +231,43 @@ describe("domain migration tool", () => {
     const gone = await app.inject({ method: "GET", url: "/", headers: { host: "proxvm.zone.example" } });
     expect(gone.statusCode).not.toBe(301);
   });
+
+  it("validates switch targets and supports copy-from", async () => {
+    const asUrl = await app.inject({
+      method: "POST",
+      url: "/api/domains/switch",
+      headers: authA(),
+      payload: { name: "bad1", target: "http://192.168.1.19:8080" },
+    });
+    expect(asUrl.statusCode).toBe(400);
+    const lanIp = await app.inject({
+      method: "POST",
+      url: "/api/domains/switch",
+      headers: authA(),
+      payload: { name: "bad2", target: "192.168.1.19" },
+    });
+    expect(lanIp.statusCode).toBe(400);
+    expect(lanIp.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+
+    // Copy type/target/proxied from the existing record by id.
+    const copied = await app.inject({
+      method: "POST",
+      url: "/api/domains/switch",
+      headers: authA(),
+      payload: { name: "proxvm9", copyFrom: "r-old" },
+    });
+    expect(copied.statusCode).toBe(200);
+    expect(copied.json()).toMatchObject({
+      record: { name: "proxvm9.zone.example", content: "203.0.113.10" },
+      canonical: "proxvm9.zone.example",
+    });
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/api/domains/switch",
+      headers: authA(),
+      payload: { name: "proxvm10", copyFrom: "no-such-id" },
+    });
+    expect(missing.statusCode).toBe(400);
+  });
 });

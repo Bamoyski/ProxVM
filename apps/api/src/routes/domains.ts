@@ -113,6 +113,8 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
       .object({
         name: z.string().min(1).max(253),
         target: z.string().max(253).optional(),
+        recordType: z.enum(["A", "AAAA", "CNAME"]).optional(),
+        copyFrom: z.string().max(128).optional(),
         proxied: z.boolean().optional(),
       })
       .parse(request.body);
@@ -128,12 +130,37 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     const current = config.canonical
       ? records.find((r) => r.name.toLowerCase() === config.canonical)
       : undefined;
-    const target = body.target?.trim() || current?.content;
+    // Clone-from: copy type/target/proxied from a chosen existing record.
+    // Explicit fields always win over the clone source.
+    const template = body.copyFrom ? records.find((r) => r.id === body.copyFrom) : undefined;
+    if (body.copyFrom && !template) throw AppError.validation("Selected source record no longer exists");
+    const target = body.target?.trim() || template?.content || current?.content;
     if (!target) {
       throw AppError.validation(
-        "No target given and no current domain set yet — enter the target explicitly " +
-          "(copy the value of an existing record from the list below, e.g. what the old domain points at)",
+        "No target given and no current domain set yet — pick 'copy from existing record' or enter the target explicitly",
       );
+    }
+    if (/^https?:\/\//i.test(target)) {
+      throw AppError.validation("Target must be a bare IP address or hostname, not a URL (no http://, no port, no path)");
+    }
+    const type = body.recordType ?? template?.type ?? current?.type ?? "A";
+    if (type === "A" && !/^\d{1,3}(\.\d{1,3}){3}$/.test(target)) {
+      throw AppError.validation("A records need a bare IPv4 address (e.g. 203.0.113.10)");
+    }
+    if (
+      type === "A" &&
+      (/^(10|127)\./.test(target) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(target) || /^192\.168\./.test(target) || /^169\.254\./.test(target) || /^0\./.test(target))
+    ) {
+      throw AppError.validation(
+        "That is a private LAN address — it is unreachable on the public internet, so publishing it would break the domain. " +
+          "Use your public IP (or tunnel hostname via CNAME), copied from an existing record below.",
+      );
+    }
+    if (type === "AAAA" && !/^[0-9a-fA-F:]+$/.test(target)) {
+      throw AppError.validation("AAAA records need a bare IPv6 address");
+    }
+    if (type === "CNAME" && !/^[A-Za-z0-9.-]+$/.test(target)) {
+      throw AppError.validation("CNAME records need a bare hostname");
     }
     const existing = records.find((r) => r.name.toLowerCase() === fqdn && ["A", "AAAA", "CNAME"].includes(r.type));
     const record = existing
@@ -142,10 +169,10 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
           proxied: body.proxied ?? existing.proxied,
         })
       : await client.createDnsRecord(zoneId, {
-          type: current?.type ?? "A",
+          type,
           name: fqdn,
           content: target,
-          proxied: body.proxied ?? true,
+          proxied: body.proxied ?? template?.proxied ?? true,
         });
     const updated = await setCanonicalDomain(ctx.settings, fqdn);
     await ctx.audit.record({
