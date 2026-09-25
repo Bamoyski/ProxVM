@@ -78,9 +78,10 @@ export default function Domains() {
     try {
       const res = await api<{ record: DnsRecord; canonical: string; aliases: string[] }>("/domains/switch", {
         method: "POST",
-        body: { name: switchName },
+        body: { name: switchName, target: targetInput.trim() || undefined },
       });
       setSwitchName("");
+      setTargetInput("");
       setStatus(`Boom — now serving ${res.canonical} (${res.record.name} → ${res.record.content}). Old URLs redirect automatically.`);
       reload();
     } catch (err) {
@@ -99,6 +100,9 @@ export default function Domains() {
   };
 
   const keyOk = cfTest?.ok === true;
+  // First switch ever: nothing to copy the target from, so require it.
+  const needsTarget = !config?.canonical;
+  const [targetInput, setTargetInput] = useState("");
 
   return (
     <div className="max-w-3xl">
@@ -135,17 +139,28 @@ export default function Domains() {
 
       <div className="bg-slate-900 border border-slate-800 rounded p-5 mb-4">
         <h2 className="text-sm font-medium text-slate-300 mb-3">Switch domain</h2>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <input
             className={input}
-            placeholder="proxvm2 (target auto-copied from current)"
+            placeholder="proxvm3"
             value={switchName}
             onChange={(e) => setSwitchName(e.target.value)}
           />
-          <button onClick={doSwitch} disabled={!switchName.trim() || !keyOk} className={btn}>
-            Switch
-          </button>
+          <input
+            className={input}
+            placeholder={needsTarget ? "Target IP/hostname (required first time)" : "Target (blank = copy current)"}
+            value={targetInput}
+            onChange={(e) => setTargetInput(e.target.value)}
+          />
         </div>
+        {needsTarget && (
+          <div className="text-xs text-slate-500 mt-2">
+            No current domain set yet, so copy the target from an existing record below (e.g. what proxvm2 points at).
+          </div>
+        )}
+        <button onClick={doSwitch} disabled={!switchName.trim() || !keyOk || (needsTarget && !targetInput.trim())} className={`${btn} mt-3`}>
+          Switch
+        </button>
         {!keyOk && <div className="text-xs text-slate-500 mt-2">Connect Cloudflare below first.</div>}
       </div>
 

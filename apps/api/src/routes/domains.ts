@@ -130,7 +130,10 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
       : undefined;
     const target = body.target?.trim() || current?.content;
     if (!target) {
-      throw AppError.validation("No target given and no current canonical record to copy it from — pass target explicitly");
+      throw AppError.validation(
+        "No target given and no current domain set yet — enter the target explicitly " +
+          "(copy the value of an existing record from the list below, e.g. what the old domain points at)",
+      );
     }
     const existing = records.find((r) => r.name.toLowerCase() === fqdn && ["A", "AAAA", "CNAME"].includes(r.type));
     const record = existing
