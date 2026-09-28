@@ -135,15 +135,37 @@ export default function Dashboard({ me }: { me: Me }) {
   }, [servicesData]);
 
   const balanceTip = useMemo(() => {
-    if (nodes.length < 2) return null;
-    const ranked = nodes
+    // Offline nodes report stale numbers — leave them out of the math
+    // entirely (they still render below with their status badge).
+    const online = nodes.filter((n) => n.status === "online");
+    if (online.length < 2) return null;
+    const ranked = online
       .map((n) => ({ node: n.node, pct: pct(n.mem, n.maxmem) ?? 0 }))
       .sort((a, b) => b.pct - a.pct);
     const top = ranked[0]!;
     const bottom = ranked[ranked.length - 1]!;
-    if (top.pct - bottom.pct < 25) return null;
+    // Only nag when it matters: a big spread AND the fullest node actually
+    // under pressure. Anything milder isn't worth an alarm.
+    if (top.pct - bottom.pct < 25 || top.pct < 80) return null;
     return `${top.node} RAM is ${top.pct.toFixed(0)}% full vs ${bottom.node} at ${bottom.pct.toFixed(0)}% — consider migrating a VM (open it from Virtual Machines → Migrate).`;
   }, [nodes]);
+
+  const [dismissedTip, setDismissedTip] = useState<string | null>(() => {
+    try {
+      return window.localStorage.getItem("proxvm-balance-dismissed");
+    } catch {
+      return null;
+    }
+  });
+  const showTip = balanceTip !== null && balanceTip !== dismissedTip;
+  const dismissTip = (): void => {
+    try {
+      if (balanceTip) window.localStorage.setItem("proxvm-balance-dismissed", balanceTip);
+    } catch {
+      // private mode: dismissal just won't persist
+    }
+    setDismissedTip(balanceTip);
+  };
 
   const runDiscovery = async (): Promise<void> => {
     setError(null);
@@ -218,9 +240,16 @@ export default function Dashboard({ me }: { me: Me }) {
               </div>
             </div>
           ))}
-          {balanceTip && (
-            <div className="bg-yellow-900/40 border border-yellow-700/60 text-yellow-200 rounded p-3 mt-3 text-sm">
-              ⚖ {balanceTip}
+          {showTip && balanceTip && (
+            <div className="bg-yellow-900/40 border border-yellow-700/60 text-yellow-200 rounded p-3 mt-3 text-sm flex items-start gap-2">
+              <span className="flex-1">⚖ {balanceTip}</span>
+              <button
+                onClick={dismissTip}
+                className="text-xs text-yellow-200/70 hover:text-yellow-100 underline shrink-0"
+                title="Hide this suggestion (it returns if the situation changes)"
+              >
+                Dismiss
+              </button>
             </div>
           )}
         </div>
