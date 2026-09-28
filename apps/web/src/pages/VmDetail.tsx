@@ -355,6 +355,7 @@ export default function VmDetail({ me }: { me: Me }) {
         <Info label="Guest agent">{String(proxmox?.agent ?? "—")}</Info>
         <Info label="Guacamole">{guac?.active ? <StatusBadge status={String(guac.active.status)} /> : "not created"}</Info>
         <Info label="Credential status">{cred ? <StatusBadge status={String(cred.status)} /> : "none"}</Info>
+        <Info label="Guest user">{cred?.username ? String(cred.username) : "—"}</Info>
       </div>
 
       {guac?.connections?.length && (

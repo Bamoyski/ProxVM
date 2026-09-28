@@ -66,9 +66,30 @@ export async function rotateVmCredential(
   const oldPassword = deps.decrypt(existing.password_ciphertext);
   const newPassword = opts.newPassword ?? generatePassword(24);
 
+  if (existing.status === "ROTATING") {
+    // A previous run never settled (process restart mid-rotation, or a
+    // failure before the restore paths below). The stored credential is
+    // untouched in that case, so a full re-rotation from it is safe and
+    // self-healing; record the observation and proceed.
+    deps.logger.warn({ vmId }, "stale ROTATING status from an unsettled previous rotation; re-running");
+    await deps.audit.record({
+      event: "PASSWORD_ROTATED",
+      actorUserId: actor.userId,
+      actorUsername: actor.username,
+      vmId,
+      detail: { result: "stale-retry" },
+    });
+  }
+
   await deps.creds.setStatus(vmId, "ROTATING");
 
-  const proxmox = await deps.getProxmoxClient();
+  let proxmox;
+  try {
+    proxmox = await deps.getProxmoxClient();
+  } catch (err) {
+    await deps.creds.setStatus(vmId, existing.status);
+    throw err;
+  }
   const attempts: Array<() => Promise<{ success: boolean; message: string }>> =
     vm.osType === "windows"
       ? [

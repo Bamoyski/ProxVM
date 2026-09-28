@@ -118,4 +118,58 @@ describe("credential rotation apply-failure", () => {
     expect(failure).toBeTruthy();
     expect((failure!.detail as Record<string, unknown>).result).toBe("failed");
   });
+
+  it("a stale ROTATING status is detected, retried, and audited", async () => {
+    const vm = await ctx.vms.create({
+      vmid: 702,
+      node: "n1",
+      name: "stale-rot-vm",
+      status: "running",
+      osType: "linux",
+      ipAddress: "127.0.0.1",
+    });
+    await ctx.creds.store(vm.id, "deploy", "Old-Password-1!", "PROVISIONED");
+    // Simulate a previous run that died after marking ROTATING.
+    await ctx.creds.setStatus(vm.id, "ROTATING");
+
+    const actor = await ctx.users.create({
+      username: "actor2",
+      passwordHash: await hashPassword("Actor-Password-1!"),
+      roles: ["ADMIN"],
+    });
+
+    const failingProxmox = {
+      async startAgentExecAndWait(): Promise<never> {
+        throw new Error("guest agent unreachable");
+      },
+    } as never;
+
+    await expect(
+      rotateVmCredential(
+        {
+          db: ctx.db,
+          logger: silentLogger,
+          settings: ctx.settings,
+          vms: ctx.vms,
+          creds: ctx.creds,
+          guac: ctx.guac,
+          audit: ctx.audit,
+          decrypt: ctx.decrypt,
+          getProxmoxClient: async () => failingProxmox,
+          getGuacDb: () => ctx.getGuacDb(),
+        },
+        vm.id,
+        {},
+        { userId: actor.id, username: "actor2" },
+      ),
+    ).rejects.toThrow(/Failed to apply the new password/);
+
+    // Stored password untouched; audit shows both the stale detection and the failure.
+    const row = await ctx.creds.findByVm(vm.id);
+    expect(ctx.decrypt(row!.password_ciphertext)).toBe("Old-Password-1!");
+    const audit = await ctx.audit.list({ vmId: vm.id, limit: 10 });
+    const results = audit.map((a) => (a.detail as Record<string, unknown>).result);
+    expect(results).toContain("stale-retry");
+    expect(results).toContain("failed");
+  });
 });
