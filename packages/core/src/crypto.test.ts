@@ -19,14 +19,21 @@ describe("password hashing", () => {
 });
 
 describe("password generation", () => {
-  it("meets complexity and length", () => {
+  it("meets complexity and minimum length", () => {
     for (const length of [12, 16, 24, 64]) {
       const pw = generatePassword(length);
-      expect(pw.length).toBe(length);
+      expect(pw.length).toBeGreaterThanOrEqual(length);
       expect(pw).toMatch(/[a-z]/);
       expect(pw).toMatch(/[A-Z]/);
       expect(pw).toMatch(/[0-9]/);
       expect(pw).toMatch(/[^A-Za-z0-9]/);
+    }
+  });
+  it("generates typable passphrases without shell-breaking characters", () => {
+    for (let i = 0; i < 20; i++) {
+      const pw = generatePassword(24);
+      expect(pw).not.toMatch(/[\r\n:]/);
+      expect(pw.split("-").length).toBeGreaterThanOrEqual(3);
     }
   });
   it("generates unique passwords", () => {

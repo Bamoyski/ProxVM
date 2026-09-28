@@ -20,30 +20,56 @@ export async function verifyPassword(hash: string, password: string): Promise<bo
   }
 }
 
-const LOWERCASE = "abcdefghjkmnpqrstuvwxyz";
-const UPPERCASE = "ABCDEFGHJKMNPQRSTUVWXYZ";
-const DIGITS = "23456789";
-const SPECIAL = "!@#$%^&*()-_=+[]{};:,.<>?";
-const ALL_ALLOWED = LOWERCASE + UPPERCASE + DIGITS + SPECIAL;
+// Short common words for typable passphrases. Lowercase alpha only, so the
+// generator can control casing itself; none contain shell- or chpasswd-
+// significant characters.
+const PASSPHRASE_WORDS = [
+  "acorn", "amber", "apron", "ash", "aspen", "autumn", "baker", "bamboo", "basin", "beacon",
+  "birch", "blade", "bloom", "bridge", "brook", "brush", "bunker", "cabin", "cactus", "camel",
+  "canyon", "carpet", "cedar", "cherry", "cinder", "citrus", "cliff", "clover", "cobalt", "comet",
+  "copper", "coral", "cove", "crane", "creek", "cricket", "daisy", "delta", "denim", "dome",
+  "dove", "drift", "drum", "dune", "eagle", "ember", "engine", "falcon", "fern", "flint",
+  "forest", "forge", "frost", "garlic", "glacier", "glove", "grove", "harbor", "hazel", "heron",
+  "honey", "horizon", "iguana", "indigo", "inlet", "iris", "ivory", "jacket", "jaguar", "jasper",
+  "jungle", "karma", "kayak", "kettle", "koala", "ladder", "lagoon", "lantern", "lark", "lava",
+  "lemon", "lilac", "linen", "lotus", "lunar", "magnet", "mango", "maple", "marble", "meadow",
+  "melon", "mercury", "miller", "mint", "mist", "monarch", "moss", "mountain", "nectar", "needle",
+  "nickel", "north", "nugget", "oasis", "ocean", "olive", "onyx", "orchard", "otter", "oxygen",
+  "paddle", "panda", "paper", "pebble", "pepper", "petal", "piano", "pilot", "pine", "pioneer",
+  "plaza", "poplar", "porch", "prairie", "pumpkin", "quartz", "quilt", "raven", "reef", "ridge",
+  "river", "rocket", "rose", "saddle", "sage", "salmon", "sand", "sapphire", "sedona", "shadow",
+  "sierra", "silver", "slate", "solar", "spark", "spruce", "stone", "storm", "summit", "sunny",
+  "sunset", "tango", "tiger", "timber", "topaz", "trail", "tulip", "tundra", "turbo", "twilight",
+  "umbrella", "union", "valley", "velvet", "venus", "violet", "viper", "walnut", "willow", "window",
+  "winter", "yellow", "yoga", "zebra", "zephyr",
+];
 
 export interface GeneratedPassword {
   password: string;
 }
 
+/**
+ * Typable passphrase passwords: capitalized words joined with hyphens plus a
+ * two-digit number and "!", e.g. "Cabin-Apron-Forge-42!". Always satisfies
+ * the account complexity policy (upper, lower, digit, symbol, 12+ chars).
+ *
+ * The result is AT LEAST `length` characters (exact lengths are not
+ * achievable with whole words). Entropy per character is lower than the old
+ * random soup, but vault-stored guest passwords are threatened by online
+ * guessing, not offline cracking — and these never contain chpasswd- or
+ * shell-breaking characters (notably no ":"), which the old alphabet could.
+ */
 export function generatePassword(length = 24): string {
-  const chars: string[] = [];
-  chars.push(LOWERCASE[randomInt(LOWERCASE.length)] as string);
-  chars.push(UPPERCASE[randomInt(UPPERCASE.length)] as string);
-  chars.push(DIGITS[randomInt(DIGITS.length)] as string);
-  chars.push(SPECIAL[randomInt(SPECIAL.length)] as string);
-  for (let i = chars.length; i < length; i++) {
-    chars.push(ALL_ALLOWED[randomInt(ALL_ALLOWED.length)] as string);
+  const words: string[] = [];
+  const target = Math.max(length, 12);
+  let text = "";
+  while (text.length < target) {
+    const word = PASSPHRASE_WORDS[randomInt(PASSPHRASE_WORDS.length)] as string;
+    words.push(word);
+    text = [
+      ...words.map((w) => w.slice(0, 1).toUpperCase() + w.slice(1)),
+      String(randomInt(90) + 10),
+    ].join("-") + "!";
   }
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = randomInt(i + 1);
-    const tmp = chars[i] as string;
-    chars[i] = chars[j] as string;
-    chars[j] = tmp;
-  }
-  return chars.join("");
+  return text;
 }
