@@ -5,6 +5,7 @@ import RedisMock from "ioredis-mock";
 import {
   createCore,
   getAllowedWebOrigins,
+  getCloudflareConfig,
   normalizeHostname,
   resolveDomainRedirect,
   getDomainConfig,
@@ -93,6 +94,30 @@ describe("CORS origin allowlist", () => {
     });
     expect(allowed.every((o) => o.startsWith("https://"))).toBe(true);
     expect(allowed).not.toContain("http://proxvm1.zone.example");
+  });
+});
+
+describe("Cloudflare config resolution", () => {
+  const stubSettings = (values: Record<string, string>) => ({
+    get: async (key: string) => (values[key] !== undefined ? { value: values[key], encrypted: false } : null),
+  });
+  it("prefers environment over saved settings, falls back per key", async () => {
+    process.env.PROXVM_CLOUDFLARE_ZONE_ID = "zone-from-env";
+    try {
+      const config = await getCloudflareConfig(
+        stubSettings({ "cloudflare.api_token": "tok-from-db", "cloudflare.zone_id": "zone-from-db" }) as never,
+      );
+      expect(config).toMatchObject({
+        apiToken: "tok-from-db",
+        zoneId: "zone-from-env",
+        accountId: null,
+        tunnelId: null,
+      });
+    } finally {
+      delete process.env.PROXVM_CLOUDFLARE_ZONE_ID;
+    }
+    const empty = await getCloudflareConfig(stubSettings({}) as never);
+    expect(empty).toEqual({ apiToken: null, zoneId: null, accountId: null, tunnelId: null });
   });
 });
 

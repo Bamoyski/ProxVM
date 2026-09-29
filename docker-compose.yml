@@ -18,6 +18,12 @@ services:
       PROXVM_PORT: "4000"
       PROXVM_WEB_ORIGIN: ""
       NODE_ENV: production
+      # Cloudflare domain automation. Values come from the local .env file
+      # (gitignored, never committed); empty means "use the UI settings".
+      PROXVM_CLOUDFLARE_API_TOKEN: "${PROXVM_CLOUDFLARE_API_TOKEN:-}"
+      PROXVM_CLOUDFLARE_ZONE_ID: "${PROXVM_CLOUDFLARE_ZONE_ID:-}"
+      PROXVM_CLOUDFLARE_ACCOUNT_ID: "${PROXVM_CLOUDFLARE_ACCOUNT_ID:-}"
+      PROXVM_CLOUDFLARE_TUNNEL_ID: "${PROXVM_CLOUDFLARE_TUNNEL_ID:-}"
     volumes:
       - proxvm-config:/data/.proxvm
     ports:

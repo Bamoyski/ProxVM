@@ -5,6 +5,7 @@ import {
   AppError,
   assertValidHostname,
   ensureTunnelIngressRule,
+  getCloudflareConfig,
   getDomainConfig,
   normalizeHostname,
   removeDomainAlias,
@@ -39,18 +40,15 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
   });
 
   app.get("/domains/config", { preHandler: guard }, async () => {
-    const config = await getDomainConfig(ctx.settings);
-    const token = await ctx.settings.get("cloudflare.api_token");
-    const accountId = await ctx.settings.get("cloudflare.account_id");
-    const tunnelId = await ctx.settings.get("cloudflare.tunnel_id");
+    const [config, cf] = await Promise.all([getDomainConfig(ctx.settings), getCloudflareConfig(ctx.settings)]);
     return {
       canonical: config.canonical,
       aliases: config.aliases,
       cloudflare: {
-        configured: !!token?.value,
-        zoneId: config.cloudflareZoneId,
-        accountId: accountId?.value ?? null,
-        tunnelId: tunnelId?.value ?? null,
+        configured: !!cf.apiToken,
+        zoneId: cf.zoneId,
+        accountId: cf.accountId,
+        tunnelId: cf.tunnelId,
       },
     };
   });
@@ -109,15 +107,27 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
   app.post("/domains/cloudflare/test", async (request) => {
     await guard(request);
     const client = await ctx.getCloudflareClient();
-    const zoneId = (await ctx.settings.get("cloudflare.zone_id"))?.value;
-    if (!zoneId) throw AppError.validation("Save a Cloudflare Zone ID first");
-    const [token, zone] = await Promise.all([client.verifyToken(), client.getZone(zoneId)]);
-    return { ok: true, tokenStatus: token.status, zone: { id: zone.id, name: zone.name, status: zone.status } };
+    const cf = await getCloudflareConfig(ctx.settings);
+    if (!cf.zoneId) throw AppError.validation("No Cloudflare Zone ID configured (env or Domains settings)");
+    // NOTE: never gate on verifyToken() here — Cloudflare's /user/tokens/verify
+    // rejects some perfectly valid restricted tokens (observed: scoped calls
+    // 200 while verify 401s "Invalid API Token"). A successful zone fetch is
+    // the real auth proof; tunnel listing is best-effort on top.
+    const zone = await client.getZone(cf.zoneId);
+    let tunnels: number | null = null;
+    if (cf.accountId) {
+      try {
+        tunnels = (await client.listTunnels(cf.accountId)).length;
+      } catch {
+        tunnels = null;
+      }
+    }
+    return { ok: true, zone: { id: zone.id, name: zone.name, status: zone.status }, tunnels };
   });
 
   app.get("/domains/tunnels", { preHandler: guard }, async () => {
-    const accountId = (await ctx.settings.get("cloudflare.account_id"))?.value;
-    if (!accountId) throw AppError.validation("Save a Cloudflare Account ID first");
+    const accountId = (await getCloudflareConfig(ctx.settings)).accountId;
+    if (!accountId) throw AppError.validation("No Cloudflare Account ID configured (env or Domains settings)");
     const client = await ctx.getCloudflareClient();
     const tunnels = await client.listTunnels(accountId);
     return { tunnels: tunnels.map((t) => ({ id: t.id, name: t.name, status: t.status ?? null })) };
@@ -127,26 +137,26 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
   // or local-config (owner converts it once in the dashboard). Never writes.
   app.post("/domains/tunnels/test", async (request) => {
     await guard(request);
-    const [accountId, tunnelId] = await Promise.all([
-      ctx.settings.get("cloudflare.account_id"),
-      ctx.settings.get("cloudflare.tunnel_id"),
-    ]);
-    if (!accountId?.value || !tunnelId?.value) {
-      throw AppError.validation("Save a Cloudflare Account ID and Tunnel ID first");
+    const cf = await getCloudflareConfig(ctx.settings);
+    if (!cf.accountId || !cf.tunnelId) {
+      throw AppError.validation("No Cloudflare Account ID and Tunnel ID configured (env or Domains settings)");
     }
     const client = await ctx.getCloudflareClient();
     try {
-      const { ingress } = await client.getTunnelIngress(accountId.value, tunnelId.value);
+      const { ingress } = await client.getTunnelIngress(cf.accountId, cf.tunnelId);
       const config = await getDomainConfig(ctx.settings);
       return {
         ok: true,
         managed: true,
         hostnames: ingress.map((r) => r.hostname).filter((h): h is string => !!h),
+        routes: ingress
+          .filter((r) => !!r.hostname)
+          .map((r) => ({ hostname: r.hostname as string, service: r.service })),
         canonicalService: config.canonical ? tunnelServiceFor(ingress, config.canonical) : null,
       };
     } catch (err) {
       if (err instanceof AppError && err.statusCode === 404) {
-        return { ok: true, managed: false, hostnames: [], canonicalService: null };
+        return { ok: true, managed: false, hostnames: [], routes: [], canonicalService: null };
       }
       throw err;
     }
@@ -154,8 +164,8 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
 
   app.get("/domains/dns", { preHandler: guard }, async (request) => {
     const query = z.object({ search: z.string().max(128).optional() }).parse(request.query);
-    const zoneId = (await ctx.settings.get("cloudflare.zone_id"))?.value;
-    if (!zoneId) throw AppError.validation("Save a Cloudflare Zone ID first");
+    const zoneId = (await getCloudflareConfig(ctx.settings)).zoneId;
+    if (!zoneId) throw AppError.validation("No Cloudflare Zone ID configured (env or Domains settings)");
     const client = await ctx.getCloudflareClient();
     const q = (query.search ?? "").toLowerCase();
     const records = (await client.listDnsRecords(zoneId))
@@ -181,10 +191,11 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
         service: z.string().min(1).max(253).optional(),
       })
       .parse(request.body);
-    const zoneId = (await ctx.settings.get("cloudflare.zone_id"))?.value;
-    if (!zoneId) throw AppError.validation("Save a Cloudflare Zone ID first");
+    const cfZoneId = (await getCloudflareConfig(ctx.settings)).zoneId;
+    if (!cfZoneId) throw AppError.validation("No Cloudflare Zone ID configured (env or Domains settings)");
     const client = await ctx.getCloudflareClient();
-    const zone = await client.getZone(zoneId);
+    const zone = await client.getZone(cfZoneId);
+    const zoneId = zone.id;
     const fqdn = qualifyName(body.name, zone.name);
     assertValidHostname(fqdn);
 
@@ -246,12 +257,11 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
       ruleEnsured: false,
       service: null,
     };
-    const [tunnelAccount, tunnelId] = await Promise.all([
-      ctx.settings.get("cloudflare.account_id"),
-      ctx.settings.get("cloudflare.tunnel_id"),
-    ]);
-    if (tunnelAccount?.value && tunnelId?.value) {
-      const { ingress, raw } = await client.getTunnelIngress(tunnelAccount.value, tunnelId.value).catch((err) => {
+    const cfTunnel = await getCloudflareConfig(ctx.settings);
+    const cfAccountId = cfTunnel.accountId;
+    const cfTunnelId = cfTunnel.tunnelId;
+    if (cfAccountId && cfTunnelId) {
+      const { ingress, raw } = await client.getTunnelIngress(cfAccountId, cfTunnelId).catch((err) => {
         if (err instanceof AppError && err.statusCode === 404) {
           throw AppError.validation(
             "This tunnel runs on a local config.yml, so ProxVM cannot manage its ingress. " +
@@ -260,17 +270,28 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
         }
         throw err;
       });
+      const explicitService = body.service?.trim() || null;
+      if (
+        explicitService &&
+        !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(explicitService) &&
+        !/^http_status:\d{3}$/i.test(explicitService) &&
+        explicitService !== "hello-world"
+      ) {
+        throw AppError.validation(
+          `Service target "${explicitService}" is not a valid tunnel service — use scheme://host form (e.g. http://localhost:8080), http_status:404, or hello-world. Pick one from the existing routes below instead of typing.`,
+        );
+      }
       const service =
-        body.service?.trim() ||
+        explicitService ||
         (config.canonical ? tunnelServiceFor(ingress, config.canonical) : null);
       if (!service) {
         throw AppError.validation(
-          "No ingress rule exists for the current domain and no service target was given — enter the tunnel service target once (e.g. http://localhost:8080, copied from your existing proxvm rule in the dashboard).",
+          "No ingress rule exists for the current domain and no service target was given — pick the service from an existing route below (same target your current domain uses).",
         );
       }
       const merged = ensureTunnelIngressRule(ingress, fqdn, service);
       if (merged.changed) {
-        await client.putTunnelIngress(tunnelAccount.value, tunnelId.value, raw, merged.rules);
+        await client.putTunnelIngress(cfAccountId, cfTunnelId, raw, merged.rules);
       }
       tunnel = { managed: true, ruleEnsured: true, service };
     }

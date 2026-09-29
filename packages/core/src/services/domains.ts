@@ -163,6 +163,41 @@ export async function verifyDomainReachability(
   return { dnsOk, httpsOk, detail: `dns: ${dnsDetail}; https: ${httpsDetail}` };
 }
 
+export interface CloudflareConfig {
+  apiToken: string | null;
+  zoneId: string | null;
+  accountId: string | null;
+  tunnelId: string | null;
+}
+
+/**
+ * Cloudflare wiring, environment-first. Operators who bake the values into
+ * the server environment (or local .env, which is gitignored) never touch
+ * the UI settings; the UI-saved values remain as fallback for everyone else.
+ * Nothing here is ever logged — the token only travels as an Authorization
+ * header inside the Cloudflare client.
+ */
+export async function getCloudflareConfig(
+  settings: Pick<SettingsService, "get">,
+): Promise<CloudflareConfig> {
+  const fromEnv = (key: string): string | null => {
+    const value = (process.env[key] ?? "").trim();
+    return value ? value : null;
+  };
+  const [token, zone, account, tunnel] = await Promise.all([
+    settings.get("cloudflare.api_token"),
+    settings.get("cloudflare.zone_id"),
+    settings.get("cloudflare.account_id"),
+    settings.get("cloudflare.tunnel_id"),
+  ]);
+  return {
+    apiToken: fromEnv("PROXVM_CLOUDFLARE_API_TOKEN") ?? token?.value ?? null,
+    zoneId: fromEnv("PROXVM_CLOUDFLARE_ZONE_ID") ?? zone?.value ?? null,
+    accountId: fromEnv("PROXVM_CLOUDFLARE_ACCOUNT_ID") ?? account?.value ?? null,
+    tunnelId: fromEnv("PROXVM_CLOUDFLARE_TUNNEL_ID") ?? tunnel?.value ?? null,
+  };
+}
+
 export async function removeDomainAlias(
   settings: Pick<SettingsService, "get" | "set">,
   rawHost: string,

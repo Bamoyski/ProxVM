@@ -13,6 +13,7 @@ interface TunnelStatus {
   ok: boolean;
   managed: boolean;
   hostnames: string[];
+  routes: Array<{ hostname: string; service: string }>;
   canonicalService: string | null;
 }
 
@@ -33,7 +34,6 @@ export default function Domains() {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [cf, setCf] = useState({ apiToken: "", zoneId: "", accountId: "", tunnelId: "" });
   const [switchName, setSwitchName] = useState("");
   const [search, setSearch] = useState("");
   const [serviceInput, setServiceInput] = useState("");
@@ -72,27 +72,6 @@ export default function Domains() {
   };
 
   const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
-
-  const saveCf = async () => {
-    setError(null);
-    setStatus(null);
-    try {
-      await api("/domains/cloudflare", {
-        method: "PUT",
-        body: {
-          apiToken: cf.apiToken || undefined,
-          zoneId: cf.zoneId || undefined,
-          accountId: cf.accountId || undefined,
-          tunnelId: cf.tunnelId || undefined,
-        },
-      });
-      setCf({ apiToken: "", zoneId: "", accountId: "", tunnelId: "" });
-      setStatus("Saved. Key status re-checks automatically.");
-      reload();
-    } catch (err) {
-      fail(err);
-    }
-  };
 
   const applyCopyFrom = (id: string): void => {
     setCopyFrom(id);
@@ -169,7 +148,7 @@ export default function Domains() {
           <div className="flex items-center gap-2">
             <span className="text-slate-400 w-36">API key</span>
             {!config?.cloudflare.zoneId ? (
-              <span className="text-slate-500">not connected — expand setup below</span>
+              <span className="text-slate-500">not wired — set server env (see .env.example)</span>
             ) : cfTesting ? (
               <span className="text-slate-400">checking…</span>
             ) : keyOk ? (
@@ -242,8 +221,24 @@ export default function Domains() {
             placeholder="Tunnel service target (blank = copy current rule)"
             value={serviceInput}
             onChange={(e) => setServiceInput(e.target.value)}
+            list="tunnel-service-options"
           />
+          <datalist id="tunnel-service-options">
+            {[...new Set((tunnel?.routes ?? []).map((r) => r.service))].map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
         </div>
+        {(tunnel?.routes ?? []).length > 0 && (
+          <div className="text-xs text-slate-500 mt-2 space-y-0.5">
+            <div className="font-medium text-slate-400">Existing tunnel routes (pick a service from here):</div>
+            {tunnel!.routes.map((r) => (
+              <div key={r.hostname} className="font-mono">
+                {r.hostname} → {r.service}
+              </div>
+            ))}
+          </div>
+        )}
         {needsTarget && (
           <div className="text-xs text-slate-500 mt-2">
             No current domain set yet — pick “copy from” above (easiest) or type the public target by hand.
@@ -253,29 +248,12 @@ export default function Domains() {
         <button onClick={doSwitch} disabled={!switchName.trim() || !keyOk || (needsTarget && !targetInput.trim())} className={`${btn} mt-3`}>
           Switch
         </button>
-        {!keyOk && <div className="text-xs text-slate-500 mt-2">Connect Cloudflare below first.</div>}
+        {!keyOk && <div className="text-xs text-slate-500 mt-2">Cloudflare isn't wired — set the server env vars (see .env.example).</div>}
       </div>
 
       <details className="bg-slate-900 border border-slate-800 rounded p-5 mb-4 text-sm">
-        <summary className="cursor-pointer text-slate-300 font-medium">Cloudflare connection & DNS records</summary>
+        <summary className="cursor-pointer text-slate-300 font-medium">DNS records</summary>
         <div className="space-y-3 mt-3">
-          <div>
-            <label className={label}>API token (stored encrypted, leave blank to keep)</label>
-            <input type="password" className={input} value={cf.apiToken} onChange={(e) => setCf({ ...cf, apiToken: e.target.value })} />
-          </div>
-          <div>
-            <label className={label}>Zone ID</label>
-            <input className={input} value={cf.zoneId} onChange={(e) => setCf({ ...cf, zoneId: e.target.value })} placeholder={config?.cloudflare.zoneId ?? ""} />
-          </div>
-          <div>
-            <label className={label}>Account ID (enables tunnel auto-ingress)</label>
-            <input className={input} value={cf.accountId} onChange={(e) => setCf({ ...cf, accountId: e.target.value })} placeholder={config?.cloudflare.accountId ?? ""} />
-          </div>
-          <div>
-            <label className={label}>Tunnel ID (enables tunnel auto-ingress)</label>
-            <input className={input} value={cf.tunnelId} onChange={(e) => setCf({ ...cf, tunnelId: e.target.value })} placeholder={config?.cloudflare.tunnelId ?? ""} />
-          </div>
-          <button onClick={saveCf} className={btn}>Save</button>
           <div>
             <label className={label}>DNS records (A / AAAA / CNAME)</label>
             <input className={`${input} mb-2`} placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -295,7 +273,7 @@ export default function Domains() {
                 </div>
               ))}
               {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <div className="text-xs text-slate-500">No records match.</div>}
-              {!config?.cloudflare.zoneId && <div className="text-xs text-slate-500">Save a Zone ID to list records.</div>}
+              {!config?.cloudflare.zoneId && <div className="text-xs text-slate-500">No Zone ID wired on the server — see .env.example.</div>}
             </div>
           </div>
           {(config?.aliases ?? []).length > 0 && (

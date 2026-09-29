@@ -21,7 +21,7 @@ import { ProxmoxClient } from "./proxmox/client.js";
 import { createGuacamoleDbClient, type GuacamoleDbClient } from "./guacamole/db.js";
 import { GuacamoleApiClient } from "./guacamole/api.js";
 import { CloudflareClient } from "./cloudflare/client.js";
-import { verifyDomainReachability, type DomainVerification } from "./services/domains.js";
+import { getCloudflareConfig, verifyDomainReachability, type DomainVerification } from "./services/domains.js";
 import { createPgPool } from "./db/pool.js";
 import { parseDbHost } from "./util/misc.js";
 
@@ -183,15 +183,15 @@ export async function createCore(
       return cache.guacApi;
     },
     getCloudflareClient: async () => {
-      const token = await settings.get("cloudflare.api_token");
-      if (!token?.value) {
+      const config = await getCloudflareConfig(settings);
+      if (!config.apiToken) {
         throw new AppError(
           "CONFIGURATION_ERROR",
-          "Cloudflare is not configured. Save an API token on the Domains page.",
+          "Cloudflare is not configured. Set PROXVM_CLOUDFLARE_API_TOKEN or save an API token on the Domains page.",
           400,
         );
       }
-      return new CloudflareClient({ token: token.value });
+      return new CloudflareClient({ token: config.apiToken });
     },
     verifyDomain: async (fqdn: string): Promise<DomainVerification> => verifyDomainReachability(fqdn),
     runHealthChecks: async () =>

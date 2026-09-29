@@ -323,7 +323,22 @@ describe("domain migration tool", () => {
     expect(list.json()).toMatchObject({ tunnels: [{ id: "tun-1", name: "homelab" }] });
     const status = await app.inject({ method: "POST", url: "/api/domains/tunnels/test", headers: authA() });
     expect(status.statusCode).toBe(200);
-    expect(status.json()).toMatchObject({ ok: true, managed: true });
+    expect(status.json()).toMatchObject({
+      ok: true,
+      managed: true,
+      routes: [{ hostname: "proxvm.zone.example", service: "http://localhost:8080" }],
+    });
+  });
+
+  it("rejects malformed tunnel service targets before touching Cloudflare", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/domains/switch",
+      headers: authA(),
+      payload: { name: "proxvm13", target: "203.0.113.20", service: "admin" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
   it("routes the new hostname through the tunnel on switch", async () => {

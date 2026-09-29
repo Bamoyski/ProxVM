@@ -29,6 +29,12 @@ Requirements and sharp edges:
   instructions — convert it once in the dashboard, then automation takes over.
 - The API token needs **Zone:Read + DNS:Edit** (as before) plus
   **Account:Cloudflare Tunnel:Edit** (and Read, for the status check).
+- Wiring lives in the server environment (`PROXVM_CLOUDFLARE_API_TOKEN`,
+  `PROXVM_CLOUDFLARE_ZONE_ID`, `PROXVM_CLOUDFLARE_ACCOUNT_ID`,
+  `PROXVM_CLOUDFLARE_TUNNEL_ID` — see `.env.example`), which always wins over
+  the Domains-page settings. There is deliberately no credential UI: secrets
+  stay in a gitignored local `.env`, never in the database display, and never
+  in any mirrored copy of this repo.
 - First switch ever with a tunnel configured asks for the **service target**
   once (e.g. `http://localhost:8080`, copied from your existing rule) because
   there is no current rule to copy from yet. Every switch after that copies
