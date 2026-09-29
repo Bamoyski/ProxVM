@@ -12,6 +12,10 @@ export default function Donate() {
           <span className="font-medium text-slate-100">bamoyskistudios</span>. If it is useful to you,
           a coffee keeps development — and the homelab it runs on — going.
         </p>
+        <p className="text-slate-400">
+          Fun fact: ProxVM is designed, built, and run by two 15-year-olds out of a home lab. Every
+          donation goes directly to two teenagers buying server parts instead of video games (mostly).
+        </p>
         <a
           className="inline-block px-5 py-2.5 text-sm font-medium bg-amber-500 hover:bg-amber-400 text-slate-950 rounded"
           href={DONATE_URL}

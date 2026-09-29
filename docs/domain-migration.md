@@ -5,13 +5,37 @@ without Cloudflare in front) is a short checklist rather than a migration.
 Do the steps in order; nothing below requires database surgery.
 
 > **Shortcut:** the **Domains** page (Settings → Domains, administrators
-> only) automates most of this when Cloudflare manages your DNS: connect an
+> only) automates all of this when Cloudflare manages your DNS: connect an
 > API token + Zone ID, then use **Switch domain** to point a name at the
-> current target, verify it resolves (and probe HTTPS), flip canonical, and
-> keep the old domain redirecting — in one audited step. The switch refuses
-> to flip while the new name does not resolve, so a typo can't strand you.
+> current target, route it through your tunnel, verify it resolves (and probe
+> HTTPS), flip canonical, and keep the old domain redirecting — in one
+> audited step, no SSH, no config files, no restarts. The switch refuses to
+> flip while the new name does not resolve, so a typo can't strand you.
 > The manual checklist below remains the fallback (and the only path without
 > Cloudflare).
+
+## Full-auto tunnel ingress (no manual cloudflared step)
+
+When the Domains page also knows your Cloudflare **Account ID** and **Tunnel
+ID**, Switch manages the tunnel itself: it reads the tunnel's remote ingress
+config, copies the service target from the current domain's rule onto the new
+hostname (inserted before the catch-all, which always stays last), and writes
+it back — then proceeds to DNS verification and the flip as usual.
+
+Requirements and sharp edges:
+
+- The tunnel must be **cloud-managed** (remote config in the dashboard). A
+  tunnel running on a local `config.yml` is detected and refused with
+  instructions — convert it once in the dashboard, then automation takes over.
+- The API token needs **Zone:Read + DNS:Edit** (as before) plus
+  **Account:Cloudflare Tunnel:Edit** (and Read, for the status check).
+- First switch ever with a tunnel configured asks for the **service target**
+  once (e.g. `http://localhost:8080`, copied from your existing rule) because
+  there is no current rule to copy from yet. Every switch after that copies
+  automatically; the field stays for overrides.
+- Every ingress write is audit-logged with before/after service. Read-modify-
+  write races with a human editing the dashboard at the same moment resolve
+  last-write-wins — don't hand-edit ingress mid-switch.
 
 ## What is domain-dependent (complete list)
 

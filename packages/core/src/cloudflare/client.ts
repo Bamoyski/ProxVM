@@ -24,6 +24,52 @@ export interface CloudflareDnsRecord {
   ttl: number;
 }
 
+export interface CloudflareTunnel {
+  id: string;
+  name: string;
+  status?: string;
+}
+
+export interface TunnelIngressRule {
+  hostname?: string;
+  service: string;
+  path?: string;
+  originRequest?: unknown;
+}
+
+/**
+ * Merge a hostname→service rule into an ingress list without disturbing
+ * anything else. The hostname-less catch-all (if any) always stays last —
+ * Cloudflare evaluates rules in order and rejects configs where it doesn't.
+ * Returns a fresh array; the input is never mutated.
+ */
+export function ensureTunnelIngressRule(
+  rules: TunnelIngressRule[],
+  hostname: string,
+  service: string,
+): { rules: TunnelIngressRule[]; changed: boolean; previousService: string | null } {
+  const host = hostname.trim().toLowerCase();
+  const next = rules.map((r) => ({ ...r }));
+  const idx = next.findIndex((r) => (r.hostname ?? "").toLowerCase() === host);
+  if (idx >= 0) {
+    const current = next[idx]!;
+    if (current.service === service) return { rules: next, changed: false, previousService: current.service };
+    next[idx] = { ...current, service };
+    return { rules: next, changed: true, previousService: current.service };
+  }
+  const serviceRule: TunnelIngressRule = { hostname: host, service };
+  const catchAll = next.findIndex((r) => !r.hostname);
+  if (catchAll >= 0) next.splice(catchAll, 0, serviceRule);
+  else next.push(serviceRule);
+  return { rules: next, changed: true, previousService: null };
+}
+
+/** Service target currently routed for a hostname, if any. */
+export function tunnelServiceFor(rules: TunnelIngressRule[], hostname: string): string | null {
+  const host = hostname.trim().toLowerCase();
+  return rules.find((r) => (r.hostname ?? "").toLowerCase() === host)?.service ?? null;
+}
+
 export interface CloudflareClientOptions {
   token: string;
   baseUrl?: string;
@@ -122,5 +168,40 @@ export class CloudflareClient {
       method: "PATCH",
       body: patch,
     });
+  }
+
+  async listTunnels(accountId: string): Promise<CloudflareTunnel[]> {
+    const tunnels = await this.request<CloudflareTunnel[]>(
+      `/accounts/${encodeURIComponent(accountId)}/cfd_tunnel?per_page=100`,
+    );
+    return Array.isArray(tunnels) ? tunnels : [];
+  }
+
+  /**
+   * Remote (cloud-managed) ingress config for a tunnel. Throws 404 when the
+   * tunnel runs on a local config.yml instead — in that case ProxVM cannot
+   * manage ingress and the owner converts it once in the dashboard.
+   */
+  async getTunnelIngress(accountId: string, tunnelId: string): Promise<{ ingress: TunnelIngressRule[]; raw: Record<string, unknown> }> {
+    const result = await this.request<Record<string, unknown>>(
+      `/accounts/${encodeURIComponent(accountId)}/cfd_tunnel/${encodeURIComponent(tunnelId)}/configurations`,
+    );
+    const config = (result?.["config"] && typeof result["config"] === "object"
+      ? (result["config"] as Record<string, unknown>)
+      : result) as Record<string, unknown>;
+    const ingress = Array.isArray(config?.["ingress"]) ? (config["ingress"] as TunnelIngressRule[]) : [];
+    return { ingress, raw: config ?? {} };
+  }
+
+  async putTunnelIngress(
+    accountId: string,
+    tunnelId: string,
+    base: Record<string, unknown>,
+    ingress: TunnelIngressRule[],
+  ): Promise<void> {
+    await this.request(
+      `/accounts/${encodeURIComponent(accountId)}/cfd_tunnel/${encodeURIComponent(tunnelId)}/configurations`,
+      { method: "PUT", body: { config: { ...base, ingress } } },
+    );
   }
 }

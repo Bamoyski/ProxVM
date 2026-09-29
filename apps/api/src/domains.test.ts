@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { newDb } from "pg-mem";
 import { Pool } from "pg";
 import {
+  AppError,
   createCore,
   makeLogger,
   hashPassword,
@@ -58,6 +59,11 @@ describe("domain migration tool", () => {
   let verifyDomainResult = { dnsOk: true, httpsOk: true, detail: "test stub" };
 
   const cfCalls: string[] = [];
+  let tunnelMode: "managed" | "local" = "managed";
+  const tunnelIngress: Array<{ hostname?: string; service: string }> = [
+    { hostname: "proxvm.zone.example", service: "http://localhost:8080" },
+    { service: "http_status:404" },
+  ];
   const records: Array<{ id: string; type: string; name: string; content: string; proxied: boolean; ttl: number }> = [
     { id: "r-old", type: "A", name: "proxvm.zone.example", content: "203.0.113.10", proxied: true, ttl: 1 },
   ];
@@ -83,6 +89,22 @@ describe("domain migration tool", () => {
       if (patch.content !== undefined) rec.content = patch.content;
       if (patch.proxied !== undefined) rec.proxied = patch.proxied;
       return { ...rec };
+    },
+    listTunnels: async () => {
+      cfCalls.push("tunnels");
+      return [{ id: "tun-1", name: "homelab", status: "healthy" }];
+    },
+    getTunnelIngress: async () => {
+      cfCalls.push("ingress:get");
+      if (tunnelMode === "local") throw new AppError("NOT_FOUND", "no remote config", 404);
+      return {
+        ingress: [...tunnelIngress],
+        raw: { ingress: [...tunnelIngress] },
+      };
+    },
+    putTunnelIngress: async (_account: string, _tunnel: string, _base: unknown, ingress: Array<{ hostname?: string; service: string }>) => {
+      cfCalls.push(`ingress:put:${ingress.map((r) => r.hostname ?? "(catch-all)").join(",")}`);
+      tunnelIngress.splice(0, tunnelIngress.length, ...ingress.map((r) => ({ ...r })));
     },
   };
 
@@ -284,6 +306,62 @@ describe("domain migration tool", () => {
     const body = pub.json() as { canonical: string; aliases: string[] };
     expect(typeof body.canonical).toBe("string");
     expect(Array.isArray(body.aliases)).toBe(true);
+  });
+
+  it("lists tunnels and reports the tunnel status", async () => {
+    const noAccount = await app.inject({ method: "GET", url: "/api/domains/tunnels", headers: authA() });
+    expect(noAccount.statusCode).toBe(400);
+    const save = await app.inject({
+      method: "PUT",
+      url: "/api/domains/cloudflare",
+      headers: authA(),
+      payload: { accountId: "acct-1", tunnelId: "tun-1" },
+    });
+    expect(save.statusCode).toBe(200);
+    const list = await app.inject({ method: "GET", url: "/api/domains/tunnels", headers: authA() });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toMatchObject({ tunnels: [{ id: "tun-1", name: "homelab" }] });
+    const status = await app.inject({ method: "POST", url: "/api/domains/tunnels/test", headers: authA() });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ ok: true, managed: true });
+  });
+
+  it("routes the new hostname through the tunnel on switch", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/domains/switch",
+      headers: authA(),
+      payload: { name: "proxvm11", target: "203.0.113.20", service: "http://localhost:8080" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      canonical: "proxvm11.zone.example",
+      tunnel: { managed: true, ruleEnsured: true, service: "http://localhost:8080" },
+    });
+    const put = cfCalls.find((c) => c.startsWith("ingress:put:"));
+    expect(put).toContain("proxvm11.zone.example");
+    // Catch-all stays last.
+    expect(tunnelIngress[tunnelIngress.length - 1]).toMatchObject({ service: "http_status:404" });
+  });
+
+  it("refuses local-config tunnels instead of half-migrating", async () => {
+    tunnelMode = "local";
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/domains/switch",
+        headers: authA(),
+        payload: { name: "proxvm12", target: "203.0.113.20", service: "http://localhost:8080" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+      const config = (await app.inject({ method: "GET", url: "/api/domains/config", headers: authA() }).then((r) => r.json())) as {
+        canonical: string;
+      };
+      expect(config.canonical).toBe("proxvm11.zone.example");
+    } finally {
+      tunnelMode = "managed";
+    }
   });
 
   it("refuses to flip canonical when the new domain does not resolve", async () => {

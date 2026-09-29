@@ -6,7 +6,14 @@ import { PageTitle, ErrorBox } from "../components/ui.js";
 interface DomainConfig {
   canonical: string | null;
   aliases: string[];
-  cloudflare: { configured: boolean; zoneId: string | null };
+  cloudflare: { configured: boolean; zoneId: string | null; accountId: string | null; tunnelId: string | null };
+}
+
+interface TunnelStatus {
+  ok: boolean;
+  managed: boolean;
+  hostnames: string[];
+  canonicalService: string | null;
 }
 
 interface DnsRecord {
@@ -26,9 +33,10 @@ export default function Domains() {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [cf, setCf] = useState({ apiToken: "", zoneId: "" });
+  const [cf, setCf] = useState({ apiToken: "", zoneId: "", accountId: "", tunnelId: "" });
   const [switchName, setSwitchName] = useState("");
   const [search, setSearch] = useState("");
+  const [serviceInput, setServiceInput] = useState("");
 
   const { data: config } = useQuery({
     queryKey: ["domains-config"],
@@ -47,11 +55,20 @@ export default function Domains() {
     queryFn: () => api<{ records: DnsRecord[] }>(`/domains/dns${search ? `?search=${encodeURIComponent(search)}` : ""}`),
     enabled: !!config?.cloudflare.zoneId,
   });
+  // Tunnel status (auto-ingress): only queried once an account + tunnel are saved.
+  const { data: tunnel, isFetching: tunnelTesting } = useQuery({
+    queryKey: ["domains-tunnel-test"],
+    queryFn: () => api<TunnelStatus>("/domains/tunnels/test", { method: "POST" }),
+    enabled: !!config?.cloudflare.accountId && !!config?.cloudflare.tunnelId,
+    retry: false,
+    staleTime: 60000,
+  });
 
   const reload = () => {
     void qc.invalidateQueries({ queryKey: ["domains-config"] });
     void qc.invalidateQueries({ queryKey: ["domains-cf-test"] });
     void qc.invalidateQueries({ queryKey: ["domains-dns"] });
+    void qc.invalidateQueries({ queryKey: ["domains-tunnel-test"] });
   };
 
   const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
@@ -62,9 +79,14 @@ export default function Domains() {
     try {
       await api("/domains/cloudflare", {
         method: "PUT",
-        body: { apiToken: cf.apiToken || undefined, zoneId: cf.zoneId || undefined },
+        body: {
+          apiToken: cf.apiToken || undefined,
+          zoneId: cf.zoneId || undefined,
+          accountId: cf.accountId || undefined,
+          tunnelId: cf.tunnelId || undefined,
+        },
       });
-      setCf({ apiToken: "", zoneId: "" });
+      setCf({ apiToken: "", zoneId: "", accountId: "", tunnelId: "" });
       setStatus("Saved. Key status re-checks automatically.");
       reload();
     } catch (err) {
@@ -89,6 +111,7 @@ export default function Domains() {
         record: DnsRecord;
         canonical: string;
         aliases: string[];
+        tunnel: { managed: boolean; ruleEnsured: boolean; service: string | null };
         verification: { dnsOk: boolean; httpsOk: boolean; detail: string };
       }>("/domains/switch", {
         method: "POST",
@@ -97,17 +120,20 @@ export default function Domains() {
           target: targetInput.trim() || undefined,
           recordType: (recordType || undefined) as "A" | "AAAA" | "CNAME" | undefined,
           copyFrom: copyFrom || undefined,
+          service: serviceInput.trim() || undefined,
         },
       });
       setSwitchName("");
       setTargetInput("");
       setCopyFrom("");
       setRecordType("");
+      setServiceInput("");
       const verified = res.verification.dnsOk && res.verification.httpsOk;
+      const tunneled = res.tunnel.managed ? ` Tunnel route ensured (${res.tunnel.service}).` : "";
       setStatus(
         verified
-          ? `Boom — now serving ${res.canonical} (${res.record.name} → ${res.record.content}). DNS + HTTPS verified; old URLs redirect automatically.`
-          : `⚠️ Switched to ${res.canonical} (${res.record.name} → ${res.record.content}), BUT: ${res.verification.detail}. Finish TLS/proxy setup, then open the new domain and confirm login before retiring the old one.`,
+          ? `Boom — now serving ${res.canonical} (${res.record.name} → ${res.record.content}). DNS + HTTPS verified; old URLs redirect automatically.${tunneled}`
+          : `⚠️ Switched to ${res.canonical} (${res.record.name} → ${res.record.content}), BUT: ${res.verification.detail}.${tunneled} Finish TLS/proxy setup, then open the new domain and confirm login before retiring the old one.`,
       );
       reload();
     } catch (err) {
@@ -156,6 +182,21 @@ export default function Domains() {
             <span className="text-slate-400 w-36">Current domain</span>
             <span className="font-mono text-blue-300">{config?.canonical ?? "(none set yet)"}</span>
           </div>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 w-36">Tunnel ingress</span>
+            {!config?.cloudflare.accountId || !config?.cloudflare.tunnelId ? (
+              <span className="text-slate-500">manual — save an Account + Tunnel ID below for full-auto</span>
+            ) : tunnelTesting ? (
+              <span className="text-slate-400">checking…</span>
+            ) : tunnel?.managed ? (
+              <span className="text-green-300">
+                ✓ auto{tunnel.canonicalService ? ` (current → ${tunnel.canonicalService})` : ""} ·{" "}
+                {tunnel.hostnames.length} hostname{tunnel.hostnames.length === 1 ? "" : "s"} routed
+              </span>
+            ) : (
+              <span className="text-amber-300">local config.yml — convert to cloud-managed once, or route by hand</span>
+            )}
+          </div>
           {(config?.aliases ?? []).length > 0 && (
             <div className="flex items-start gap-2">
               <span className="text-slate-400 w-36">Redirecting</span>
@@ -196,6 +237,12 @@ export default function Domains() {
             <option value="AAAA">AAAA (IPv6)</option>
             <option value="CNAME">CNAME (hostname)</option>
           </select>
+          <input
+            className={input}
+            placeholder="Tunnel service target (blank = copy current rule)"
+            value={serviceInput}
+            onChange={(e) => setServiceInput(e.target.value)}
+          />
         </div>
         {needsTarget && (
           <div className="text-xs text-slate-500 mt-2">
@@ -219,6 +266,14 @@ export default function Domains() {
           <div>
             <label className={label}>Zone ID</label>
             <input className={input} value={cf.zoneId} onChange={(e) => setCf({ ...cf, zoneId: e.target.value })} placeholder={config?.cloudflare.zoneId ?? ""} />
+          </div>
+          <div>
+            <label className={label}>Account ID (enables tunnel auto-ingress)</label>
+            <input className={input} value={cf.accountId} onChange={(e) => setCf({ ...cf, accountId: e.target.value })} placeholder={config?.cloudflare.accountId ?? ""} />
+          </div>
+          <div>
+            <label className={label}>Tunnel ID (enables tunnel auto-ingress)</label>
+            <input className={input} value={cf.tunnelId} onChange={(e) => setCf({ ...cf, tunnelId: e.target.value })} placeholder={config?.cloudflare.tunnelId ?? ""} />
           </div>
           <button onClick={saveCf} className={btn}>Save</button>
           <div>

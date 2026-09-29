@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CloudflareClient, CloudflareApiError } from "./index.js";
+import {
+  CloudflareClient,
+  CloudflareApiError,
+  ensureTunnelIngressRule,
+  tunnelServiceFor,
+} from "./index.js";
 
 function mockFetch(handler: (url: string, init?: RequestInit) => unknown): typeof fetch {
   return (async (url: unknown, init?: RequestInit) => {
@@ -64,5 +69,44 @@ describe("CloudflareClient", () => {
 
   it("requires a token", () => {
     expect(() => new CloudflareClient({ token: "" })).toThrow(/token is required/);
+  });
+});
+
+describe("tunnel ingress merge", () => {
+  const base = [
+    { hostname: "proxvm2.zone.example", service: "http://localhost:8080" },
+    { service: "http_status:404" },
+  ];
+  it("inserts new hostnames before the catch-all and keeps it last", () => {
+    const { rules, changed, previousService } = ensureTunnelIngressRule(base, "proxvm3.zone.example", "http://localhost:8080");
+    expect(changed).toBe(true);
+    expect(previousService).toBeNull();
+    expect(rules.map((r) => r.hostname ?? "(catch-all)")).toEqual([
+      "proxvm2.zone.example",
+      "proxvm3.zone.example",
+      "(catch-all)",
+    ]);
+    // Input untouched.
+    expect(base).toHaveLength(2);
+  });
+  it("is a no-op when the exact rule already exists", () => {
+    const { rules, changed } = ensureTunnelIngressRule(base, "PROXVM2.zone.example", "http://localhost:8080");
+    expect(changed).toBe(false);
+    expect(rules).toHaveLength(2);
+  });
+  it("updates the service when the hostname is already routed", () => {
+    const { rules, changed, previousService } = ensureTunnelIngressRule(base, "proxvm2.zone.example", "http://localhost:9090");
+    expect(changed).toBe(true);
+    expect(previousService).toBe("http://localhost:8080");
+    expect(rules[0]).toMatchObject({ hostname: "proxvm2.zone.example", service: "http://localhost:9090" });
+    expect(rules[rules.length - 1]).toMatchObject({ service: "http_status:404" });
+  });
+  it("appends when there is no catch-all", () => {
+    const { rules } = ensureTunnelIngressRule([{ hostname: "a.example", service: "http://x" }], "b.example", "http://x");
+    expect(rules.map((r) => r.hostname)).toEqual(["a.example", "b.example"]);
+  });
+  it("looks up the current service case-insensitively", () => {
+    expect(tunnelServiceFor(base, "PROXVM2.ZONE.EXAMPLE")).toBe("http://localhost:8080");
+    expect(tunnelServiceFor(base, "missing.zone.example")).toBeNull();
   });
 });

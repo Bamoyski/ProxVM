@@ -4,15 +4,19 @@ import type { CoreContext } from "@proxvm/core";
 import {
   AppError,
   assertValidHostname,
+  ensureTunnelIngressRule,
   getDomainConfig,
   normalizeHostname,
   removeDomainAlias,
   setCanonicalDomain,
+  tunnelServiceFor,
 } from "@proxvm/core";
 
 const cloudflareSchema = z.object({
   apiToken: z.string().max(512).optional(),
   zoneId: z.string().min(1).max(128).optional(),
+  accountId: z.string().min(1).max(128).optional(),
+  tunnelId: z.string().min(1).max(128).optional(),
 });
 
 function qualifyName(name: string, zoneName: string): string {
@@ -37,10 +41,17 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
   app.get("/domains/config", { preHandler: guard }, async () => {
     const config = await getDomainConfig(ctx.settings);
     const token = await ctx.settings.get("cloudflare.api_token");
+    const accountId = await ctx.settings.get("cloudflare.account_id");
+    const tunnelId = await ctx.settings.get("cloudflare.tunnel_id");
     return {
       canonical: config.canonical,
       aliases: config.aliases,
-      cloudflare: { configured: !!token?.value, zoneId: config.cloudflareZoneId },
+      cloudflare: {
+        configured: !!token?.value,
+        zoneId: config.cloudflareZoneId,
+        accountId: accountId?.value ?? null,
+        tunnelId: tunnelId?.value ?? null,
+      },
     };
   });
 
@@ -79,6 +90,12 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     if (body.zoneId !== undefined) {
       await ctx.settings.set("cloudflare.zone_id", body.zoneId.trim(), { category: "infrastructure" });
     }
+    if (body.accountId !== undefined) {
+      await ctx.settings.set("cloudflare.account_id", body.accountId.trim(), { category: "infrastructure" });
+    }
+    if (body.tunnelId !== undefined) {
+      await ctx.settings.set("cloudflare.tunnel_id", body.tunnelId.trim(), { category: "infrastructure" });
+    }
     ctx.invalidateCache();
     await ctx.audit.record({
       event: "SETTINGS_CHANGED",
@@ -96,6 +113,43 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     if (!zoneId) throw AppError.validation("Save a Cloudflare Zone ID first");
     const [token, zone] = await Promise.all([client.verifyToken(), client.getZone(zoneId)]);
     return { ok: true, tokenStatus: token.status, zone: { id: zone.id, name: zone.name, status: zone.status } };
+  });
+
+  app.get("/domains/tunnels", { preHandler: guard }, async () => {
+    const accountId = (await ctx.settings.get("cloudflare.account_id"))?.value;
+    if (!accountId) throw AppError.validation("Save a Cloudflare Account ID first");
+    const client = await ctx.getCloudflareClient();
+    const tunnels = await client.listTunnels(accountId);
+    return { tunnels: tunnels.map((t) => ({ id: t.id, name: t.name, status: t.status ?? null })) };
+  });
+
+  // Reports whether the tunnel is cloud-managed (ProxVM can edit ingress)
+  // or local-config (owner converts it once in the dashboard). Never writes.
+  app.post("/domains/tunnels/test", async (request) => {
+    await guard(request);
+    const [accountId, tunnelId] = await Promise.all([
+      ctx.settings.get("cloudflare.account_id"),
+      ctx.settings.get("cloudflare.tunnel_id"),
+    ]);
+    if (!accountId?.value || !tunnelId?.value) {
+      throw AppError.validation("Save a Cloudflare Account ID and Tunnel ID first");
+    }
+    const client = await ctx.getCloudflareClient();
+    try {
+      const { ingress } = await client.getTunnelIngress(accountId.value, tunnelId.value);
+      const config = await getDomainConfig(ctx.settings);
+      return {
+        ok: true,
+        managed: true,
+        hostnames: ingress.map((r) => r.hostname).filter((h): h is string => !!h),
+        canonicalService: config.canonical ? tunnelServiceFor(ingress, config.canonical) : null,
+      };
+    } catch (err) {
+      if (err instanceof AppError && err.statusCode === 404) {
+        return { ok: true, managed: false, hostnames: [], canonicalService: null };
+      }
+      throw err;
+    }
   });
 
   app.get("/domains/dns", { preHandler: guard }, async (request) => {
@@ -124,6 +178,7 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
         recordType: z.enum(["A", "AAAA", "CNAME"]).optional(),
         copyFrom: z.string().max(128).optional(),
         proxied: z.boolean().optional(),
+        service: z.string().min(1).max(253).optional(),
       })
       .parse(request.body);
     const zoneId = (await ctx.settings.get("cloudflare.zone_id"))?.value;
@@ -182,6 +237,43 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
           content: target,
           proxied: body.proxied ?? template?.proxied ?? true,
         });
+    // Full-auto tunnel leg: route the new hostname through the same tunnel
+    // service as the current domain before anything flips, so there is never
+    // a manual ingress step. Skipped silently when no tunnel is configured
+    // (the old manual-ingress flow still applies then).
+    let tunnel: { managed: boolean; ruleEnsured: boolean; service: string | null } = {
+      managed: false,
+      ruleEnsured: false,
+      service: null,
+    };
+    const [tunnelAccount, tunnelId] = await Promise.all([
+      ctx.settings.get("cloudflare.account_id"),
+      ctx.settings.get("cloudflare.tunnel_id"),
+    ]);
+    if (tunnelAccount?.value && tunnelId?.value) {
+      const { ingress, raw } = await client.getTunnelIngress(tunnelAccount.value, tunnelId.value).catch((err) => {
+        if (err instanceof AppError && err.statusCode === 404) {
+          throw AppError.validation(
+            "This tunnel runs on a local config.yml, so ProxVM cannot manage its ingress. " +
+              "Convert it to a cloud-managed tunnel once in the Cloudflare dashboard (or add the hostname there by hand), then Switch again.",
+          );
+        }
+        throw err;
+      });
+      const service =
+        body.service?.trim() ||
+        (config.canonical ? tunnelServiceFor(ingress, config.canonical) : null);
+      if (!service) {
+        throw AppError.validation(
+          "No ingress rule exists for the current domain and no service target was given — enter the tunnel service target once (e.g. http://localhost:8080, copied from your existing proxvm rule in the dashboard).",
+        );
+      }
+      const merged = ensureTunnelIngressRule(ingress, fqdn, service);
+      if (merged.changed) {
+        await client.putTunnelIngress(tunnelAccount.value, tunnelId.value, raw, merged.rules);
+      }
+      tunnel = { managed: true, ruleEnsured: true, service };
+    }
     // Verify before flipping: pointing canonical at an unresolvable name
     // would bounce every old URL into the void. DNS is the hard gate; the
     // HTTPS probe is advisory (grey-cloud records and still-provisioning
@@ -208,11 +300,13 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
         switchedTo: fqdn,
         dnsRecord: { id: record.id, type: record.type, content: record.content, proxied: record.proxied },
         aliases: updated.aliases,
+        tunnel,
         verification,
       },
     });
     return {
       record: { id: record.id, type: record.type, name: record.name, content: record.content, proxied: record.proxied },
+      tunnel,
       verification,
       ...updated,
     };
