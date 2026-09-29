@@ -1,35 +1,31 @@
 # ProxVM
 
-## ⚠️ WARNING — AI-Generated Code / Do Not Use in Production
-**This entire project is 100% AI-generated.**
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Self-Hosted](https://img.shields.io/badge/self--hosted-homelab-blue.svg)](#)
+[![Proxmox VE](https://img.shields.io/badge/Proxmox-VE-orange.svg)](#)
+[![Apache Guacamole](https://img.shields.io/badge/Apache-Guacamole-green.svg)](#)
 
-The code in this repository was generated and modified by AI coding agents. It was **not written, reviewed, or professionally audited by a human software engineer**. Although testing and security analysis have been performed, passing tests and automated security scans do **not** mean that this software is secure or suitable for real-world use.
-
-**Do not deploy this software to production. Do not use it to manage real infrastructure, accounts, credentials, virtual machines, networks, or other sensitive systems.**
-
-This repository is published primarily for **experimentation, learning, research, and demonstration purposes**. Any security vulnerabilities, bugs, unsafe assumptions, or other problems may still exist.
-
-If you choose to run it anyway, assume that **the code is untrusted and potentially insecure**.
-
-**Use at your own risk.**
-
----
+> **ProxVM** is an **open-source virtual-machine management** project for
+> **Proxmox VE** and **Apache Guacamole**.
+>
+> ## ⚠️ WARNING — AI-Generated Code / Do Not Use in Production
+> **This entire project is 100% AI-generated.**
+>
+> The code in this repository was generated and modified by AI coding agents. It was **not written, reviewed, or professionally audited by a human software engineer**. Although testing and security analysis have been performed, passing tests and automated security scans do **not** mean that this software is secure or suitable for real-world use.
+>
+> **Do not deploy this software to production. Do not use it to manage real infrastructure, accounts, credentials, virtual machines, networks, or other sensitive systems.**
+>
+> This repository is published primarily for **experimentation, learning, research, and demonstration purposes**. Any security vulnerabilities, bugs, unsafe assumptions, or other problems may still exist.
+>
+> If you choose to run it anyway, assume that **the code is untrusted and potentially insecure**.
+>
+> **Use at your own risk.**
+>
+> Repository and documentation: <https://github.com/Bamoyski/ProxVM>
 
 ProxVM is a real VM management platform for **Proxmox VE** and **Apache Guacamole**. It provisions real VMs from real templates via cloud-init, discovers the real guest IP through the QEMU guest agent, verifies guest credentials over SSH (Linux) / RDP port probe (Windows), creates real Guacamole connections in the Guacamole database, and launches real remote sessions.
 
 No mock data, no simulated infrastructure. If a service is unreachable, the UI shows the real error.
-
-## Features
-
-- **VM lifecycle**: provision (clone + cloud-init), start, stop, restart, delete — all against the real Proxmox API
-- **Credential vault**: per-VM guest credentials encrypted with AES-256-GCM; audited reveal/copy/rotation; SSH verification (Linux) and RDP port probing (Windows)
-- **Guacamole integration**: real connections written to the Guacamole SQL database with per-protocol (SSH/RDP/VNC) entries; session launch via the Guacamole REST token API with per-user synchronization
-- **IAM & RBAC**: roles, groups, per-VM access grants, temporary (expiring) access, and per-protocol permissions — deny-by-default, backend-authoritative
-- **Jobs & audit**: BullMQ provisioning pipeline with retry/reschedule/rollback, SSE progress streaming, and a tamper-evident audit log with secret redaction, CSV export, and retention pruning
-- **Setup wizard**: guided first-run configuration with live connection tests for Proxmox, Guacamole, PostgreSQL, and Redis
-- **Homelab operations**: one-click cloning, save-as-template, live migration, bulk power actions, scheduled power, RRD resource graphs, service auto-discovery, node balance guidance, and per-connection health checks
-- **Shareable sessions**: time-boxed, revocable, usage-capped Guacamole links that mint fresh tokens on open
-- **Everyday luxuries**: light/dark theme, mobile layout, Ctrl+K command palette, arrangeable dashboard, in-app help tutorials, and privacy/terms pages
 
 ## Architecture
 
@@ -76,15 +72,6 @@ docker compose up -d
 # In the wizard use: database host "postgres", redis host "redis"
 ```
 
-## IAM & RBAC
-
-- **Roles**: `ADMIN` (everything), `OPERATOR` (day-to-day VM/provisioning work), `USER` (launch assigned VMs, read own jobs/health). Deny-by-default: every route declares its required permission and the backend enforces it.
-- **Groups**: users can be organized into groups; group membership confers roles and VM access without per-user edits.
-- **VM access grants**: a user only sees and manages VMs explicitly assigned to them (`vm_access` table), except privileged roles which may also discover untracked Proxmox guests.
-- **Temporary access**: grants can carry an expiry timestamp; expired grants are ignored by authorization (and surfaced distinctly in the UI).
-- **Protocol permissions**: Guacamole launch is authorized per protocol — a grant may allow `ssh` but deny `rdp`/`vnc`. The frontend passes the requested protocol explicitly and never assumes a default connection.
-- **Audit logging**: authentication, authorization denials, VM lifecycle, credential reveal/copy/rotation, access-grant changes, and settings changes are all recorded with actor, timestamp, and redacted details.
-
 ## Provisioning pipeline
 
 ```
@@ -104,6 +91,14 @@ CREATE_GUACAMOLE_CONNECTION → VERIFY_GUACAMOLE → READY
 - **Linux**: cloud-init enabled template (cloud-init drive present), `qemu-guest-agent` installed in the image, cloud-init user/password supported.
 - **Windows**: only templates prepared with **Cloudbase-Init** on the Proxmox cloud-init drive are supported for automated provisioning. Templates registered as `unattend`/`none` are explicitly refused — the app will not pretend to provision them.
 
+## Privacy
+
+ProxVM is self-hosted: all accounts, credentials, configuration, and audit
+data stay on the operator's infrastructure. The application sends nothing to
+third parties (no telemetry, analytics, or tracking), sets a single
+strictly-necessary session cookie, and never logs plaintext secrets. The
+in-app **Legal** page carries the full privacy policy and terms of use.
+
 ## Security notes
 
 - All secrets in the app database are AES-256-GCM encrypted with the master key in `.proxvm/config.json` (restrict file permissions; it is excluded from git).
@@ -112,32 +107,14 @@ CREATE_GUACAMOLE_CONNECTION → VERIFY_GUACAMOLE → READY
 - Login rate limiting (10/min/IP) + account lockout; global API rate limit 400/min.
 - Never put secrets in frontend code, git, or logs.
 
-## Environment variables
-
-Copy `.env.example` to `.env` and adjust. The application reads only these variables; all other configuration is created by the setup wizard and stored in `.proxvm/config.json` (gitignored, restrict to `0600`):
-
-| Variable | Purpose | Example |
-|---|---|---|
-| `PROXVM_CONFIG_DIR` | Directory holding `config.json` | `./.proxvm` |
-| `PROXVM_HOST` / `PROXVM_PORT` | API listen address/port | `0.0.0.0` / `4000` |
-| `PROXVM_WEB_ORIGIN` | Public web origin (CORS/cookies) | `https://proxvm.example.com` |
-| `NODE_ENV` | `development` or `production` | `production` |
-| `PROXVM_LOG_LEVEL` | `debug`/`info`/`warn`/`error` | `info` |
-| `POSTGRES_DB`/`POSTGRES_USER`/`POSTGRES_PASSWORD` | Docker Compose database (compose only) | see `.env.example` |
-| `PROXVM_INTEGRATION`, `PROXMOX_URL`, `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`, `PROXMOX_VERIFY_SSL` | Integration tests against real Proxmox (tests only) | see `.env.example` |
-
-Never commit a real `.env` or the real `.proxvm/` directory.
-
 ## Tests
 
 ```bash
 npm test                   # offline unit + service tests (pg-mem, ioredis-mock)
-npm run typecheck          # TypeScript across all workspaces
-npm run build              # production builds (shared, core, api, worker, web)
 npm run test:integration   # real-infrastructure tests (requires configured services)
 ```
 
-Integration tests run against your REAL Proxmox/Guacamole once the app is configured. Enable with `PROXVM_INTEGRATION=1` plus `PROXMOX_URL`, `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`, and `PROXMOX_VERIFY_SSL` (see `.env.example`).
+Integration tests run against your REAL Proxmox/Guacamole once the app is configured.
 
 ## End-to-end provisioning test strategy
 
@@ -151,15 +128,9 @@ Integration tests run against your REAL Proxmox/Guacamole once the app is config
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for how to report vulnerabilities. Summary of controls: deny-by-default RBAC, server-side sessions with httpOnly SameSite=strict cookies, per-session CSRF tokens, login rate limiting + account lockout, AES-256-GCM credential encryption, Argon2id password hashing, audit log with secret redaction, and security regression tests (`iam-adversarial`, `rbac-authorization`, foundation auth tests).
+See [SECURITY.md](SECURITY.md) for how to report vulnerabilities. Summary of controls: deny-by-default RBAC, server-side sessions with httpOnly SameSite=strict cookies, per-session CSRF tokens, login rate limiting + account lockout, AES-256-GCM credential encryption, Argon2id password hashing, audit log with secret redaction, and security regression tests.
 
-## Privacy
-
-ProxVM is self-hosted: all accounts, credentials, configuration, and audit
-data stay on the operator's infrastructure. The application sends nothing to
-third parties (no telemetry, analytics, or tracking), sets a single
-strictly-necessary session cookie, and never logs plaintext secrets. The
-in-app **Legal** page carries the full privacy policy and terms of use.
+Deployments should terminate TLS in front of the web service (the bundled compose file serves plain HTTP for local use) and restrict who can reach the setup wizard and API ports.
 
 ## License
 

@@ -11,6 +11,21 @@ const queryClient = new QueryClient({
   },
 });
 
+// Canonical-domain bounce: after a domain switch the old hostnames stay in
+// DNS as redirect aliases, but this static bundle can't know that — so ask
+// the API (public, pre-login) where home is and move there, preserving path.
+// Unknown hosts (localhost, LAN IPs, fresh DNS) never redirect.
+void fetch("/api/domains/public", { credentials: "omit" })
+  .then((res) => (res.ok ? res.json() : null))
+  .then((data: { canonical?: string | null; aliases?: string[] } | null) => {
+    const canonical = (data?.canonical ?? "").toLowerCase();
+    const host = window.location.hostname.toLowerCase();
+    if (canonical && host !== canonical && (data?.aliases ?? []).includes(host)) {
+      window.location.replace(`https://${canonical}${window.location.pathname}${window.location.search}`);
+    }
+  })
+  .catch(() => undefined);
+
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

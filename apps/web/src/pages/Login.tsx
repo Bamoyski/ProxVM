@@ -139,6 +139,7 @@ export default function Login() {
             >
               GitHub repository &amp; documentation
             </a>
+            <div className="mt-1">by bamoyskistudios</div>
           </div>
         </div>
       </form>

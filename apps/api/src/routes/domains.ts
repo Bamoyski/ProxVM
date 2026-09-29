@@ -26,6 +26,14 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
   const ctx = opts.ctx;
   const guard = app.requirePermission("settings.manage");
 
+  // Public on purpose (no session, no CSRF): the SPA calls this before login
+  // to bounce alias hosts to the canonical domain. It reveals only hostnames
+  // that are already public via DNS — never tokens, settings, or records.
+  app.get("/domains/public", async () => {
+    const config = await getDomainConfig(ctx.settings);
+    return { canonical: config.canonical, aliases: config.aliases };
+  });
+
   app.get("/domains/config", { preHandler: guard }, async () => {
     const config = await getDomainConfig(ctx.settings);
     const token = await ctx.settings.get("cloudflare.api_token");
@@ -174,6 +182,22 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
           content: target,
           proxied: body.proxied ?? template?.proxied ?? true,
         });
+    // Verify before flipping: pointing canonical at an unresolvable name
+    // would bounce every old URL into the void. DNS is the hard gate; the
+    // HTTPS probe is advisory (grey-cloud records and still-provisioning
+    // certificates are the proxy's job, not a veto).
+    const verification = await ctx.verifyDomain(fqdn);
+    if (!verification.dnsOk) {
+      await ctx.audit.record({
+        event: "SETTINGS_CHANGED",
+        actorUserId: actor.id,
+        actorUsername: actor.username,
+        detail: { section: "domains", switchAborted: fqdn, reason: verification.detail },
+      });
+      throw AppError.validation(
+        `DNS for ${fqdn} does not resolve yet (${verification.detail}). The DNS record was saved — wait for propagation (or fix the target) and Switch again. Nothing was flipped.`,
+      );
+    }
     const updated = await setCanonicalDomain(ctx.settings, fqdn);
     await ctx.audit.record({
       event: "SETTINGS_CHANGED",
@@ -184,8 +208,13 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
         switchedTo: fqdn,
         dnsRecord: { id: record.id, type: record.type, content: record.content, proxied: record.proxied },
         aliases: updated.aliases,
+        verification,
       },
     });
-    return { record: { id: record.id, type: record.type, name: record.name, content: record.content, proxied: record.proxied }, ...updated };
+    return {
+      record: { id: record.id, type: record.type, name: record.name, content: record.content, proxied: record.proxied },
+      verification,
+      ...updated,
+    };
   });
 }

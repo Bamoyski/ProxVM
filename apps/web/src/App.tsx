@@ -23,6 +23,8 @@ import Help from "./pages/Help.js";
 import Legal from "./pages/Legal.js";
 import Schedules from "./pages/Schedules.js";
 import Domains from "./pages/Domains.js";
+import Contact from "./pages/Contact.js";
+import Donate from "./pages/Donate.js";
 import CommandPalette from "./components/CommandPalette.js";
 
 export interface Me {
@@ -65,6 +67,8 @@ const NAV = [
   { to: "/schedules", label: "Schedules" },
   { to: "/help", label: "Help" },
   { to: "/legal", label: "Legal" },
+  { to: "/contact", label: "Contact" },
+  { to: "/donate", label: "Donate" },
 ];
 
 function initialTheme(): "dark" | "light" {
@@ -264,6 +268,17 @@ export default function App() {
           >
             Log out
           </button>
+          <div className="text-[11px] text-slate-600 text-center pt-1">
+            by{" "}
+            <a
+              className="hover:text-slate-400 underline"
+              href="https://github.com/Bamoyski"
+              target="_blank"
+              rel="noreferrer"
+            >
+              bamoyskistudios
+            </a>
+          </div>
         </div>
       </aside>
       <CommandPalette
@@ -298,6 +313,8 @@ export default function App() {
           <Route path="/schedules" element={<Schedules />} />
           <Route path="/domains" element={<Domains />} />
           <Route path="/legal" element={<Legal />} />
+          <Route path="/contact" element={<Contact />} />
+          <Route path="/donate" element={<Donate />} />
           <Route path="/help" element={<Help can={(perm) => canNav(perm, helpLegacy(perm))} />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

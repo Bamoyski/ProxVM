@@ -1,9 +1,9 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";
-import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, checkVmHealth, getDomainConfig, resolveDomainRedirect, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, checkVmHealth, getAllowedWebOrigins, getDomainConfig, resolveDomainRedirect, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
@@ -50,9 +50,32 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   await app.register(cookie, {});
 
+  // CORS allowlist is dynamic: the configured env origin is always honored,
+  // and once a canonical domain exists its https origin (plus every redirect
+  // alias) is accepted too — otherwise a domain switch would lock the new
+  // domain out until someone edits the env and restarts. Evaluated per
+  // request from settings so switches take effect with no restart.
   if (opts.webOrigin) {
+    const staticOrigin = opts.webOrigin;
+    const corsDelegate: OriginFunction = (origin, cb) => {
+      void (async () => {
+        try {
+          if (!origin) return cb(null, true);
+          if (origin === staticOrigin) return cb(null, true);
+          if (opts.ctx && !opts.setupMode) {
+            const config = await getDomainConfig(opts.ctx.settings).catch(() => null);
+            if (config && getAllowedWebOrigins(staticOrigin, config).includes(origin)) {
+              return cb(null, true);
+            }
+          }
+          return cb(null, false);
+        } catch {
+          return cb(null, false);
+        }
+      })();
+    };
     await app.register(cors, {
-      origin: opts.webOrigin,
+      origin: corsDelegate,
       credentials: true,
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "X-CSRF-Token"],

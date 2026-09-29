@@ -85,7 +85,12 @@ export default function Domains() {
     setError(null);
     setStatus(null);
     try {
-      const res = await api<{ record: DnsRecord; canonical: string; aliases: string[] }>("/domains/switch", {
+      const res = await api<{
+        record: DnsRecord;
+        canonical: string;
+        aliases: string[];
+        verification: { dnsOk: boolean; httpsOk: boolean; detail: string };
+      }>("/domains/switch", {
         method: "POST",
         body: {
           name: switchName,
@@ -98,7 +103,12 @@ export default function Domains() {
       setTargetInput("");
       setCopyFrom("");
       setRecordType("");
-      setStatus(`Boom — now serving ${res.canonical} (${res.record.name} → ${res.record.content}). Old URLs redirect automatically.`);
+      const verified = res.verification.dnsOk && res.verification.httpsOk;
+      setStatus(
+        verified
+          ? `Boom — now serving ${res.canonical} (${res.record.name} → ${res.record.content}). DNS + HTTPS verified; old URLs redirect automatically.`
+          : `⚠️ Switched to ${res.canonical} (${res.record.name} → ${res.record.content}), BUT: ${res.verification.detail}. Finish TLS/proxy setup, then open the new domain and confirm login before retiring the old one.`,
+      );
       reload();
     } catch (err) {
       fail(err);

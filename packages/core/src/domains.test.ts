@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import RedisMock from "ioredis-mock";
 import {
   createCore,
+  getAllowedWebOrigins,
   normalizeHostname,
   resolveDomainRedirect,
   getDomainConfig,
@@ -67,6 +68,31 @@ describe("domain redirect matcher", () => {
     expect(
       resolveDomainRedirect({ host: "PROXVM.BENMOYER.EXAMPLE:443", url: "/", method: "GET", ...base }),
     ).toBe("https://proxvm1.benmoyer.example/");
+  });
+});
+
+describe("CORS origin allowlist", () => {
+  it("always honors the env origin and adds https for canonical + aliases", () => {
+    expect(
+      getAllowedWebOrigins("https://proxvm.zone.example", {
+        canonical: "proxvm1.zone.example",
+        aliases: ["proxvm.zone.example"],
+      }),
+    ).toEqual(["https://proxvm.zone.example", "https://proxvm1.zone.example"]);
+  });
+  it("works with no canonical set and tolerates a missing env", () => {
+    expect(getAllowedWebOrigins(undefined, { canonical: null, aliases: [] })).toEqual([]);
+    expect(getAllowedWebOrigins("http://localhost:5173", { canonical: null, aliases: [] })).toEqual([
+      "http://localhost:5173",
+    ]);
+  });
+  it("never adds plaintext http for public hostnames", () => {
+    const allowed = getAllowedWebOrigins(undefined, {
+      canonical: "proxvm1.zone.example",
+      aliases: ["proxvm.zone.example"],
+    });
+    expect(allowed.every((o) => o.startsWith("https://"))).toBe(true);
+    expect(allowed).not.toContain("http://proxvm1.zone.example");
   });
 });
 

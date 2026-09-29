@@ -1,3 +1,4 @@
+import { promises as dns } from "node:dns";
 import { AppError } from "../util/errors.js";
 import type { SettingsService } from "./settings.js";
 
@@ -92,6 +93,74 @@ export async function setCanonicalDomain(
   await settings.set(CANONICAL_KEY, host, { category: "system" });
   await settings.set(ALIASES_KEY, JSON.stringify([...new Set(aliases)]), { category: "system" });
   return { canonical: host, aliases: [...new Set(aliases)] };
+}
+
+/**
+ * Exact CORS origins the API accepts. The configured env origin is always
+ * honored (backward compatible with LAN/IP setups); on top of that, the
+ * canonical domain and every redirect alias are allowed as https origins so
+ * a domain switch keeps working without an API restart or env edit. Plain
+ * http is deliberately NOT added for public hostnames — TLS termination is
+ * the proxy's job and credentialed CORS over plaintext would downgrade it.
+ */
+export function getAllowedWebOrigins(
+  envOrigin: string | undefined,
+  config: DomainConfig,
+): string[] {
+  const out = new Set<string>();
+  const cleanEnv = (envOrigin ?? "").trim().replace(/\/+$/, "");
+  if (cleanEnv) out.add(cleanEnv);
+  const hosts = [config.canonical, ...config.aliases].filter((h): h is string => !!h);
+  for (const host of hosts) out.add(`https://${host}`);
+  return [...out];
+}
+
+export interface DomainVerification {
+  dnsOk: boolean;
+  httpsOk: boolean;
+  detail: string;
+}
+
+/**
+ * Pre-flip reachability check for a candidate domain. DNS resolution is the
+ * hard gate (flipping canonical to an unresolvable name bounces every old
+ * URL into the void); the HTTPS probe is advisory — a grey-cloud record or
+ * a still-provisioning certificate is a warning, not a veto, because TLS
+ * termination belongs to the proxy layer.
+ */
+export async function verifyDomainReachability(
+  fqdn: string,
+  opts?: { timeoutMs?: number },
+): Promise<DomainVerification> {
+  const timeoutMs = opts?.timeoutMs ?? 8000;
+  let dnsOk = false;
+  let dnsDetail = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const addrs = await dns.resolve(fqdn);
+      if (addrs.length > 0) {
+        dnsOk = true;
+        dnsDetail = `${addrs.length} address(es) resolve`;
+        break;
+      }
+      dnsDetail = "no addresses returned";
+    } catch (err) {
+      dnsDetail = err instanceof Error ? err.message.split(",")[0] ?? "lookup failed" : "lookup failed";
+    }
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 2000));
+  }
+  let httpsOk = false;
+  let httpsDetail = "not probed";
+  if (dnsOk) {
+    try {
+      const res = await fetch(`https://${fqdn}/api/health/live`, { signal: AbortSignal.timeout(timeoutMs) });
+      httpsOk = res.ok;
+      httpsDetail = httpsOk ? "login API reachable over TLS" : `HTTP ${res.status} from health endpoint`;
+    } catch (err) {
+      httpsDetail = err instanceof Error ? err.message.slice(0, 120) : "probe failed";
+    }
+  }
+  return { dnsOk, httpsOk, detail: `dns: ${dnsDetail}; https: ${httpsDetail}` };
 }
 
 export async function removeDomainAlias(

@@ -55,6 +55,7 @@ describe("domain migration tool", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let admin: Session;
   let user: Session;
+  let verifyDomainResult = { dnsOk: true, httpsOk: true, detail: "test stub" };
 
   const cfCalls: string[] = [];
   const records: Array<{ id: string; type: string; name: string; content: string; proxied: boolean; ttl: number }> = [
@@ -94,7 +95,13 @@ describe("domain migration tool", () => {
       redis: new RedisMockCtor() as never,
       logger: makeLogger("test"),
     });
-    const ctx = { ...base, getCloudflareClient: async () => fakeCf as never };
+    // Reachability is stubbed: real DNS/HTTPS probes have no business in unit
+    // tests. Individual cases flip `verifyDomainResult` to exercise the gate.
+    const ctx = {
+      ...base,
+      getCloudflareClient: async () => fakeCf as never,
+      verifyDomain: async () => ({ ...verifyDomainResult }),
+    };
 
     await ctx.users.create({
       username: "admin",
@@ -269,5 +276,39 @@ describe("domain migration tool", () => {
       payload: { name: "proxvm10", copyFrom: "no-such-id" },
     });
     expect(missing.statusCode).toBe(400);
+  });
+
+  it("exposes canonical + aliases publicly for the pre-login SPA redirect", async () => {
+    const pub = await app.inject({ method: "GET", url: "/api/domains/public" });
+    expect(pub.statusCode).toBe(200);
+    const body = pub.json() as { canonical: string; aliases: string[] };
+    expect(typeof body.canonical).toBe("string");
+    expect(Array.isArray(body.aliases)).toBe(true);
+  });
+
+  it("refuses to flip canonical when the new domain does not resolve", async () => {
+    const before = (await app.inject({ method: "GET", url: "/api/domains/config", headers: authA() }).then((r) => r.json())) as {
+      canonical: string;
+    };
+    verifyDomainResult = { dnsOk: false, httpsOk: false, detail: "dns: query refused" };
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/domains/switch",
+        headers: authA(),
+        payload: { name: "dead", target: "203.0.113.99" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    } finally {
+      verifyDomainResult = { dnsOk: true, httpsOk: true, detail: "test stub" };
+    }
+    const after = (await app.inject({ method: "GET", url: "/api/domains/config", headers: authA() }).then((r) => r.json())) as {
+      canonical: string;
+      aliases: string[];
+    };
+    // Flip aborted: canonical untouched, failed name NOT kept as an alias.
+    expect(after.canonical).toBe(before.canonical);
+    expect(after.aliases).not.toContain("dead.zone.example");
   });
 });

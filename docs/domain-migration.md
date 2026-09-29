@@ -7,21 +7,29 @@ Do the steps in order; nothing below requires database surgery.
 > **Shortcut:** the **Domains** page (Settings → Domains, administrators
 > only) automates most of this when Cloudflare manages your DNS: connect an
 > API token + Zone ID, then use **Switch domain** to point a name at the
-> current target, flip canonical, and keep the old domain redirecting — in
-> one audited step. The manual checklist below remains the fallback (and the
-> only path without Cloudflare).
+> current target, verify it resolves (and probe HTTPS), flip canonical, and
+> keep the old domain redirecting — in one audited step. The switch refuses
+> to flip while the new name does not resolve, so a typo can't strand you.
+> The manual checklist below remains the fallback (and the only path without
+> Cloudflare).
 
 ## What is domain-dependent (complete list)
 
 | # | Touchpoint | Where it lives | Change requires |
 |---|---|---|---|
-| 1 | Public web origin (CORS allowlist) | `PROXVM_WEB_ORIGIN` env var | API restart |
+| 1 | Public web origin (CORS allowlist) | Canonical domain setting + `PROXVM_WEB_ORIGIN` fallback | Nothing (evaluated per request) |
 | 2 | Guacamole browser URL in launch links | `guacamole.public_url` setting (Settings UI) | None (live immediately) |
 | 3 | DNS + TLS termination | Your reverse proxy / Cloudflare | Proxy reload |
 | 4 | Session cookies | Host-only, no `Domain` attribute | Nothing (see notes) |
+| 5 | Old-URL redirects | API redirect hook + SPA pre-login bounce + redirect aliases | Nothing (automatic) |
 
 There is deliberately nothing else: CSRF uses per-session tokens (no origin
 list), audit logs store paths not hosts, and no domain is hardcoded in code.
+
+CORS is resolved per request from `PROXVM_WEB_ORIGIN` (always honored) plus
+`https://` for the canonical domain and every redirect alias — a switch
+takes effect with no restart and no env edit. `PROXVM_WEB_ORIGIN` remains as
+the fallback for setups with no canonical domain set (LAN/IP access, dev).
 
 ## Checklist
 
@@ -30,12 +38,12 @@ list), audit logs store paths not hosts, and no domain is hardcoded in code.
 2. **Terminate TLS** for the new domain at the proxy. ProxVM itself serves
    plain HTTP behind the proxy; the API logs a warning if the public origin
    is plaintext HTTP.
-3. **Set `PROXVM_WEB_ORIGIN=https://new-domain.example`** in the API
-   environment (compose file, systemd unit, or shell) and **restart the API**.
-   CORS is an exact match — `https://new-domain.example` and
-   `https://www.new-domain.example` are different origins; list exactly the
-   origin browsers use. A wrong value breaks login with CORS errors, nothing
-   worse.
+3. CORS needs no action: once the canonical domain is set (via the Domains
+   page or step 6's verification), the API accepts the new `https://` origin
+   automatically. `PROXVM_WEB_ORIGIN` remains only as a fallback for setups
+   with no canonical domain (LAN/IP access, dev). If logins fail with CORS
+   errors, the origin in the browser address bar is not the canonical domain
+   and not a redirect alias — fix DNS/canonical, not the env.
 4. **Update the Guacamole public URL** in Settings → Guacamole (or re-run
    setup) if Guacamole's browser address changes too. This only affects the
    links opened by "launch" buttons; the server-side Guacamole URL/API is
