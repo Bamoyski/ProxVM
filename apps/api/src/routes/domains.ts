@@ -5,9 +5,11 @@ import {
   AppError,
   addDomainAlias,
   assertValidHostname,
+  checkSecurlyBlock,
   ensureTunnelIngressRule,
   getCloudflareConfig,
   getDomainConfig,
+  getSecurlyConfig,
   normalizeHostname,
   removeDomainAlias,
   setCanonicalDomain,
@@ -174,6 +176,48 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
       }
       throw err;
     }
+  });
+
+  // School-filter watch: asks Securly's broker whether the CURRENT canonical
+  // domain is blocked for the configured school user. Admin-only alert feed —
+  // never blocks, never rotates, never audits (it's a read-only poll).
+  app.get("/domains/filter-check", { preHandler: guard }, async () => {
+    const config = await getDomainConfig(ctx.settings);
+    if (!config.canonical) {
+      return { status: "unconfigured", hostname: null, verdict: null, ruleId: null, detail: "No canonical domain set" };
+    }
+    const { useremail } = await getSecurlyConfig(ctx.settings);
+    if (!useremail) {
+      return {
+        status: "unconfigured",
+        hostname: config.canonical,
+        verdict: null,
+        ruleId: null,
+        detail: "No school user email configured (PROXVM_SECURILY_USEREMAIL or Domains settings)",
+      };
+    }
+    return checkSecurlyBlock(config.canonical, useremail);
+  });
+
+  app.put("/domains/securly", async (request) => {
+    const actor = await guard(request);
+    const body = z.object({ useremail: z.string().max(254) }).parse(request.body);
+    const clean = body.useremail.trim();
+    if (clean && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) {
+      throw AppError.validation("That does not look like an email address");
+    }
+    if (clean) {
+      await ctx.settings.set("securly.useremail", clean, { category: "system" });
+    } else {
+      await ctx.db.query("DELETE FROM settings WHERE key = 'securly.useremail'");
+    }
+    await ctx.audit.record({
+      event: "SETTINGS_CHANGED",
+      actorUserId: actor.id,
+      actorUsername: actor.username,
+      detail: { section: "securly", configured: !!clean },
+    });
+    return { ok: true, configured: !!clean };
   });
 
   app.get("/domains/dns", { preHandler: guard }, async (request) => {

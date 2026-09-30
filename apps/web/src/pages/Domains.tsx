@@ -38,6 +38,7 @@ export default function Domains() {
   const [search, setSearch] = useState("");
   const [serviceInput, setServiceInput] = useState("");
   const [aliasInput, setAliasInput] = useState("");
+  const [securlyEmail, setSecurlyEmail] = useState("");
 
   const { data: config } = useQuery({
     queryKey: ["domains-config"],
@@ -65,11 +66,33 @@ export default function Domains() {
     staleTime: 60000,
   });
 
+  const { data: filter } = useQuery({
+    queryKey: ["domains-filter-check"],
+    queryFn: () =>
+      api<{ status: string; hostname: string | null; ruleId: string | null; detail: string }>("/domains/filter-check"),
+    retry: false,
+    staleTime: 60000,
+  });
+
+  const saveSecurly = async () => {
+    setError(null);
+    setStatus(null);
+    try {
+      await api("/domains/securly", { method: "PUT", body: { useremail: securlyEmail } });
+      setSecurlyEmail("");
+      setStatus("School-filter watch saved. Status re-checks automatically.");
+      reload();
+    } catch (err) {
+      fail(err);
+    }
+  };
+
   const reload = () => {
     void qc.invalidateQueries({ queryKey: ["domains-config"] });
     void qc.invalidateQueries({ queryKey: ["domains-cf-test"] });
     void qc.invalidateQueries({ queryKey: ["domains-dns"] });
     void qc.invalidateQueries({ queryKey: ["domains-tunnel-test"] });
+    void qc.invalidateQueries({ queryKey: ["domains-filter-check"] });
   };
 
   const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
@@ -194,6 +217,20 @@ export default function Domains() {
             )}
           </div>
           <div className="flex items-start gap-2">
+            <span className="text-slate-400 w-36">School filter</span>
+            {!filter ? (
+              <span className="text-slate-400">checking…</span>
+            ) : filter.status === "blocked" ? (
+              <span className="text-red-300">
+                ⛔ BLOCKED{filter.ruleId ? ` (rule ${filter.ruleId})` : ""} — {filter.hostname}: {filter.detail}
+              </span>
+            ) : filter.status === "clean" ? (
+              <span className="text-green-300">✓ reachable — {filter.hostname}: {filter.detail}</span>
+            ) : (
+              <span className="text-slate-500">{filter.detail}</span>
+            )}
+          </div>
+          <div className="flex items-start gap-2">
             <span className="text-slate-400 w-36">Redirecting</span>
             <span className="font-mono text-slate-300">
               {(config?.aliases ?? []).length > 0 ? config!.aliases.join(", ") : "(none — old URLs serve normally)"}
@@ -291,6 +328,18 @@ export default function Domains() {
               ))}
               {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <div className="text-xs text-slate-500">No records match.</div>}
               {!config?.cloudflare.zoneId && <div className="text-xs text-slate-500">No Zone ID wired on the server — see .env.example.</div>}
+            </div>
+          </div>
+          <div>
+            <label className={label}>School user email (filter watch oracle scope — a student address from the filtered school)</label>
+            <div className="flex gap-2">
+              <input
+                className={input}
+                placeholder="student@students.example.org"
+                value={securlyEmail}
+                onChange={(e) => setSecurlyEmail(e.target.value)}
+              />
+              <button onClick={saveSecurly} className={btn}>Save</button>
             </div>
           </div>
           <div>

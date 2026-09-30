@@ -85,6 +85,16 @@ the fallback for setups with no canonical domain set (LAN/IP access, dev).
    (or the dev log) and confirm no origin/TLS warnings.
 7. **Retire the old domain** (DNS + proxy) once verified.
 
+## School-filter watch (Securly)
+
+The Domains page shows whether the current canonical domain is blocked by
+Securly for your school, using Securly's own broker endpoint as an oracle
+(same verdict the extension enforces, checked from anywhere). Configure one
+school user email (Domains page, or `PROXVM_SECURILY_USEREMAIL` env) to scope
+the check to that school's policy. This is an admin alert only — it never
+rotates, never redirects, and unknown/timeout answers stay unknown rather
+than claiming clean.
+
 ## Removing Cloudflare Access (or any access proxy)
 
 Order matters: first complete steps 1–6 with the access proxy still in

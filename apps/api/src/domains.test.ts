@@ -410,6 +410,37 @@ describe("domain migration tool", () => {
     expect(redir.headers.location).toBe(`https://${before.canonical}/vms/abc`);
   });
 
+  it("manages the school-filter watch email and reports unconfigured without network", async () => {
+    const bad = await app.inject({
+      method: "PUT",
+      url: "/api/domains/securly",
+      headers: authA(),
+      payload: { useremail: "not-an-email" },
+    });
+    expect(bad.statusCode).toBe(400);
+    const denied = await app.inject({
+      method: "PUT",
+      url: "/api/domains/securly",
+      headers: authU(),
+      payload: { useremail: "s@example.org" },
+    });
+    expect(denied.statusCode).toBe(403);
+    // Empty email clears back to unconfigured; the check then answers
+    // without touching the network.
+    const clear = await app.inject({
+      method: "PUT",
+      url: "/api/domains/securly",
+      headers: authA(),
+      payload: { useremail: "" },
+    });
+    expect(clear.statusCode).toBe(200);
+    const check = await app.inject({ method: "GET", url: "/api/domains/filter-check", headers: authA() });
+    expect(check.statusCode).toBe(200);
+    expect(check.json()).toMatchObject({ status: "unconfigured" });
+    const checkDenied = await app.inject({ method: "GET", url: "/api/domains/filter-check", headers: authU() });
+    expect(checkDenied.statusCode).toBe(403);
+  });
+
   it("refuses to flip canonical when the new domain does not resolve", async () => {
     const before = (await app.inject({ method: "GET", url: "/api/domains/config", headers: authA() }).then((r) => r.json())) as {
       canonical: string;
