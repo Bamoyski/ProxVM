@@ -3,6 +3,7 @@ import { newDb } from "pg-mem";
 import { Pool } from "pg";
 import RedisMock from "ioredis-mock";
 import {
+  addDomainAlias,
   createCore,
   getAllowedWebOrigins,
   getCloudflareConfig,
@@ -156,5 +157,13 @@ describe("canonical domain settings", () => {
     await expect(setCanonicalDomain(ctx.settings, "localhost")).rejects.toThrow(/Invalid domain/);
     const removed = await removeDomainAlias(ctx.settings, "proxvm.benmoyer.example");
     expect(removed.aliases).toEqual([]);
+    // Parking an old hostname as a redirect without touching canonical.
+    const added = await addDomainAlias(ctx.settings, "https://OLD.benmoyer.example/");
+    expect(added).toEqual({ canonical: "proxvm1.benmoyer.example", aliases: ["old.benmoyer.example"] });
+    // Idempotent, and the current domain itself is refused.
+    expect((await addDomainAlias(ctx.settings, "old.benmoyer.example")).aliases).toEqual(["old.benmoyer.example"]);
+    await expect(addDomainAlias(ctx.settings, "proxvm1.benmoyer.example")).rejects.toThrow(/already the current domain/);
+    await expect(addDomainAlias(ctx.settings, "not a domain!!")).rejects.toThrow(/Invalid domain/);
+    await removeDomainAlias(ctx.settings, "old.benmoyer.example");
   });
 });

@@ -25,6 +25,8 @@ import Schedules from "./pages/Schedules.js";
 import Domains from "./pages/Domains.js";
 import Contact from "./pages/Contact.js";
 import Donate from "./pages/Donate.js";
+import Usage from "./pages/Usage.js";
+import Tickets from "./pages/Tickets.js";
 import CommandPalette from "./components/CommandPalette.js";
 
 export interface Me {
@@ -66,6 +68,8 @@ const NAV = [
   { to: "/health", label: "Health" },
   { to: "/schedules", label: "Schedules" },
   { to: "/help", label: "Help" },
+  { to: "/tickets", label: "Support" },
+  { to: "/usage", label: "Usage" },
   { to: "/legal", label: "Legal" },
   { to: "/contact", label: "Contact" },
   { to: "/donate", label: "Donate" },
@@ -128,6 +132,42 @@ export default function App() {
     enabled: setupMode === false && !isLoading && me !== undefined && me !== null,
   });
 
+  // Instance announcement (admin-set, settings-backed). Dismissal is keyed by
+  // content hash so reposting the same text stays dismissed, but any edit
+  // reappears for everyone.
+  const { data: announcement } = useQuery({
+    queryKey: ["announcement"],
+    queryFn: () => api<{ text: string | null; level: "info" | "warn" }>("/announcement"),
+    staleTime: 60000,
+    retry: false,
+    enabled: setupMode === false && !isLoading && me !== undefined && me !== null,
+  });
+  const announcementKey = announcement?.text
+    ? `proxvm-announcement-${announcement.text.length}-${announcement.text.slice(0, 32)}`
+    : null;
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  const showAnnouncement =
+    !!announcement?.text &&
+    announcementKey !== null &&
+    dismissedKey !== announcementKey &&
+    (() => {
+      try {
+        return window.localStorage.getItem(announcementKey) !== "1";
+      } catch {
+        return true;
+      }
+    })();
+  const dismissAnnouncement = () => {
+    if (announcementKey) {
+      try {
+        window.localStorage.setItem(announcementKey, "1");
+      } catch {
+        // private mode: dismissal just won't persist
+      }
+      setDismissedKey(announcementKey);
+    }
+  };
+
   if (restartRequired) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -187,6 +227,7 @@ export default function App() {
 
   const visibleNav = NAV.filter((n) => {
     if (n.to === "/users") return canNav("users.manage", isAdmin);
+    if (n.to === "/usage") return canNav("users.manage", isAdmin);
             if (n.to === "/settings") return canNav("settings.manage", isAdmin);
             if (n.to === "/domains") return canNav("settings.manage", isAdmin);
     if (n.to === "/roles") return canNav("roles.manage", isAdmin);
@@ -293,6 +334,23 @@ export default function App() {
         }}
       />
       <main className="flex-1 p-4 md:p-8 pt-16 md:pt-8 overflow-x-auto">
+        {showAnnouncement && announcement?.text && (
+          <div
+            className={`rounded p-3 mb-4 text-sm flex items-start gap-3 ${
+              announcement.level === "warn"
+                ? "bg-amber-900/40 border border-amber-700/60 text-amber-100"
+                : "bg-blue-900/40 border border-blue-700/60 text-blue-100"
+            }`}
+          >
+            <span className="flex-1">{announcement.text}</span>
+            <button
+              className="text-xs opacity-70 hover:opacity-100 underline shrink-0"
+              onClick={dismissAnnouncement}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <Routes>
           <Route path="/" element={<Dashboard me={me} />} />
           <Route path="/vms" element={<Vms me={me} />} />
@@ -315,6 +373,8 @@ export default function App() {
           <Route path="/legal" element={<Legal />} />
           <Route path="/contact" element={<Contact />} />
           <Route path="/donate" element={<Donate />} />
+          <Route path="/usage" element={<Usage />} />
+          <Route path="/tickets" element={<Tickets isAdmin={canNav("users.manage", isAdmin)} />} />
           <Route path="/help" element={<Help can={(perm) => canNav(perm, helpLegacy(perm))} />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

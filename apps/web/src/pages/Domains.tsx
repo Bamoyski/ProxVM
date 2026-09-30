@@ -37,6 +37,7 @@ export default function Domains() {
   const [switchName, setSwitchName] = useState("");
   const [search, setSearch] = useState("");
   const [serviceInput, setServiceInput] = useState("");
+  const [aliasInput, setAliasInput] = useState("");
 
   const { data: config } = useQuery({
     queryKey: ["domains-config"],
@@ -120,6 +121,22 @@ export default function Domains() {
     }
   };
 
+  const addAlias = async () => {
+    setError(null);
+    setStatus(null);
+    try {
+      const res = await api<{ canonical: string | null; aliases: string[] }>("/domains/aliases", {
+        method: "POST",
+        body: { host: aliasInput.trim() },
+      });
+      setAliasInput("");
+      setStatus(`Done — ${aliasInput.trim()} now redirects to ${res.canonical ?? "the current domain"}.`);
+      reload();
+    } catch (err) {
+      fail(err);
+    }
+  };
+
   const removeAlias = async (host: string) => {
     setError(null);
     try {
@@ -176,12 +193,12 @@ export default function Domains() {
               <span className="text-amber-300">local config.yml — convert to cloud-managed once, or route by hand</span>
             )}
           </div>
-          {(config?.aliases ?? []).length > 0 && (
-            <div className="flex items-start gap-2">
-              <span className="text-slate-400 w-36">Redirecting</span>
-              <span className="font-mono text-slate-300">{config?.aliases.join(", ")}</span>
-            </div>
-          )}
+          <div className="flex items-start gap-2">
+            <span className="text-slate-400 w-36">Redirecting</span>
+            <span className="font-mono text-slate-300">
+              {(config?.aliases ?? []).length > 0 ? config!.aliases.join(", ") : "(none — old URLs serve normally)"}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -274,6 +291,18 @@ export default function Domains() {
               ))}
               {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <div className="text-xs text-slate-500">No records match.</div>}
               {!config?.cloudflare.zoneId && <div className="text-xs text-slate-500">No Zone ID wired on the server — see .env.example.</div>}
+            </div>
+          </div>
+          <div>
+            <label className={label}>Redirect an old hostname here (visitors bounce to the current domain)</label>
+            <div className="flex gap-2">
+              <input
+                className={input}
+                placeholder="proxvm2.benmoyer.org"
+                value={aliasInput}
+                onChange={(e) => setAliasInput(e.target.value)}
+              />
+              <button onClick={addAlias} disabled={!aliasInput.trim()} className={btn}>Add</button>
             </div>
           </div>
           {(config?.aliases ?? []).length > 0 && (

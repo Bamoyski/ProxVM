@@ -17,6 +17,9 @@ export default function Users() {
   const [notice, setNotice] = useState<string | null>(null);
   const [resetId, setResetId] = useState<string | null>(null);
   const [resetPw, setResetPw] = useState({ a: "", b: "" });
+  const [quotaId, setQuotaId] = useState<string | null>(null);
+  const [quotaVal, setQuotaVal] = useState("");
+  const [quotaCurrent, setQuotaCurrent] = useState<string | null>(null);
   const [approveRole, setApproveRole] = useState<Record<string, string>>({});
   const { data: requestsData } = useQuery({
     queryKey: ["registration-requests"],
@@ -64,6 +67,37 @@ export default function Users() {
       void qc.invalidateQueries({ queryKey: ["users"] });
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const openQuota = async (id: string) => {
+    setQuotaId(quotaId === id ? null : id);
+    setQuotaCurrent(null);
+    setQuotaVal("");
+    if (quotaId !== id) {
+      try {
+        const res = await api<{ maxVms: number | null }>(`/users/${id}/quota`);
+        setQuotaCurrent(res.maxVms === null ? "unlimited" : String(res.maxVms));
+        if (res.maxVms !== null) setQuotaVal(String(res.maxVms));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  };
+
+  const saveQuota = async (id: string, clear: boolean) => {
+    setError(null);
+    try {
+      const maxVms = clear ? null : Number(quotaVal);
+      if (!clear && (!Number.isInteger(maxVms) || (maxVms as number) < 0)) {
+        setError("Quota must be a non-negative whole number (or Clear for unlimited).");
+        return;
+      }
+      await api(`/users/${id}/quota`, { method: "PUT", body: { maxVms } });
+      setQuotaId(null);
+      setNotice("Quota updated. Limits apply to non-administrators at provision time.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -247,6 +281,12 @@ export default function Users() {
                         Reset password
                       </button>
                       <button
+                        className="text-xs text-blue-400 underline"
+                        onClick={() => void openQuota(u.id)}
+                      >
+                        Quota
+                      </button>
+                      <button
                         className="text-xs underline disabled:opacity-40 disabled:no-underline"
                         disabled={u.id === undefined || u.isInitialAdmin || (onlyAdmin && u.active)}
                         title={
@@ -300,6 +340,30 @@ export default function Users() {
                           Set password
                         </button>
                         <span className="text-[11px] text-slate-500">Resets immediately and revokes their sessions.</span>
+                      </div>
+                    )}
+                    {quotaId === u.id && (
+                      <div className="flex flex-wrap gap-2 items-center mt-2">
+                        <span className="text-[11px] text-slate-500">Current: {quotaCurrent ?? "…"}</span>
+                        <input
+                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-28"
+                          placeholder="Max VMs"
+                          inputMode="numeric"
+                          value={quotaVal}
+                          onChange={(e) => setQuotaVal(e.target.value)}
+                        />
+                        <button
+                          className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded"
+                          onClick={() => void saveQuota(u.id, false)}
+                        >
+                          Set quota
+                        </button>
+                        <button
+                          className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded"
+                          onClick={() => void saveQuota(u.id, true)}
+                        >
+                          Clear
+                        </button>
                       </div>
                     )}
                   </td>

@@ -379,6 +379,37 @@ describe("domain migration tool", () => {
     }
   });
 
+  it("parks old hostnames as redirect aliases without touching canonical", async () => {
+    const before = (await app.inject({ method: "GET", url: "/api/domains/config", headers: authA() }).then((r) => r.json())) as {
+      canonical: string;
+    };
+    const denied = await app.inject({
+      method: "POST",
+      url: "/api/domains/aliases",
+      headers: authU(),
+      payload: { host: "old.zone.example" },
+    });
+    expect(denied.statusCode).toBe(403);
+    const bad = await app.inject({
+      method: "POST",
+      url: "/api/domains/aliases",
+      headers: authA(),
+      payload: { host: "not a domain!!" },
+    });
+    expect(bad.statusCode).toBe(400);
+    const added = await app.inject({
+      method: "POST",
+      url: "/api/domains/aliases",
+      headers: authA(),
+      payload: { host: "https://OLD.zone.example/" },
+    });
+    expect(added.statusCode).toBe(200);
+    expect(added.json()).toMatchObject({ canonical: before.canonical, aliases: expect.arrayContaining(["old.zone.example"]) });
+    const redir = await app.inject({ method: "GET", url: "/vms/abc", headers: { host: "old.zone.example" } });
+    expect(redir.statusCode).toBe(301);
+    expect(redir.headers.location).toBe(`https://${before.canonical}/vms/abc`);
+  });
+
   it("refuses to flip canonical when the new domain does not resolve", async () => {
     const before = (await app.inject({ method: "GET", url: "/api/domains/config", headers: authA() }).then((r) => r.json())) as {
       canonical: string;

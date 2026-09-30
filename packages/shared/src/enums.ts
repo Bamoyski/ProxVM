@@ -128,6 +128,10 @@ export const AUDIT_EVENTS = [
   "SHARE_CREATED",
   "SHARE_REVOKED",
   "SHARE_REDEEMED",
+  "QUOTA_DENIED",
+  "QUOTA_CHANGED",
+  "TICKET_CREATED",
+  "TICKET_STATUS_CHANGED",
 ] as const;
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, parseDbHost, normalizeHttpBaseUrl } from "@proxvm/core";
+import { AppError, getAnnouncement, parseDbHost, normalizeHttpBaseUrl, setAnnouncement } from "@proxvm/core";
 
 const proxmoxSchema = z.object({
   url: z.string().url(),
@@ -31,17 +31,30 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
 
   app.put("/settings/app", async (request) => {
     const actor = await guard(request);
-    const body = z.object({ retentionDays: z.number().int().min(1).max(3650).nullable() }).parse(request.body);
-    if (body.retentionDays === null) {
-      await ctx.db.query("DELETE FROM settings WHERE key = 'audit.retention_days'");
-    } else {
-      await ctx.settings.set("audit.retention_days", String(body.retentionDays), { category: "system" });
+    const body = z
+      .object({
+        retentionDays: z.number().int().min(1).max(3650).nullable().optional(),
+        announcementText: z.string().max(500).nullable().optional(),
+        announcementLevel: z.enum(["info", "warn"]).optional(),
+      })
+      .parse(request.body);
+    if (body.retentionDays !== undefined) {
+      if (body.retentionDays === null) {
+        await ctx.db.query("DELETE FROM settings WHERE key = 'audit.retention_days'");
+      } else {
+        await ctx.settings.set("audit.retention_days", String(body.retentionDays), { category: "system" });
+      }
+    }
+    if (body.announcementText !== undefined || body.announcementLevel !== undefined) {
+      const current = await getAnnouncement(ctx.settings);
+      const text = body.announcementText === undefined ? (current?.text ?? null) : body.announcementText;
+      await setAnnouncement(ctx.settings, text, body.announcementLevel ?? current?.level ?? "info");
     }
     await ctx.audit.record({
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,
-      detail: { section: "app", retentionDays: body.retentionDays },
+      detail: { section: "app", retentionDays: body.retentionDays, announcementChanged: body.announcementText !== undefined },
     });
     return { ok: true };
   });
@@ -141,13 +154,18 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
 
   app.get("/settings/app", { preHandler: guard }, async () => {
     const retention = await ctx.settings.get("audit.retention_days");
+    const announcement = await getAnnouncement(ctx.settings);
     return {
       app: {
         cookieSecure: ctx.localConfig.app.cookieSecure,
         sessionDurationHours: ctx.localConfig.app.sessionDurationHours,
         sessionIdleTimeoutMinutes: ctx.localConfig.app.sessionIdleTimeoutMinutes,
       },
-      settings: { retentionDays: retention ? Number(retention.value) : null },
+      settings: {
+        retentionDays: retention ? Number(retention.value) : null,
+        announcementText: announcement?.text ?? null,
+        announcementLevel: announcement?.level ?? "info",
+      },
     };
   });
 }

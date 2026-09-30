@@ -127,7 +127,7 @@ export default function Settings() {
               </select>
             </Field>
             <Field label="URL"><input className={input} value={gacField("url", g.url)} onChange={(e) => setGac({ ...gac, url: e.target.value })} /></Field>
-            <Field label="Public URL (for browser, e.g. https://guacamole.example.com/guacamole/)">
+            <Field label="Public URL (for browser, e.g. https://mainpc.benmoyer.org/guacamole/)">
               <input className={input} value={gacField("publicUrl", g.publicUrl ?? "")} onChange={(e) => setGac({ ...gac, publicUrl: e.target.value })} placeholder="Leave empty to use the URL above" />
             </Field>
             <div className="grid grid-cols-2 gap-2">
@@ -157,12 +157,23 @@ function AppSettings() {
   const [saved, setSaved] = useState<string | null>(null);
   const { data } = useQuery({
     queryKey: ["settings-app"],
-    queryFn: () => api<{ app: Record<string, unknown>; settings: { retentionDays: number | null } }>("/settings/app"),
+    queryFn: () =>
+      api<{
+        app: Record<string, unknown>;
+        settings: { retentionDays: number | null; announcementText: string | null; announcementLevel: "info" | "warn" };
+      }>("/settings/app"),
   });
   const [retention, setRetention] = useState("");
   const [touched, setTouched] = useState(false);
   const current = data?.settings?.retentionDays ?? null;
   const shown = touched ? retention : current === null ? "" : String(current);
+  const [announcement, setAnnouncementText] = useState("");
+  const [announcementTouched, setAnnouncementTouched] = useState(false);
+  const [announcementLevel, setAnnouncementLevel] = useState<"info" | "warn">("info");
+  const [announcementLevelTouched, setAnnouncementLevelTouched] = useState(false);
+  const currentAnnouncement = data?.settings?.announcementText ?? null;
+  const shownAnnouncement = announcementTouched ? announcement : (currentAnnouncement ?? "");
+  const shownLevel = announcementLevelTouched ? announcementLevel : (data?.settings?.announcementLevel ?? "info");
 
   const save = async () => {
     setError(null);
@@ -172,10 +183,25 @@ function AppSettings() {
       if (value !== null && (!Number.isInteger(value) || value < 1 || value > 3650)) {
         throw new Error("Retention must be blank (keep forever) or 1-3650 days");
       }
-      await api("/settings/app", { method: "PUT", body: { retentionDays: value } });
+      const body: { retentionDays: number | null; announcementText?: string | null; announcementLevel?: "info" | "warn" } = {
+        retentionDays: value,
+      };
+      if (announcementTouched || announcementLevelTouched) {
+        if (shownAnnouncement.trim() === "") {
+          body.announcementText = null;
+        } else {
+          if (shownAnnouncement.length > 500) throw new Error("Announcement must be 500 characters or fewer");
+          body.announcementText = shownAnnouncement;
+          body.announcementLevel = shownLevel;
+        }
+      }
+      await api("/settings/app", { method: "PUT", body });
       setSaved("Application settings saved");
       setTouched(false);
+      setAnnouncementTouched(false);
+      setAnnouncementLevelTouched(false);
       void qc.invalidateQueries({ queryKey: ["settings-app"] });
+      void qc.invalidateQueries({ queryKey: ["announcement"] });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -198,6 +224,31 @@ function AppSettings() {
         />
       </Field>
       <div className="text-xs text-slate-500">Entries older than this are pruned hourly.</div>
+      <Field label="Instance announcement (blank = none; shown to every signed-in user)">
+        <textarea
+          className={input}
+          placeholder="e.g. Maintenance Sunday 2–4 AM — sessions may drop briefly."
+          rows={2}
+          value={shownAnnouncement}
+          onChange={(e) => {
+            setAnnouncementText(e.target.value);
+            setAnnouncementTouched(true);
+          }}
+        />
+      </Field>
+      <Field label="Announcement style">
+        <select
+          className={input}
+          value={shownLevel}
+          onChange={(e) => {
+            setAnnouncementLevel(e.target.value === "warn" ? "warn" : "info");
+            setAnnouncementLevelTouched(true);
+          }}
+        >
+          <option value="info">Info (blue)</option>
+          <option value="warn">Warning (amber)</option>
+        </select>
+      </Field>
       <button onClick={save} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">Save</button>
     </div>
   );

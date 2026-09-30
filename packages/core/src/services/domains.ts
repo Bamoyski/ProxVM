@@ -152,12 +152,17 @@ export async function verifyDomainReachability(
   let httpsOk = false;
   let httpsDetail = "not probed";
   if (dnsOk) {
-    try {
-      const res = await fetch(`https://${fqdn}/api/health/live`, { signal: AbortSignal.timeout(timeoutMs) });
-      httpsOk = res.ok;
-      httpsDetail = httpsOk ? "login API reachable over TLS" : `HTTP ${res.status} from health endpoint`;
-    } catch (err) {
-      httpsDetail = err instanceof Error ? err.message.slice(0, 120) : "probe failed";
+    // Retried: right after an ingress write, cloudflared can take seconds to
+    // serve the new hostname. A single-shot probe would report a false 404.
+    for (let attempt = 0; attempt < 3 && !httpsOk; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 4000));
+      try {
+        const res = await fetch(`https://${fqdn}/api/health/live`, { signal: AbortSignal.timeout(timeoutMs) });
+        httpsOk = res.ok;
+        httpsDetail = httpsOk ? "login API reachable over TLS" : `HTTP ${res.status} from health endpoint`;
+      } catch (err) {
+        httpsDetail = err instanceof Error ? err.message.slice(0, 120) : "probe failed";
+      }
     }
   }
   return { dnsOk, httpsOk, detail: `dns: ${dnsDetail}; https: ${httpsDetail}` };
@@ -196,6 +201,28 @@ export async function getCloudflareConfig(
     accountId: fromEnv("PROXVM_CLOUDFLARE_ACCOUNT_ID") ?? account?.value ?? null,
     tunnelId: fromEnv("PROXVM_CLOUDFLARE_TUNNEL_ID") ?? tunnel?.value ?? null,
   };
+}
+
+/**
+ * Park an old hostname as a redirect alias without touching canonical.
+ * This is the "make the old URL forward to the new one" action for moves
+ * that happened outside the Switch flow (which only accumulates aliases
+ * when canonical actually changes).
+ */
+export async function addDomainAlias(
+  settings: Pick<SettingsService, "get" | "set">,
+  rawHost: string,
+): Promise<DomainConfig> {
+  const host = normalizeHostname(rawHost);
+  assertValidHostname(host);
+  const current = await getDomainConfig(settings);
+  if (current.canonical && host === current.canonical) {
+    throw AppError.validation(`${host} is already the current domain — nothing to redirect`);
+  }
+  if (current.aliases.includes(host)) return current;
+  const aliases = [...current.aliases, host];
+  await settings.set(ALIASES_KEY, JSON.stringify(aliases), { category: "system" });
+  return { canonical: current.canonical, aliases };
 }
 
 export async function removeDomainAlias(

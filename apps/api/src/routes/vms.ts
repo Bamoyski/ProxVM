@@ -3,6 +3,9 @@ import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import {
   AppError,
+  closePowerPeriod,
+  countUserVms,
+  getUserQuota,
   isAdmin,
   createSchedule,
   createShareLink,
@@ -52,6 +55,22 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
 
   app.post("/vms/provision", async (request, reply) => {
     const actor = await app.requirePermission("vm.create")(request);
+    // Hosting quotas: unset (null) means unlimited and this check vanishes.
+    // Administrators are exempt — they manage the infrastructure itself.
+    if (!actor.roles.includes("ADMIN")) {
+      const quota = await getUserQuota(ctx.db, actor.id);
+      if (quota !== null && (await countUserVms(ctx.db, actor.id)) >= quota) {
+        await ctx.audit.record({
+          event: "QUOTA_DENIED",
+          actorUserId: actor.id,
+          actorUsername: actor.username,
+          detail: { quota, action: "provision" },
+        });
+        throw AppError.forbidden(
+          `VM limit reached (${quota}). Contact your administrator to raise your quota.`,
+        );
+      }
+    }
     // Accept both full (Advanced) and partial (Basic) requests. Partial
     // requests are resolved to a full, schema-validated provisioning request
     // through the centralized defaults resolver; the pipeline below is
@@ -1212,6 +1231,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       );
     }
     await ctx.creds.delete(vm.id);
+    await closePowerPeriod(ctx.db, vm.id);
     await ctx.vms.softDelete(vm.id);
     // Soft-delete does not trigger FK cascades: remove access rows explicitly
     // so no dangling assignments survive the VM. Guacamole connections were

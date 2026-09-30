@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import {
   AppError,
+  addDomainAlias,
   assertValidHostname,
   ensureTunnelIngressRule,
   getCloudflareConfig,
@@ -62,6 +63,19 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
       actorUserId: actor.id,
       actorUsername: actor.username,
       detail: { section: "domains", canonical: config.canonical, aliases: config.aliases },
+    });
+    return config;
+  });
+
+  app.post("/domains/aliases", async (request) => {
+    const actor = await guard(request);
+    const body = z.object({ host: z.string().min(1).max(253) }).parse(request.body);
+    const config = await addDomainAlias(ctx.settings, body.host);
+    await ctx.audit.record({
+      event: "SETTINGS_CHANGED",
+      actorUserId: actor.id,
+      actorUsername: actor.username,
+      detail: { section: "domains", addedAlias: normalizeHostname(body.host), aliases: config.aliases },
     });
     return config;
   });

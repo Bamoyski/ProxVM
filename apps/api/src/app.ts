@@ -3,11 +3,12 @@ import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, checkVmHealth, getAllowedWebOrigins, getDomainConfig, resolveDomainRedirect, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, checkVmHealth, getAllowedWebOrigins, getDomainConfig, reconcileVmPower, resolveDomainRedirect, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
 import { domainRoutes } from "./routes/domains.js";
+import { billingRoutes } from "./routes/billing.js";
 import { authRoutes } from "./routes/auth.js";
 import { meRoutes } from "./routes/me.js";
 import { usersRoutes } from "./routes/users.js";
@@ -188,6 +189,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(healthRoutes, { prefix: "/api", ctx });
     await app.register(iamRoutes, { prefix: "/api", ctx });
     await app.register(domainRoutes, { prefix: "/api", ctx });
+    await app.register(billingRoutes, { prefix: "/api", ctx });
     startSessionCleanup(app, ctx);
     startIamSweep(app, ctx);
     startHomelabTickers(app, ctx);
@@ -263,19 +265,60 @@ export function startHomelabTickers(
       );
     }
   };
+  // Usage metering reconciler: compares live Proxmox power state against
+  // open metering periods and opens/closes on transitions only. Catches
+  // out-of-band changes (someone powers a VM on in Proxmox directly) and
+  // heals any missed action hooks. Read-only apart from metering rows;
+  // never touches VM power itself.
+  const runMetering = async (): Promise<void> => {
+    try {
+      const vms = await ctx.vms.list();
+      let client: Awaited<ReturnType<typeof ctx.getProxmoxClient>> | null = null;
+      try {
+        client = await ctx.getProxmoxClient();
+      } catch {
+        return;
+      }
+      for (const vm of vms) {
+        try {
+          const status = await client.qemuStatus(vm.node, vm.vmid);
+          const running = String((status as Record<string, unknown>).status ?? "").toLowerCase() === "running";
+          const changed = await reconcileVmPower(ctx.db, vm.id, running);
+          if (changed !== "unchanged") {
+            ctx.logger.debug({ vmId: vm.id, changed }, "metering period transition");
+          }
+        } catch (err) {
+          ctx.logger.warn(
+            { vmId: vm.id, error: err instanceof Error ? err.message : String(err) },
+            "metering reconcile failed for VM",
+          );
+        }
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "metering reconcile pass failed",
+      );
+    }
+  };
   void runSchedules();
+  void runMetering();
   const scheduleTimer = setInterval(() => {
     void runSchedules();
   }, scheduleIntervalMs);
   const healthTimer = setInterval(() => {
     void runHealth();
   }, healthIntervalMs);
-  for (const timer of [scheduleTimer, healthTimer]) {
+  const meteringTimer = setInterval(() => {
+    void runMetering();
+  }, healthIntervalMs);
+  for (const timer of [scheduleTimer, healthTimer, meteringTimer]) {
     (timer as unknown as { unref?: () => void }).unref?.();
   }
   app.addHook("onClose", async () => {
     clearInterval(scheduleTimer);
     clearInterval(healthTimer);
+    clearInterval(meteringTimer);
   });
 }
 
