@@ -2,6 +2,15 @@ import { PageTitle } from "../components/ui.js";
 
 export const DONATE_URL = "https://ko-fi.com/bamoyskistudios";
 
+const TIERS = [
+  { amount: "$3", blurb: "A coffee. Keeps a teenager debugging at 1 AM instead of sleeping." },
+  { amount: "$5", blurb: "Chips toward domain renewals — every proxvm*.benmoyer.org costs yearly rent." },
+  { amount: "$10", blurb: "Covers days of electricity for a homelab server humming 24/7." },
+  { amount: "$25", blurb: "Parts fund: SSDs, cables, fans, the unglamorous stuff servers eat." },
+  { amount: "$50", blurb: "RAM and storage upgrades — more room for everyone's VMs." },
+  { amount: "$100+", blurb: "Lab legend status. You are directly funding the next Proxmox node." },
+];
+
 export default function Donate() {
   return (
     <div className="max-w-3xl">
@@ -24,6 +33,17 @@ export default function Donate() {
         >
           ☕ Donate on Ko-fi
         </a>
+        <div>
+          <h2 className="text-base font-medium text-slate-100 mb-2">What your donation buys</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {TIERS.map((t) => (
+              <div key={t.amount} className="bg-slate-800/60 border border-slate-700/60 rounded p-3">
+                <div className="font-mono text-amber-300 text-sm mb-1">{t.amount}</div>
+                <div className="text-xs text-slate-400">{t.blurb}</div>
+              </div>
+            ))}
+          </div>
+        </div>
         <p className="text-slate-500 text-xs">
           Donations go through Ko-fi; ProxVM itself never touches payment details. Donations are
           voluntary and do not buy features, support SLAs, or influence access decisions.
