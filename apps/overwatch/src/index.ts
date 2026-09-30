@@ -271,7 +271,13 @@ export async function buildOverwatchApp(ctx: OwContext): Promise<FastifyInstance
 async function main(): Promise<void> {
   const logger = makeLogger("overwatch");
   const port = Number(process.env.PROXVM_OVERWATCH_PORT ?? "4001");
-  const host = process.env.PROXVM_OVERWATCH_HOST ?? "127.0.0.1";
+  // 0.0.0.0 *inside the container* is required: Docker port publishing
+  // forwards to the container address, so a loopback-only listener accepts
+  // the TCP handshake (via the proxy) and then drops it — the classic
+  // "empty response" symptom. Host exposure is controlled one layer up, by
+  // the compose `127.0.0.1:4001:4001` mapping. Do not "fix" this back to
+  // 127.0.0.1 without also changing how the port is published.
+  const host = process.env.PROXVM_OVERWATCH_HOST ?? "0.0.0.0";
   const config = await loadConfig();
   if (!config) {
     logger.error({}, "Overwatch requires a configured ProxVM (run setup first)");

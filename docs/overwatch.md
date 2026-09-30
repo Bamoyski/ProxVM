@@ -13,8 +13,11 @@ except SQL, which is itself double-gated (see below).
 2. The bearer token is **fail-closed**: with `PROXVM_OVERWATCH_TOKEN` empty,
    every protected route refuses. Generate one with `openssl rand -hex 32`
    into the local `.env` (gitignored).
-3. Binds `127.0.0.1` by default. Expose further only behind real
-   authentication (Cloudflare Access, Tailscale) — never the open internet.
+3. Reachable only from the Docker host by default (compose publishes
+   `127.0.0.1:4001:4001`). The process itself listens on `0.0.0.0` *inside*
+   the container — required, or published-port traffic is accepted then
+   dropped (empty responses). Expose further only behind real authentication
+   (Cloudflare Access, Tailscale) — never the open internet.
 4. **No CORS plugin installed on purpose**: cross-origin browsers cannot read
    responses, which makes the bearer token CSRF-proof.
 5. Rate-limited (60/min). Denials are logged; SQL executions are audited.

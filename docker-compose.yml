@@ -59,7 +59,11 @@ services:
     environment:
       PROXVM_CONFIG_DIR: /data/.proxvm
       NODE_ENV: production
-      PROXVM_OVERWATCH_HOST: "127.0.0.1"
+      # NOTE: the process must listen on 0.0.0.0 *inside* the container or
+      # published-port traffic never reaches it (accept-then-drop). Setting
+      # this to 127.0.0.1 breaks the service — host restriction lives in the
+      # ports mapping below, not here.
+      PROXVM_OVERWATCH_HOST: "0.0.0.0"
       PROXVM_OVERWATCH_PORT: "4001"
       # Required: god-mode bearer token. Generate with
       # `openssl rand -hex 32` and keep it in the local .env (gitignored).
