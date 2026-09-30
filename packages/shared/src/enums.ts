@@ -132,6 +132,7 @@ export const AUDIT_EVENTS = [
   "QUOTA_CHANGED",
   "TICKET_CREATED",
   "TICKET_STATUS_CHANGED",
+  "VM_FIREWALL_CHANGED",
 ] as const;
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 

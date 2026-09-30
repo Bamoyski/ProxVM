@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, explainDenial, jobEventSource } from "../api.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
 import { StatusBadge, PageTitle, ErrorBox, useConfirm } from "../components/ui.js";
+import VmFirewallSection from "./VmFirewallSection.js";
 
 interface Me {
   id: string;
@@ -536,6 +537,8 @@ export default function VmDetail({ me }: { me: Me }) {
       )}
 
       <VmGraphs points={statsData?.points ?? []} timeframe={timeframe} setTimeframe={setTimeframe} />
+
+      {canEdit && <VmFirewallSection vmId={id} />}
 
       {canEdit && (
         <VmShareSection

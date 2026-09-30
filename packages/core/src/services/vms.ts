@@ -351,5 +351,6 @@ function toVmRecord(row: VmRow): VmRecord {
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
     privacyFlag: row.privacy_flag ?? false,
+    firewallIsolated: row.firewall_isolated ?? false,
   };
 }

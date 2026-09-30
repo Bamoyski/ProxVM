@@ -60,6 +60,7 @@ export interface VmRow {
   updated_at: Date;
   deleted_at: Date | null;
   privacy_flag: boolean;
+  firewall_isolated: boolean;
 }
 
 export interface CredentialRow {

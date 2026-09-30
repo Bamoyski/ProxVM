@@ -3,12 +3,12 @@ import { PageTitle } from "../components/ui.js";
 export const DONATE_URL = "https://ko-fi.com/bamoyskistudios";
 
 const TIERS = [
-  { amount: "$3", blurb: "A coffee. Keeps a teenager debugging at 1 AM instead of sleeping." },
-  { amount: "$5", blurb: "Chips toward domain renewals — every proxvm*.benmoyer.org costs yearly rent." },
-  { amount: "$10", blurb: "Covers days of electricity for a homelab server humming 24/7." },
-  { amount: "$25", blurb: "Parts fund: SSDs, cables, fans, the unglamorous stuff servers eat." },
-  { amount: "$50", blurb: "RAM and storage upgrades — more room for everyone's VMs." },
-  { amount: "$100+", blurb: "Lab legend status. You are directly funding the next Proxmox node." },
+  { amount: "$3", blurb: "Buys the coffee behind the next bugfix." },
+  { amount: "$5", blurb: "Helps cover yearly domain renewals." },
+  { amount: "$10", blurb: "Helps cover a month of power for an always-on lab server." },
+  { amount: "$25", blurb: "Goes to parts: SSDs, cables, replacement fans." },
+  { amount: "$50", blurb: "Goes to RAM and storage upgrades for hosted VMs." },
+  { amount: "$100+", blurb: "Directly funds the next Proxmox node." },
 ];
 
 export default function Donate() {

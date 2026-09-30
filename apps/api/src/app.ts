@@ -9,6 +9,7 @@ import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
 import { domainRoutes } from "./routes/domains.js";
 import { billingRoutes } from "./routes/billing.js";
+import { firewallRoutes } from "./routes/firewall.js";
 import { authRoutes } from "./routes/auth.js";
 import { meRoutes } from "./routes/me.js";
 import { usersRoutes } from "./routes/users.js";
@@ -190,6 +191,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(iamRoutes, { prefix: "/api", ctx });
     await app.register(domainRoutes, { prefix: "/api", ctx });
     await app.register(billingRoutes, { prefix: "/api", ctx });
+    await app.register(firewallRoutes, { prefix: "/api", ctx });
     startSessionCleanup(app, ctx);
     startIamSweep(app, ctx);
     startHomelabTickers(app, ctx);

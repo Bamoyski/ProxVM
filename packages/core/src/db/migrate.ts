@@ -19,6 +19,7 @@ import { homelabMigration } from "./migrations/009_homelab.js";
 import { registrationMigration } from "./migrations/010_registration.js";
 import { vmPrivacyMigration } from "./migrations/011_vm_privacy.js";
 import { billingFoundationsMigration } from "./migrations/012_billing_foundations.js";
+import { firewallIsolatedMigration } from "./migrations/013_firewall_isolated.js";
 
 export const MIGRATIONS: Migration[] = [
   { id: "001", name: "initial", sql: initialMigration },
@@ -33,6 +34,7 @@ export const MIGRATIONS: Migration[] = [
   { id: "010", name: "registration", sql: registrationMigration },
   { id: "011", name: "vm_privacy", sql: vmPrivacyMigration },
   { id: "012", name: "billing_foundations", sql: billingFoundationsMigration },
+  { id: "013", name: "firewall_isolated", sql: firewallIsolatedMigration },
 ];
 
 export async function runMigrations(db: Queryable, logger: Logger): Promise<string[]> {

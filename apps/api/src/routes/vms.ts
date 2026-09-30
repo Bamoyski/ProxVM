@@ -186,6 +186,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         name: res?.name !== undefined && res.name !== "" ? String(res.name) : vm.name,
         tracked: true,
         private: vm.privacyFlag,
+        isolated: vm.firewallIsolated,
         status: res ? String(res.status ?? "unknown") : vm.status,
         osType: vm.osType,
         osName: vm.osName,

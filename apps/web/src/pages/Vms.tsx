@@ -23,6 +23,7 @@ interface VmRow {
   guacamole: { created: boolean; status: string | null; protocol: string | null; port: number | null } | null;
   credentialStatus: string | null;
   private?: boolean;
+  isolated?: boolean;
 }
 
 function fmtBytes(n: unknown): string {
@@ -610,6 +611,7 @@ export default function Vms({ me }: { me: Me }) {
                 <td className="py-2"><StatusBadge status={row.status} /></td>
                 <td>
                   {row.private && <span title="Privacy-flagged: invisible without a direct grant">🔒 </span>}
+                  {row.isolated && <span title="Network-isolated: default-deny firewall, explicit allows only">🛡️ </span>}
                   {row.id ? (
                     <Link to={`/vms/${row.id}`} className="text-blue-400 hover:underline">{row.name}</Link>
                   ) : (
