@@ -1,10 +1,23 @@
 import { PageTitle } from "../components/ui.js";
+import { useSiteContent } from "../content.js";
 
 export const CONTACT_EMAIL = "bamoyskistudios@gmail.com";
 export const GITHUB_PROFILE_URL = "https://github.com/Bamoyski";
 export const GITHUB_REPO_URL = "https://github.com/Bamoyski/ProxVM";
 
+function displayHost(url: string): string {
+  try {
+    return new URL(url).host + new URL(url).pathname.replace(/\/$/, "");
+  } catch {
+    return url;
+  }
+}
+
 export default function Contact() {
+  const { get, getHttps } = useSiteContent();
+  const email = get("contact.email") ?? CONTACT_EMAIL;
+  const github = getHttps("contact.github") ?? GITHUB_PROFILE_URL;
+  const repo = getHttps("contact.repo") ?? GITHUB_REPO_URL;
   return (
     <div className="max-w-3xl">
       <PageTitle title="Contact" />
@@ -16,30 +29,30 @@ export default function Contact() {
         <div className="space-y-2">
           <div className="flex items-center gap-3">
             <span className="text-slate-500 w-20">Email</span>
-            <a className="font-mono text-blue-300 hover:text-blue-200 underline" href={`mailto:${CONTACT_EMAIL}`}>
-              {CONTACT_EMAIL}
+            <a className="font-mono text-blue-300 hover:text-blue-200 underline" href={`mailto:${email}`}>
+              {email}
             </a>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-slate-500 w-20">GitHub</span>
             <a
               className="font-mono text-blue-300 hover:text-blue-200 underline"
-              href={GITHUB_PROFILE_URL}
+              href={github}
               target="_blank"
               rel="noreferrer"
             >
-              github.com/Bamoyski
+              {displayHost(github)}
             </a>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-slate-500 w-20">Project</span>
             <a
               className="font-mono text-blue-300 hover:text-blue-200 underline"
-              href={GITHUB_REPO_URL}
+              href={repo}
               target="_blank"
               rel="noreferrer"
             >
-              github.com/Bamoyski/ProxVM
+              {displayHost(repo)}
             </a>
           </div>
         </div>

@@ -25,6 +25,7 @@ import Schedules from "./pages/Schedules.js";
 import Domains from "./pages/Domains.js";
 import Contact from "./pages/Contact.js";
 import Donate from "./pages/Donate.js";
+import Content from "./pages/Content.js";
 import Usage from "./pages/Usage.js";
 import Tickets from "./pages/Tickets.js";
 import CommandPalette from "./components/CommandPalette.js";
@@ -68,6 +69,7 @@ const NAV = [
   { to: "/health", label: "Health" },
   { to: "/schedules", label: "Schedules" },
   { to: "/help", label: "Help" },
+  { to: "/content", label: "Content" },
   { to: "/tickets", label: "Support" },
   { to: "/usage", label: "Usage" },
   { to: "/legal", label: "Legal" },
@@ -227,6 +229,7 @@ export default function App() {
 
   const visibleNav = NAV.filter((n) => {
     if (n.to === "/users") return canNav("users.manage", isAdmin);
+    if (n.to === "/content") return canNav("settings.manage", isAdmin);
     if (n.to === "/usage") return canNav("users.manage", isAdmin);
             if (n.to === "/settings") return canNav("settings.manage", isAdmin);
             if (n.to === "/domains") return canNav("settings.manage", isAdmin);
@@ -373,6 +376,7 @@ export default function App() {
           <Route path="/legal" element={<Legal />} />
           <Route path="/contact" element={<Contact />} />
           <Route path="/donate" element={<Donate />} />
+          <Route path="/content" element={<Content />} />
           <Route path="/usage" element={<Usage />} />
           <Route path="/tickets" element={<Tickets isAdmin={canNav("users.manage", isAdmin)} />} />
           <Route path="/help" element={<Help can={(perm) => canNav(perm, helpLegacy(perm))} />} />
