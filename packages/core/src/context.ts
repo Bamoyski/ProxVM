@@ -21,6 +21,7 @@ import { ProxmoxClient } from "./proxmox/client.js";
 import { createGuacamoleDbClient, type GuacamoleDbClient } from "./guacamole/db.js";
 import { GuacamoleApiClient } from "./guacamole/api.js";
 import { CloudflareClient } from "./cloudflare/client.js";
+import { ProxmoxBackupClient } from "./pbs/client.js";
 import { getCloudflareConfig, verifyDomainReachability, type DomainVerification } from "./services/domains.js";
 import { createPgPool } from "./db/pool.js";
 import { parseDbHost } from "./util/misc.js";
@@ -54,6 +55,7 @@ export interface CoreContext {
   getGuacDb: () => Promise<GuacamoleDbClient>;
   getGuacApi: () => Promise<GuacamoleApiClient | null>;
   getCloudflareClient: () => Promise<CloudflareClient>;
+  getPbsClient: () => Promise<ProxmoxBackupClient | null>;
   verifyDomain: (fqdn: string) => Promise<DomainVerification>;
   runHealthChecks: () => ReturnType<typeof runHealthChecks>;
   rotateCredential: (
@@ -192,6 +194,15 @@ export async function createCore(
         );
       }
       return new CloudflareClient({ token: config.apiToken });
+    },
+    getPbsClient: async () => {
+      const s = await settings.pbs();
+      if (!s) return null;
+      return new ProxmoxBackupClient({
+        url: s.url,
+        tokenId: s.tokenId,
+        tokenSecret: s.tokenSecret,
+      });
     },
     verifyDomain: async (fqdn: string): Promise<DomainVerification> => verifyDomainReachability(fqdn),
     runHealthChecks: async () =>

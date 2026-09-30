@@ -133,6 +133,7 @@ export const AUDIT_EVENTS = [
   "TICKET_CREATED",
   "TICKET_STATUS_CHANGED",
   "VM_FIREWALL_CHANGED",
+  "OVERWATCH_SQL",
 ] as const;
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 

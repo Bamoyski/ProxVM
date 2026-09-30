@@ -13,6 +13,13 @@ export interface StoredProxmoxSettings {
   defaultNetwork: string | null;
 }
 
+export interface StoredPbsSettings {
+  url: string;
+  tokenId: string;
+  tokenSecret: string;
+  datastore: string | null;
+}
+
 export interface StoredGuacamoleSettings {
   engine: "postgresql" | "mariadb" | "mysql";
   url: string;
@@ -101,6 +108,20 @@ export class SettingsService {
       defaultNode: await this.getPlain("proxmox.default_node"),
       defaultStorage: await this.getPlain("proxmox.default_storage"),
       defaultNetwork: await this.getPlain("proxmox.default_network"),
+    };
+  }
+
+  /** PBS wiring. Null until configured — the integration is baseline-only (no live PBS yet). */
+  async pbs(): Promise<StoredPbsSettings | null> {
+    const url = await this.getPlain("pbs.url");
+    if (!url) return null;
+    const tokenSecret = await this.getPlain("pbs.token_secret");
+    if (tokenSecret === null) return null;
+    return {
+      url,
+      tokenId: (await this.getPlain("pbs.token_id")) ?? "",
+      tokenSecret,
+      datastore: await this.getPlain("pbs.datastore"),
     };
   }
 

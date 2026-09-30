@@ -12,8 +12,8 @@
     "dev:api": "npm run dev -w @proxvm/api",
     "dev:worker": "npm run dev -w @proxvm/worker",
     "dev:web": "npm run dev -w @proxvm/web",
-    "build": "npm run build -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web",
-    "typecheck": "npm run typecheck -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web",
+    "build": "npm run build -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web -w @proxvm/overwatch",
+    "typecheck": "npm run typecheck -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web -w @proxvm/overwatch",
     "test": "npm run test -w @proxvm/shared -w @proxvm/core -w @proxvm/api",
     "test:integration": "npm run test:integration -w @proxvm/api",
     "db:migrate": "npm run db:migrate -w @proxvm/api"

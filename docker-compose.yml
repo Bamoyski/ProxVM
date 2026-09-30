@@ -52,6 +52,33 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  overwatch:
+    build:
+      context: .
+      dockerfile: docker/overwatch.Dockerfile
+    environment:
+      PROXVM_CONFIG_DIR: /data/.proxvm
+      NODE_ENV: production
+      PROXVM_OVERWATCH_HOST: "127.0.0.1"
+      PROXVM_OVERWATCH_PORT: "4001"
+      # Required: god-mode bearer token. Generate with
+      # `openssl rand -hex 32` and keep it in the local .env (gitignored).
+      # The service refuses every request while this is empty.
+      PROXVM_OVERWATCH_TOKEN: "${PROXVM_OVERWATCH_TOKEN:-}"
+      # Optional: mount the Docker socket read-only to enable /docker/logs.
+      # DOCKER_SOCK: /var/run/docker.sock
+    volumes:
+      - proxvm-config:/data/.proxvm
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:4001:4001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:
