@@ -17,7 +17,7 @@ import {
 } from "@proxvm/core";
 import type { UserWithRoles } from "@proxvm/shared";
 import { isReadOnlyStatement, parseBearerToken, stripDockerStream } from "./inspect.js";
-import { DASHBOARD_HTML } from "./dashboard.js";
+import { APP_CSS, APP_JS, DASHBOARD_HTML } from "./dashboard.js";
 
 // Overwatch: god-mode observability for the ProxVM operator. Separate port,
 // separate threat model from the main API:
@@ -179,6 +179,23 @@ export async function buildOverwatchApp(ctx: OwContext): Promise<FastifyInstance
       .header("Content-Type", "text/html; charset=utf-8")
       .header("Cache-Control", "no-store")
       .send(DASHBOARD_HTML);
+  });
+
+  // CSS/JS as separate same-origin responses: the reverse proxy sends
+  // `Content-Security-Policy: default-src 'self'` (no unsafe-inline), which
+  // silently kills inline <style>/<script> and leaves a dead unstyled page.
+  app.get("/app.css", async (_request, reply) => {
+    return reply
+      .header("Content-Type", "text/css; charset=utf-8")
+      .header("Cache-Control", "no-store")
+      .send(APP_CSS);
+  });
+
+  app.get("/app.js", async (_request, reply) => {
+    return reply
+      .header("Content-Type", "application/javascript; charset=utf-8")
+      .header("Cache-Control", "no-store")
+      .send(APP_JS);
   });
 
   app.get("/overview", async (request) => {

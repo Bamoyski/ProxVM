@@ -87,6 +87,17 @@ describe("overwatch gates", () => {
     expect(dash.statusCode).toBe(200);
     expect(dash.headers["content-type"]).toContain("text/html");
     expect(dash.body).toContain("Overwatch");
+    // CSP-safe split assets (nginx forbids inline style/script).
+    const css = await app.inject({ method: "GET", url: "/app.css" });
+    expect(css.statusCode).toBe(200);
+    expect(css.headers["content-type"]).toContain("text/css");
+    expect(css.body).toContain("stat-grid");
+    const js = await app.inject({ method: "GET", url: "/app.js" });
+    expect(js.statusCode).toBe(200);
+    expect(js.headers["content-type"]).toContain("javascript");
+    expect(js.body).toContain("btnOverview");
+    expect(dash.body).not.toContain("<script>");
+    expect(dash.body).not.toContain("<style>");
 
     const noToken = await app.inject({ method: "GET", url: "/overview", headers: { cookie: adminCookie } });
     expect(noToken.statusCode).toBe(401);

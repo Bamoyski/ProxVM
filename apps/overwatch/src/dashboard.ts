@@ -3,13 +3,8 @@
  * ProxVM dark styling, tabbed sections, loads on open. Rendering rule:
  * textContent everywhere, never innerHTML — server data is untrusted input.
  */
-export const DASHBOARD_HTML = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Overwatch — ProxVM god-mode</title>
-<style>
+/** App stylesheet (separate response: nginx CSP forbids inline <style>). */
+export const APP_CSS = `
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { background: #020617; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; font-size: 14px; }
@@ -48,58 +43,10 @@ pre { background: #020617; border: 1px solid #1e293b; border-radius: 8px; paddin
 .kv { display: grid; grid-template-columns: 180px 1fr; gap: 4px 12px; font-size: 13px; }
 .kv dt { color: #64748b; }
 .kv dd { margin: 0; font-family: ui-monospace, monospace; }
-</style>
-</head>
-<body>
-<header>
-  <h1>⛨ Overwatch</h1>
-  <span id="modeBadge" class="badge">…</span>
-  <span style="flex:1"></span>
-  <span id="whoami" class="muted"></span>
-</header>
-<main>
-  <div id="fatal"></div>
-  <nav class="tabs" id="tabs"></nav>
-  <section id="tab-overview" class="tabpage">
-    <div class="card"><h2>Fleet overview</h2><div class="row"><button id="btnOverview" class="action">Refresh</button></div><div id="overviewStats" class="stat-grid"></div><pre id="overviewRaw" class="muted"></pre></div>
-    <div class="card"><h2>Security summary</h2><div class="row"><button id="btnSummary" class="action">Refresh</button></div><pre id="summary">—</pre></div>
-  </section>
-  <section id="tab-activity" class="tabpage hidden">
-    <div class="card"><h2>Activity</h2>
-      <div class="row">
-        <input id="actLimit" value="25" size="4" title="limit" />
-        <input id="actEvent" placeholder="event" size="16" />
-        <input id="actActor" placeholder="actor username" size="16" />
-        <input id="actVm" placeholder="vm id" size="20" />
-        <input id="actSince" placeholder="since 2026-09-01" size="15" />
-        <input id="actUntil" placeholder="until 2026-10-01" size="15" />
-        <button id="btnActivity" class="action">Load</button>
-        <button id="btnExport" class="ghost">Export CSV</button>
-      </div>
-      <div id="activity">—</div>
-    </div>
-  </section>
-  <section id="tab-sessions" class="tabpage hidden">
-    <div class="card"><h2>Live sessions</h2><div class="row"><button id="btnSessions" class="action">Refresh</button></div><div id="sessions">—</div></div>
-  </section>
-  <section id="tab-queue" class="tabpage hidden">
-    <div class="card"><h2>Job queue</h2><div class="row"><button id="btnQueue" class="action">Refresh</button></div><div id="queueProxmox">—</div></div>
-  </section>
-  <section id="tab-sql" class="tabpage hidden">
-    <div class="card"><h2>SQL console <span class="muted">read-only</span></h2>
-      <div class="row"><textarea id="sql" rows="3" cols="90" placeholder="SELECT username FROM users LIMIT 10"></textarea></div>
-      <div class="row"><button id="btnSql" class="action">Run (SELECT only)</button><span id="sqlMeta" class="muted"></span></div>
-      <div id="sqlOut">—</div>
-    </div>
-  </section>
-  <section id="tab-logs" class="tabpage hidden">
-    <div class="card"><h2>Container logs</h2>
-      <div class="row"><input id="logService" value="api" size="12" /><input id="logTail" value="200" size="6" /><button id="btnLogs" class="action">Load</button></div>
-      <pre id="logs">—</pre>
-    </div>
-  </section>
-</main>
-<script>
+`;
+
+/** App script (separate response: nginx CSP forbids inline <script>). */
+export const APP_JS = `
 "use strict";
 const $ = (id) => document.getElementById(id);
 function headers(json) {
@@ -369,7 +316,67 @@ $("btnLogs").onclick = async () => {
     el.textContent = j.logs || "(empty)";
   } catch (e) { showError(el, e); }
 };
-</script>
+`;
+
+/** Shell page. See above for why CSS/JS are not inlined. */
+export const DASHBOARD_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Overwatch — ProxVM god-mode</title>
+<link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+<header>
+  <h1>⛨ Overwatch</h1>
+  <span id="modeBadge" class="badge">…</span>
+  <span style="flex:1"></span>
+  <span id="whoami" class="muted"></span>
+</header>
+<main>
+  <div id="fatal"></div>
+  <nav class="tabs" id="tabs"></nav>
+  <section id="tab-overview" class="tabpage">
+    <div class="card"><h2>Fleet overview</h2><div class="row"><button id="btnOverview" class="action">Refresh</button></div><div id="overviewStats" class="stat-grid"></div><pre id="overviewRaw" class="muted"></pre></div>
+    <div class="card"><h2>Security summary</h2><div class="row"><button id="btnSummary" class="action">Refresh</button></div><pre id="summary">—</pre></div>
+  </section>
+  <section id="tab-activity" class="tabpage hidden">
+    <div class="card"><h2>Activity</h2>
+      <div class="row">
+        <input id="actLimit" value="25" size="4" title="limit" />
+        <input id="actEvent" placeholder="event" size="16" />
+        <input id="actActor" placeholder="actor username" size="16" />
+        <input id="actVm" placeholder="vm id" size="20" />
+        <input id="actSince" placeholder="since 2026-09-01" size="15" />
+        <input id="actUntil" placeholder="until 2026-10-01" size="15" />
+        <button id="btnActivity" class="action">Load</button>
+        <button id="btnExport" class="ghost">Export CSV</button>
+      </div>
+      <div id="activity">—</div>
+    </div>
+  </section>
+  <section id="tab-sessions" class="tabpage hidden">
+    <div class="card"><h2>Live sessions</h2><div class="row"><button id="btnSessions" class="action">Refresh</button></div><div id="sessions">—</div></div>
+  </section>
+  <section id="tab-queue" class="tabpage hidden">
+    <div class="card"><h2>Job queue</h2><div class="row"><button id="btnQueue" class="action">Refresh</button></div><div id="queueProxmox">—</div></div>
+  </section>
+  <section id="tab-sql" class="tabpage hidden">
+    <div class="card"><h2>SQL console <span class="muted">read-only</span></h2>
+      <div class="row"><textarea id="sql" rows="3" cols="90" placeholder="SELECT username FROM users LIMIT 10"></textarea></div>
+      <div class="row"><button id="btnSql" class="action">Run (SELECT only)</button><span id="sqlMeta" class="muted"></span></div>
+      <div id="sqlOut">—</div>
+    </div>
+  </section>
+  <section id="tab-logs" class="tabpage hidden">
+    <div class="card"><h2>Container logs</h2>
+      <div class="row"><input id="logService" value="api" size="12" /><input id="logTail" value="200" size="6" /><button id="btnLogs" class="action">Load</button></div>
+      <pre id="logs">—</pre>
+    </div>
+  </section>
+</main>
+<noscript><p style="padding:20px">Overwatch needs JavaScript enabled.</p></noscript><script src="./app.js"></script>
 </body>
 </html>
 `;
