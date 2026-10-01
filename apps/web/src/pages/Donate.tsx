@@ -4,7 +4,7 @@ import { useSiteContent } from "../content.js";
 export const DONATE_URL = "https://ko-fi.com/bamoyskistudios";
 
 const DEFAULT_TIERS = [
-  { amount: "$3", blurb: "Buys the coffee behind the next bugfix." },
+  { amount: "$3", blurb: "Helps keep the site up." },
   { amount: "$5", blurb: "Helps cover yearly domain renewals." },
   { amount: "$10", blurb: "Helps cover a month of power for an always-on lab server." },
   { amount: "$25", blurb: "Goes to parts: SSDs, cables, replacement fans." },
