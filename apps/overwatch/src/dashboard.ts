@@ -98,9 +98,55 @@ function showError(el, e) {
   s.textContent = "failed: " + (e && e.message ? e.message : e);
   el.appendChild(s);
 }
+async function fetchJson(url, init) {
+  let res;
+  try {
+    res = await fetch(url, init);
+  } catch (e) {
+    throw new Error(url + " → request failed to send (" + (e && e.message ? e.message : e) + ") — server down or network blocked");
+  }
+  const ctype = res.headers.get("content-type") || "";
+  if (!res.ok) {
+    let detail = "HTTP " + res.status;
+    if (ctype.includes("json")) {
+      try {
+        const j = await res.json();
+        if (j && j.message) detail = j.message;
+      } catch (_) {}
+    } else {
+      detail = "HTTP " + res.status + " with a non-data page (" + (ctype || "unknown type") + ") — a login page, block page, or challenge may be intercepting this request";
+    }
+    const err = new Error(url + " → " + detail);
+    err.status = res.status;
+    throw err;
+  }
+  if (!ctype.includes("json")) {
+    throw new Error(url + " → expected data but got " + (ctype || "unknown type") + " — a login page, block page, or challenge may be intercepting this request");
+  }
+  return res.json();
+}
 async function get(path) {
-  const res = await fetch(path, { headers: headers(false) });
-  if (!res.ok) throw await errOf(res);
+  return fetchJson(path, { headers: headers(false) });
+}
+async function fetchJsonBody(res, url) {
+  const ctype = res.headers.get("content-type") || "";
+  if (!res.ok) {
+    let detail = "HTTP " + res.status;
+    if (ctype.includes("json")) {
+      try {
+        const j = await res.json();
+        if (j && j.message) detail = j.message;
+      } catch (_) {}
+    } else {
+      detail = "HTTP " + res.status + " with a non-data page (" + (ctype || "unknown type") + ")";
+    }
+    const err = new Error(url + " → " + detail);
+    err.status = res.status;
+    throw err;
+  }
+  if (!ctype.includes("json")) {
+    throw new Error(url + " → expected data but got " + (ctype || "unknown type") + " — a login page, block page, or challenge may be intercepting this request");
+  }
   return res.json();
 }
 async function errOf(res) {
@@ -136,8 +182,7 @@ const TABS = [["overview", "Overview"], ["activity", "Activity"], ["sessions", "
 // Boot: first bounce alias hosts to canonical (same rule as the main SPA:
 // cookies are host-only, so an old domain can never have a usable session).
 // The endpoint is public on purpose. Fail-open: if it errors, boot normally.
-fetch("/api/domains/public")
-  .then((r) => (r.ok ? r.json() : null))
+fetchJson("/api/domains/public")
   .then((j) => {
     const host = window.location.hostname.toLowerCase();
     const canonical = j && j.canonical ? String(j.canonical).toLowerCase() : "";
@@ -156,8 +201,7 @@ fetch("/api/domains/public")
 // whoami doubles as the login check: no session, non-admin, and server-down
 // each get their own message instead of a wall of red "failed" boxes.
 function boot() {
-fetch("/auth-mode")
-  .then((r) => r.json())
+fetchJson("/auth-mode")
   .then((j) => {
     const badge = $("modeBadge");
     if (j && j.tokenEnforced) {
@@ -169,7 +213,7 @@ fetch("/auth-mode")
     }
     return fetch("/overview", { headers: headers(false) });
   })
-  .then((r) => {
+  .then(async (r) => {
     if (r.status === 401) {
       throw new Error(
         "not signed in here — log into ProxVM as an ADMIN in this browser first. " +
@@ -177,8 +221,7 @@ fetch("/auth-mode")
       );
     }
     if (r.status === 403) throw new Error("signed in, but not an ADMIN — Overwatch is administrators only");
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    return r.json();
+    return fetchJsonBody(r, "/overview");
   })
   .then((o) => {
     $("whoami").textContent = "connected";
@@ -257,7 +300,9 @@ $("btnActivity").onclick = async () => {
 $("btnExport").onclick = async () => {
   try {
     const res = await fetch("/activity/export?" + activityQuery(), { headers: headers(false) });
+    const ctype = res.headers.get("content-type") || "";
     if (!res.ok) throw await errOf(res);
+    if (ctype.includes("html")) throw new Error("/activity/export → got a page, not a download — a login page, block page, or challenge may be intercepting this request");
     const blob = await res.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -316,8 +361,7 @@ $("btnSql").onclick = async () => {
       headers: headers(true),
       body: JSON.stringify({ query: $("sql").value }),
     });
-    const j = await res.json();
-    if (!res.ok) throw new Error(j.message || res.status);
+    const j = await fetchJsonBody(res, "/sql");
     meta.textContent = j.rowCount + " row(s)" + (j.truncated ? " (truncated at 200)" : "");
     out.textContent = "";
     out.appendChild(table(j.columns || [], (j.rows || []).map((r) => (j.columns || []).map((c) => {
@@ -337,8 +381,7 @@ $("btnLogs").onclick = async () => {
       "&tail=" + encodeURIComponent($("logTail").value),
       { headers: headers(false) },
     );
-    const j = await res.json();
-    if (!res.ok) throw new Error(j.message || res.status);
+    const j = await fetchJsonBody(res, "/docker/logs");
     el.textContent = j.logs || "(empty)";
   } catch (e) { showError(el, e); }
 };
