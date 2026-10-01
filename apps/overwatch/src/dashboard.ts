@@ -98,6 +98,15 @@ function showError(el, e) {
   s.textContent = "failed: " + (e && e.message ? e.message : e);
   el.appendChild(s);
 }
+function identifyPage(text) {
+  const t = String(text || "").slice(0, 4000);
+  if (/challenge-platform|cf-chl|Just a moment|__cf_bm|cf_clearance|cf-error/i.test(t)) return "a Cloudflare challenge/block page";
+  if (/securly/i.test(t)) return "a Securly school-filter block page";
+  if (/proxvm_session|ProxVM — Proxmox|ProxVM - Proxmox/i.test(t)) return "the ProxVM app page (wrong path — request never reached Overwatch)";
+  if (/guacamole/i.test(t)) return "the Guacamole app page (wrong backend!)";
+  if (/nginx/i.test(t)) return "an nginx error page";
+  return "an unrecognized HTML page";
+}
 async function fetchJson(url, init) {
   let res;
   try {
@@ -114,14 +123,16 @@ async function fetchJson(url, init) {
         if (j && j.message) detail = j.message;
       } catch (_) {}
     } else {
-      detail = "HTTP " + res.status + " with a non-data page (" + (ctype || "unknown type") + ") — a login page, block page, or challenge may be intercepting this request";
+      const sample = await res.text().catch(() => "");
+      detail = "HTTP " + res.status + " with " + identifyPage(sample);
     }
     const err = new Error(url + " → " + detail);
     err.status = res.status;
     throw err;
   }
   if (!ctype.includes("json")) {
-    throw new Error(url + " → expected data but got " + (ctype || "unknown type") + " — a login page, block page, or challenge may be intercepting this request");
+    const sample = await res.text().catch(() => "");
+    throw new Error(url + " → expected data but got " + identifyPage(sample));
   }
   return res.json();
 }
@@ -138,14 +149,16 @@ async function fetchJsonBody(res, url) {
         if (j && j.message) detail = j.message;
       } catch (_) {}
     } else {
-      detail = "HTTP " + res.status + " with a non-data page (" + (ctype || "unknown type") + ")";
+      const sample = await res.text().catch(() => "");
+      detail = "HTTP " + res.status + " with " + identifyPage(sample);
     }
     const err = new Error(url + " → " + detail);
     err.status = res.status;
     throw err;
   }
   if (!ctype.includes("json")) {
-    throw new Error(url + " → expected data but got " + (ctype || "unknown type") + " — a login page, block page, or challenge may be intercepting this request");
+    const sample = await res.text().catch(() => "");
+    throw new Error(url + " → expected data but got " + identifyPage(sample));
   }
   return res.json();
 }
