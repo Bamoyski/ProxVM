@@ -100,7 +100,12 @@ function showError(el, e) {
 }
 function identifyPage(text) {
   const t = String(text || "").slice(0, 4000);
-  if (/challenge-platform|cf-chl|Just a moment|__cf_bm|cf_clearance|cf-error/i.test(t)) return "a Cloudflare challenge/block page";
+  if (/challenge-platform|cf-chl|Just a moment|Verifying you are human|__cf_bm|cf_clearance/i.test(t)) {
+    return "a Cloudflare bot challenge (your browser/network is being challenged — try another network, or disable VPN/adblock for this site)";
+  }
+  if (/cf-error|error code:|Ray ID|Bad gateway|Host error|Web server is (down|not responding)|Argo Tunnel error/i.test(t)) {
+    return "a Cloudflare origin-error page (the tunnel or origin failed — check the tunnel health, not the browser)";
+  }
   if (/securly/i.test(t)) return "a Securly school-filter block page";
   if (/proxvm_session|ProxVM — Proxmox|ProxVM - Proxmox/i.test(t)) return "the ProxVM app page (wrong path — request never reached Overwatch)";
   if (/guacamole/i.test(t)) return "the Guacamole app page (wrong backend!)";
