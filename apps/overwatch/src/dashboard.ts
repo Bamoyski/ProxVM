@@ -112,14 +112,28 @@ function identifyPage(text) {
   if (/nginx/i.test(t)) return "an nginx error page";
   return "an unrecognized HTML page";
 }
-async function fetchJson(url, init) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function fetchJson(url, init, retries = 1) {
   let res;
   try {
     res = await fetch(url, init);
   } catch (e) {
+    if (retries > 0) {
+      await sleep(1500);
+      return fetchJson(url, init, retries - 1);
+    }
     throw new Error(url + " → request failed to send (" + (e && e.message ? e.message : e) + ") — server down or network blocked");
   }
   const ctype = res.headers.get("content-type") || "";
+  // Retry transient failures once (matching the main app's resilience):
+  // network blips, 5xx, rate limits, and bot-challenge HTML. Auth outcomes
+  // (401/403) never retry — retrying those just replays a denial.
+  const transient =
+    !res.ok && (res.status >= 500 || res.status === 429 || !ctype.includes("json"));
+  if (transient && retries > 0 && res.status !== 401 && res.status !== 403) {
+    await sleep(1500);
+    return fetchJson(url, init, retries - 1);
+  }
   if (!res.ok) {
     let detail = "HTTP " + res.status;
     if (ctype.includes("json")) {
@@ -136,6 +150,10 @@ async function fetchJson(url, init) {
     throw err;
   }
   if (!ctype.includes("json")) {
+    if (retries > 0) {
+      await sleep(1500);
+      return fetchJson(url, init, retries - 1);
+    }
     const sample = await res.text().catch(() => "");
     throw new Error(url + " → expected data but got " + identifyPage(sample));
   }
