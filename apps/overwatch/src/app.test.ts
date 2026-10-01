@@ -80,9 +80,13 @@ describe("overwatch gates", () => {
 
   const bearer = { authorization: `Bearer ${TOKEN}` };
 
-  it("healthz is public, everything else needs token + admin session", async () => {
+  it("healthz and the dashboard shell are public, everything else needs token + admin session", async () => {
     const health = await app.inject({ method: "GET", url: "/healthz" });
     expect(health.statusCode).toBe(200);
+    const dash = await app.inject({ method: "GET", url: "/" });
+    expect(dash.statusCode).toBe(200);
+    expect(dash.headers["content-type"]).toContain("text/html");
+    expect(dash.body).toContain("Overwatch");
 
     const noToken = await app.inject({ method: "GET", url: "/overview", headers: { cookie: adminCookie } });
     expect(noToken.statusCode).toBe(401);

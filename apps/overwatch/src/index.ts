@@ -17,6 +17,7 @@ import {
 } from "@proxvm/core";
 import type { UserWithRoles } from "@proxvm/shared";
 import { isReadOnlyStatement, parseBearerToken, stripDockerStream } from "./inspect.js";
+import { DASHBOARD_HTML } from "./dashboard.js";
 
 // Overwatch: god-mode observability for the ProxVM operator. Separate port,
 // separate threat model from the main API:
@@ -158,6 +159,13 @@ export async function buildOverwatchApp(ctx: OwContext): Promise<FastifyInstance
   await app.register(rateLimit, { global: true, max: 60, timeWindow: "1 minute" });
 
   app.get("/healthz", async () => ({ status: "OK", service: "overwatch" }));
+
+  // Same-origin dashboard (public shell; every data call behind the gate).
+  // Served from here so the browser needs no CORS and the session cookie
+  // rides along automatically; the bearer token is pasted once per tab.
+  app.get("/", async (_request, reply) => {
+    return reply.header("Content-Type", "text/html; charset=utf-8").send(DASHBOARD_HTML);
+  });
 
   app.get("/overview", async (request) => {
     await extremeGuard(ctx, request as OverwatchRequest);

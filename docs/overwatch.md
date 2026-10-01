@@ -35,7 +35,16 @@ except SQL, which is itself double-gated (see below).
 | GET | `/docker/logs?service=&tail=` | Container logs; needs `DOCKER_SOCK` + read-only socket mount, else 503 with instructions |
 | POST | `/sql` | Read-only console (below) |
 
-Example:
+## Dashboard UI
+
+Open `http://localhost:4001/` in a browser: a single self-contained page
+(served same-origin, so no CORS is involved) with fleet overview, activity,
+sessions, queue/Proxmox, a SQL console, and container logs. Same-origin
+means the session cookie rides along automatically; paste the bearer token
+once per tab (kept in `sessionStorage` only, never persisted). All rendering
+uses `textContent` — server data is never injected as HTML.
+
+API use still works for scripts:
 
 ```bash
 export OW_TOKEN=...  # PROXVM_OVERWATCH_TOKEN value
