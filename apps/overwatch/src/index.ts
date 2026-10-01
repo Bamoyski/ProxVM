@@ -173,7 +173,12 @@ export async function buildOverwatchApp(ctx: OwContext): Promise<FastifyInstance
   // Served from here so the browser needs no CORS and the session cookie
   // rides along automatically; the bearer token is pasted once per tab.
   app.get("/", async (_request, reply) => {
-    return reply.header("Content-Type", "text/html; charset=utf-8").send(DASHBOARD_HTML);
+    // No-cache: this page carries the security model in JS (token row
+    // visibility follows /auth-mode). A stale cached copy would lie about it.
+    return reply
+      .header("Content-Type", "text/html; charset=utf-8")
+      .header("Cache-Control", "no-store")
+      .send(DASHBOARD_HTML);
   });
 
   app.get("/overview", async (request) => {

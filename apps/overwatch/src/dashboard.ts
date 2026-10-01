@@ -1,10 +1,7 @@
 /**
- * Single-file Overwatch dashboard. Served same-origin from GET /, so no CORS
- * is involved — the browser sends the session cookie automatically, and the
- * operator pastes the bearer token once (kept in sessionStorage only).
- *
- * Rendering rule: textContent everywhere, never innerHTML — server data
- * (usernames, user agents, SQL results) is untrusted input.
+ * Overwatch dashboard: single self-contained page, served same-origin.
+ * ProxVM dark styling, tabbed sections, loads on open. Rendering rule:
+ * textContent everywhere, never innerHTML — server data is untrusted input.
  */
 export const DASHBOARD_HTML = `<!doctype html>
 <html lang="en">
@@ -14,75 +11,113 @@ export const DASHBOARD_HTML = `<!doctype html>
 <title>Overwatch — ProxVM god-mode</title>
 <style>
 :root { color-scheme: dark; }
-body { background: #020617; color: #e2e8f0; font-family: ui-monospace, monospace; margin: 0; padding: 16px; font-size: 13px; }
-h1 { color: #60a5fa; font-size: 18px; margin: 0 0 12px; }
-h2 { color: #94a3b8; font-size: 13px; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 1px; }
-.card { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
-.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
-input, textarea, select { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; border-radius: 6px; padding: 6px 8px; font: inherit; }
-button { background: #1d4ed8; border: none; color: #fff; border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
-button:hover { background: #2563eb; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #1e293b; vertical-align: top; }
-th { color: #64748b; font-weight: normal; }
-pre { background: #020617; border: 1px solid #1e293b; border-radius: 6px; padding: 8px; overflow-x: auto; white-space: pre-wrap; }
-.err { color: #f87171; }
+* { box-sizing: border-box; }
+body { background: #020617; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; font-size: 14px; }
+header { background: #0f172a; border-bottom: 1px solid #1e293b; padding: 12px 20px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 10; }
+header h1 { color: #60a5fa; font-size: 17px; margin: 0; }
+.badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid #334155; color: #94a3b8; }
+.badge.ok { color: #4ade80; border-color: #166534; }
+.badge.warn { color: #fbbf24; border-color: #92400e; }
+main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+nav.tabs { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
+nav.tabs button { background: transparent; border: 1px solid transparent; color: #94a3b8; border-radius: 8px; padding: 8px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+nav.tabs button:hover { background: #0f172a; color: #e2e8f0; }
+nav.tabs button.active { background: #1d4ed8; color: #fff; }
+.card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.card h2 { color: #e2e8f0; font-size: 14px; margin: 0 0 12px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+input, textarea, select { background: #020617; border: 1px solid #334155; color: #e2e8f0; border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13px; }
+input:focus, textarea:focus { outline: none; border-color: #2563eb; }
+button.action { background: #1d4ed8; border: none; color: #fff; border-radius: 8px; padding: 8px 16px; font: inherit; font-size: 13px; cursor: pointer; }
+button.action:hover { background: #2563eb; }
+button.ghost { background: #1e293b; }
+button.ghost:hover { background: #334155; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #1e293b; vertical-align: top; }
+th { color: #64748b; font-weight: 500; font-size: 12px; }
+tr:hover td { background: #0b1120; }
+pre { background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; overflow-x: auto; white-space: pre-wrap; font-size: 12px; }
+.err { color: #f87171; background: #450a0a55; border: 1px solid #7f1d1d; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
 .ok { color: #4ade80; }
-.muted { color: #64748b; }
+.muted { color: #64748b; font-size: 12px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.stat { background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 10px 12px; }
+.stat .v { font-size: 20px; color: #e2e8f0; }
+.stat .k { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+.hidden { display: none !important; }
+.kv { display: grid; grid-template-columns: 180px 1fr; gap: 4px 12px; font-size: 13px; }
+.kv dt { color: #64748b; }
+.kv dd { margin: 0; font-family: ui-monospace, monospace; }
 </style>
 </head>
 <body>
-<h1>⛨ Overwatch</h1>
-<div class="card">
-  <div class="row">
-    <input id="token" type="password" placeholder="Bearer token (PROXVM_OVERWATCH_TOKEN)" size="44" />
-    <button id="saveToken">Use token</button>
-    <span id="authState" class="muted"></span>
-  </div>
-  <div class="muted">Needs an ADMIN session — log into ProxVM in this browser first (same host shares the cookie). Bearer token only if the server enforces one; otherwise leave blank.</div>
-</div>
-<div class="card"><h2>Fleet overview</h2><div class="row"><button id="btnOverview">Refresh</button></div><pre id="overview">—</pre></div>
-<div class="card"><h2>Security summary</h2><div class="row"><button id="btnSummary">Load</button></div><pre id="summary">—</pre></div>
-<div class="card"><h2>Activity</h2>
-  <div class="row"><input id="actLimit" value="25" size="4" /><input id="actEvent" placeholder="event (optional)" size="18" /><input id="actActor" placeholder="actor username" size="16" /><input id="actVm" placeholder="vm id" size="20" /><input id="actSince" placeholder="since 2026-09-01" size="14" /><input id="actUntil" placeholder="until 2026-10-01" size="14" /><button id="btnActivity">Load</button><button id="btnExport">Export CSV</button></div>
-  <div id="activity">—</div>
-</div>
-<div class="card"><h2>Sessions</h2><div class="row"><button id="btnSessions">Load</button></div><div id="sessions">—</div></div>
-<div class="card"><h2>Queue + Proxmox</h2><div class="row"><button id="btnQueue">Load</button></div><div id="queueProxmox">—</div></div>
-<div class="card"><h2>SQL console (read-only)</h2>
-  <div class="row"><textarea id="sql" rows="3" cols="80" placeholder="SELECT * FROM users LIMIT 10"></textarea></div>
-  <div class="row"><button id="btnSql">Run (SELECT only)</button><span id="sqlMeta" class="muted"></span></div>
-  <div id="sqlOut">—</div>
-</div>
-<div class="card"><h2>Container logs</h2>
-  <div class="row"><input id="logService" value="api" size="12" /><input id="logTail" value="200" size="6" /><button id="btnLogs">Load</button></div>
-  <pre id="logs">—</pre>
-</div>
+<header>
+  <h1>⛨ Overwatch</h1>
+  <span id="modeBadge" class="badge">…</span>
+  <span style="flex:1"></span>
+  <span id="tokenRow" class="hidden">
+    <input id="token" type="password" placeholder="Bearer token" size="30" />
+    <button id="saveToken" class="action">Use token</button>
+  </span>
+</header>
+<main>
+  <div id="fatal"></div>
+  <nav class="tabs" id="tabs"></nav>
+  <section id="tab-overview" class="tabpage">
+    <div class="card"><h2>Fleet overview</h2><div class="row"><button id="btnOverview" class="action">Refresh</button></div><div id="overviewStats" class="stat-grid"></div><pre id="overviewRaw" class="muted"></pre></div>
+    <div class="card"><h2>Security summary</h2><div class="row"><button id="btnSummary" class="action">Refresh</button></div><pre id="summary">—</pre></div>
+  </section>
+  <section id="tab-activity" class="tabpage hidden">
+    <div class="card"><h2>Activity</h2>
+      <div class="row">
+        <input id="actLimit" value="25" size="4" title="limit" />
+        <input id="actEvent" placeholder="event" size="16" />
+        <input id="actActor" placeholder="actor username" size="16" />
+        <input id="actVm" placeholder="vm id" size="20" />
+        <input id="actSince" placeholder="since 2026-09-01" size="15" />
+        <input id="actUntil" placeholder="until 2026-10-01" size="15" />
+        <button id="btnActivity" class="action">Load</button>
+        <button id="btnExport" class="ghost">Export CSV</button>
+      </div>
+      <div id="activity">—</div>
+    </div>
+  </section>
+  <section id="tab-sessions" class="tabpage hidden">
+    <div class="card"><h2>Live sessions</h2><div class="row"><button id="btnSessions" class="action">Refresh</button></div><div id="sessions">—</div></div>
+  </section>
+  <section id="tab-queue" class="tabpage hidden">
+    <div class="card"><h2>Job queue</h2><div class="row"><button id="btnQueue" class="action">Refresh</button></div><div id="queueProxmox">—</div></div>
+  </section>
+  <section id="tab-sql" class="tabpage hidden">
+    <div class="card"><h2>SQL console <span class="muted">read-only</span></h2>
+      <div class="row"><textarea id="sql" rows="3" cols="90" placeholder="SELECT username FROM users LIMIT 10"></textarea></div>
+      <div class="row"><button id="btnSql" class="action">Run (SELECT only)</button><span id="sqlMeta" class="muted"></span></div>
+      <div id="sqlOut">—</div>
+    </div>
+  </section>
+  <section id="tab-logs" class="tabpage hidden">
+    <div class="card"><h2>Container logs</h2>
+      <div class="row"><input id="logService" value="api" size="12" /><input id="logTail" value="200" size="6" /><button id="btnLogs" class="action">Load</button></div>
+      <pre id="logs">—</pre>
+    </div>
+  </section>
+</main>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const tokenInput = $("token");
-tokenInput.value = sessionStorage.getItem("ow_token") || "";
 function headers(json) {
-  const h = { Authorization: "Bearer " + (sessionStorage.getItem("ow_token") || "") };
+  const h = {};
+  const tok = sessionStorage.getItem("ow_token") || "";
+  if (tok) h["Authorization"] = "Bearer " + tok;
   if (json) h["Content-Type"] = "application/json";
   return h;
 }
-function setAuthState(ok, msg) {
-  const el = $("authState");
-  el.textContent = msg;
-  el.className = ok ? "ok" : "err";
-}
-$("saveToken").onclick = () => {
-  sessionStorage.setItem("ow_token", tokenInput.value.trim());
-  setAuthState(true, "token stored for this tab");
-};
 function td(text) {
   const el = document.createElement("td");
   el.textContent = text == null ? "" : String(text);
   return el;
 }
-function table(headers, rows) {
+function table(headers, rows, emptyText) {
   const t = document.createElement("table");
   const thead = document.createElement("thead");
   const hr = document.createElement("tr");
@@ -94,6 +129,15 @@ function table(headers, rows) {
   thead.appendChild(hr);
   t.appendChild(thead);
   const tb = document.createElement("tbody");
+  if (rows.length === 0) {
+    const tr = document.createElement("tr");
+    const d = document.createElement("td");
+    d.colSpan = headers.length;
+    d.className = "muted";
+    d.textContent = emptyText || "Nothing here.";
+    tr.appendChild(d);
+    tb.appendChild(tr);
+  }
   for (const r of rows) {
     const tr = document.createElement("tr");
     for (const c of r) tr.appendChild(td(c));
@@ -104,28 +148,104 @@ function table(headers, rows) {
 }
 function showError(el, e) {
   el.textContent = "";
-  const s = document.createElement("span");
+  const s = document.createElement("div");
   s.className = "err";
   s.textContent = "failed: " + (e && e.message ? e.message : e);
   el.appendChild(s);
 }
 async function get(path) {
   const res = await fetch(path, { headers: headers(false) });
-  if (!res.ok) {
-    let detail = res.status + "";
-    try {
-      const j = await res.json();
-      if (j && j.message) detail = j.message;
-    } catch (_) {}
-    throw new Error(detail);
-  }
+  if (!res.ok) throw await errOf(res);
   return res.json();
 }
-$("btnOverview").onclick = async () => {
-  const el = $("overview");
+async function errOf(res) {
+  let detail = "HTTP " + res.status;
+  try {
+    const j = await res.json();
+    if (j && j.message) detail = j.message;
+  } catch (_) {}
+  return new Error(detail);
+}
+function fmtDate(v) {
+  try { return new Date(v).toLocaleString(); } catch (_) { return String(v); }
+}
+// Tabs
+const TABS = [["overview", "Overview"], ["activity", "Activity"], ["sessions", "Sessions"], ["queue", "Queue + Proxmox"], ["sql", "SQL"], ["logs", "Logs"]];
+(function initTabs() {
+  const nav = $("tabs");
+  for (const [id, label] of TABS) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.dataset.tab = id;
+    b.onclick = () => {
+      for (const x of nav.querySelectorAll("button")) x.classList.remove("active");
+      b.classList.add("active");
+      for (const [pid] of TABS) $("tab-" + pid).classList.toggle("hidden", pid !== id);
+      const loader = { overview: loadOverview, activity: () => {}, sessions: loadSessions, queue: loadQueue, sql: () => {}, logs: () => {} }[id];
+      if (loader) loader();
+    };
+    if (id === "overview") b.classList.add("active");
+    nav.appendChild(b);
+  }
+})();
+// Auth mode: hide the token row entirely unless the server enforces one.
+fetch("/auth-mode").then((r) => r.json()).then((j) => {
+  const badge = $("modeBadge");
+  if (j && j.tokenEnforced) {
+    badge.textContent = "token enforced";
+    badge.classList.add("warn");
+    $("tokenRow").classList.remove("hidden");
+    $("token").value = sessionStorage.getItem("ow_token") || "";
+  } else {
+    badge.textContent = "session-only mode";
+    badge.classList.add("ok");
+  }
+  loadOverview();
+}).catch(() => {
+  const badge = $("modeBadge");
+  badge.textContent = "server unreachable";
+  badge.classList.add("warn");
+});
+$("saveToken").onclick = () => {
+  sessionStorage.setItem("ow_token", $("token").value.trim());
+  loadOverview();
+};
+async function loadOverview() {
+  const stats = $("overviewStats");
+  const raw = $("overviewRaw");
   try {
     const o = await get("/overview");
-    el.textContent = JSON.stringify(o, null, 1);
+    stats.textContent = "";
+    const add = (k, v) => {
+      const d = document.createElement("div");
+      d.className = "stat";
+      const vv = document.createElement("div");
+      vv.className = "v";
+      vv.textContent = v;
+      const kk = document.createElement("div");
+      kk.className = "k";
+      kk.textContent = k;
+      d.appendChild(vv);
+      d.appendChild(kk);
+      stats.appendChild(d);
+    };
+    add("users", (o.users && o.users.total) ?? "?");
+    add("vms", (o.vms && o.vms.total) ?? "?");
+    const running = o.vms && o.vms.byStatus ? Object.entries(o.vms.byStatus).map(([k, v]) => k + ":" + v).join(" ") : "?";
+    add("vm states", running);
+    add("active sessions", (o.sessions && o.sessions.active) ?? "?");
+    add("open tickets", (o.tickets && o.tickets.open) ?? 0);
+    add("db size", o.database && o.database.bytes != null ? (o.database.bytes / 1048576).toFixed(1) + " MB" : "?");
+    add("queue failed", (o.queue && o.queue.failed) ?? "?");
+    raw.textContent = "proxmox: " + JSON.stringify(o.proxmox) + " · jobs: " + JSON.stringify(o.jobs);
+  } catch (e) { showError(stats, e); raw.textContent = ""; }
+}
+$("btnOverview").onclick = loadOverview;
+$("btnSummary").onclick = async () => {
+  const el = $("summary");
+  try {
+    const j = await get("/activity/summary");
+    el.textContent = JSON.stringify(j, null, 1);
   } catch (e) { showError(el, e); }
 };
 function activityQuery() {
@@ -143,21 +263,15 @@ $("btnActivity").onclick = async () => {
     el.textContent = "";
     el.appendChild(table(
       ["time", "event", "actor", "vm"],
-      (j.entries || []).map((e) => [e.createdAt, e.event, e.actorUsername || "", e.vmId || ""]),
+      (j.entries || []).map((e) => [fmtDate(e.createdAt), e.event, e.actorUsername || "", e.vmId || ""]),
+      "No matching entries.",
     ));
   } catch (e) { showError(el, e); }
 };
 $("btnExport").onclick = async () => {
   try {
     const res = await fetch("/activity/export?" + activityQuery(), { headers: headers(false) });
-    if (!res.ok) {
-      let detail = res.status + "";
-      try {
-        const j = await res.json();
-        if (j && j.message) detail = j.message;
-      } catch (_) {}
-      throw new Error(detail);
-    }
+    if (!res.ok) throw await errOf(res);
     const blob = await res.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -168,40 +282,45 @@ $("btnExport").onclick = async () => {
     showError($("activity"), e);
   }
 };
-$("btnSummary").onclick = async () => {
-  const el = $("summary");
-  try {
-    const j = await get("/activity/summary");
-    el.textContent = JSON.stringify(j, null, 1);
-  } catch (e) { showError(el, e); }
-};
-fetch("/auth-mode").then((r) => r.json()).then((j) => {
-  setAuthState(true, j && j.tokenEnforced ? "bearer token enforced" : "session-only mode (no bearer configured)");
-}).catch(() => {});
-$("btnSessions").onclick = async () => {
+function loadSessions() {
   const el = $("sessions");
-  try {
-    const j = await get("/sessions");
+  get("/sessions").then((j) => {
     el.textContent = "";
     el.appendChild(table(
       ["user", "ip", "agent", "last active"],
-      (j.sessions || []).map((s) => [s.username, s.ip, (s.user_agent || "").slice(0, 60), s.last_active_at]),
+      (j.sessions || []).map((s) => [s.username, s.ip, (s.user_agent || "").slice(0, 60), fmtDate(s.last_active_at)]),
+      "No active sessions.",
     ));
-  } catch (e) { showError(el, e); }
-};
-$("btnQueue").onclick = async () => {
+  }).catch((e) => showError(el, e));
+}
+$("btnSessions").onclick = loadSessions;
+function loadQueue() {
   const el = $("queueProxmox");
-  try {
-    const [q, p] = await Promise.all([get("/queue"), get("/proxmox/summary")]);
+  Promise.all([get("/queue"), get("/proxmox/summary")]).then(([q, p]) => {
     el.textContent = "";
-    const qpre = document.createElement("pre");
-    qpre.textContent = "queue: " + JSON.stringify(q);
-    const ppre = document.createElement("pre");
-    ppre.textContent = "proxmox: " + JSON.stringify(p, null, 1).slice(0, 2000);
-    el.appendChild(qpre);
-    el.appendChild(ppre);
-  } catch (e) { showError(el, e); }
-};
+    const dl = document.createElement("dl");
+    dl.className = "kv";
+    const add = (k, v) => {
+      const dt = document.createElement("dt");
+      dt.textContent = k;
+      const dd = document.createElement("dd");
+      dd.textContent = v;
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    };
+    add("queue waiting/active/failed", [q.waiting, q.active, q.failed].join(" / "));
+    if (p && p.configured === false) {
+      add("proxmox", "not configured (" + (p.detail || "?") + ")");
+    } else if (p && p.nodes) {
+      for (const n of p.nodes) add("node " + n.node, n.status + " · uptime " + n.uptime + "s");
+      add("guests", String(p.guests));
+    } else {
+      add("proxmox", JSON.stringify(p).slice(0, 200));
+    }
+    el.appendChild(dl);
+  }).catch((e) => showError(el, e));
+}
+$("btnQueue").onclick = loadQueue;
 $("btnSql").onclick = async () => {
   const out = $("sqlOut");
   const meta = $("sqlMeta");
@@ -218,7 +337,7 @@ $("btnSql").onclick = async () => {
     out.appendChild(table(j.columns || [], (j.rows || []).map((r) => (j.columns || []).map((c) => {
       const v = r[c];
       return typeof v === "object" && v !== null ? JSON.stringify(v) : v;
-    }))));
+    })), "Query returned no rows."));
   } catch (e) {
     meta.textContent = "";
     showError(out, e);
