@@ -16,7 +16,7 @@ describe("ProxmoxClient error reporting", () => {
     const client = clientWith((async () => new Response("", { status: 595 })) as unknown as typeof fetch);
     let caught: ProxmoxApiError | null = null;
     try {
-      await client.storages("pve-node-01");
+      await client.storages("pve-node-02");
     } catch (err) {
       caught = err as ProxmoxApiError;
     }
@@ -24,7 +24,7 @@ describe("ProxmoxClient error reporting", () => {
     expect(caught?.statusCode).toBe(595);
     expect(caught?.message).toMatch(/non-JSON response \(HTTP 595\)/);
     expect(caught?.detail?.upstreamStatus).toBe(595);
-    expect(caught?.detail?.path).toContain("/nodes/pve-node-01/storage");
+    expect(caught?.detail?.path).toContain("/nodes/pve-node-02/storage");
   });
 
   it("wraps transport failures (connect/TLS/timeout) with hostname, port and cause", async () => {
@@ -88,7 +88,7 @@ describe("ProxmoxClient error reporting", () => {
   it("returns parsed data for valid JSON responses", async () => {
     const client = clientWith((async () =>
       new Response(JSON.stringify({ data: { storage: "local-lvm" } }), { status: 200 })) as unknown as typeof fetch);
-    const result = await client.storages("pve-node-02");
+    const result = await client.storages("pve-node-03");
     expect(result).toEqual({ storage: "local-lvm" });
   });
 });

@@ -69,14 +69,14 @@ describe("proxmox routes report upstream errors", () => {
           "Proxmox API returned a non-JSON response (HTTP 595): (empty body)",
           595,
           null,
-          { upstreamStatus: 595, baseUrl: "https://192.0.2.1:8006", path: "/nodes/pve-node-01/storage", method: "GET" },
+          { upstreamStatus: 595, baseUrl: "https://192.0.2.1:8006", path: "/nodes/pve-node-02/storage", method: "GET" },
         );
       },
     } as CoreContext;
     const app = await buildApp({ setupMode: false, ctx: failingCtx });
     const res = await app.inject({
       method: "GET",
-        url: "/api/proxmox/storage?node=pve-node-01",
+      url: "/api/proxmox/storage?node=pve-node-02",
       headers: { cookie: cookieHeader },
     });
     expect(res.statusCode).toBe(502);

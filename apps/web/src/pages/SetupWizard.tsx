@@ -232,7 +232,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
                 <Field label="Guacamole URL">
                   <input className={input} value={guacamole.url} onChange={(e) => setGuacamole({ ...guacamole, url: e.target.value })} />
                 </Field>
-                <Field label="Public URL (for browser access, e.g. https://guacamole.example.com/guacamole/)">
+                <Field label="Public URL (for browser access, e.g. https://guacamole.example.com/)">
                   <input className={input} value={guacamole.publicUrl} onChange={(e) => setGuacamole({ ...guacamole, publicUrl: e.target.value })} placeholder="Leave empty to use the URL above" />
                 </Field>
                 <div className="grid grid-cols-2 gap-3">

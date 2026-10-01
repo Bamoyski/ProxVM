@@ -127,7 +127,7 @@ export default function Settings() {
               </select>
             </Field>
             <Field label="URL"><input className={input} value={gacField("url", g.url)} onChange={(e) => setGac({ ...gac, url: e.target.value })} /></Field>
-            <Field label="Public URL (for browser, e.g. https://mainpc.benmoyer.org/guacamole/)">
+            <Field label="Public URL (for browser, e.g. https://guacamole.example.com/)">
               <input className={input} value={gacField("publicUrl", g.publicUrl ?? "")} onChange={(e) => setGac({ ...gac, publicUrl: e.target.value })} placeholder="Leave empty to use the URL above" />
             </Field>
             <div className="grid grid-cols-2 gap-2">

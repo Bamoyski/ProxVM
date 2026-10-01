@@ -100,7 +100,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # Bounded memory: noeviction fails writes loudly at the cap instead of
+    # silently dropping security state (rate limits, lockouts). 512 MB is
+    # generous (typical use is single-digit MB); the API already handles
+    # enqueue failures explicitly rather than losing jobs.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
     volumes:
       - redis-data:/data
     healthcheck:

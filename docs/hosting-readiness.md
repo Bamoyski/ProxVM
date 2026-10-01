@@ -27,10 +27,10 @@ checked, what passed, and the small list of things to do before taking money.
 ## Findings (all minor)
 
 1. **Clock skew across boxes.** Earlier debugging showed the Guacamole DB host
-   ~4.5h behind the app host (correlated identical events). Current check
-   shows host = api = postgres in agreement. Action: enable NTP everywhere
-   (app host, `.22`, all guests) and re-verify; session/crypto timestamps
-   assume sane clocks.
+   hours behind the app host (correlated identical events). Current check
+   shows host = api = postgres in agreement. Fix: enable NTP everywhere
+   (app host, Guacamole/DB host, all guests) and re-verify; session/crypto
+   timestamps assume sane clocks.
 2. **Audit retention defaults to keep-forever.** Correct conservative default,
    but a hosting platform accumulates audit rows indefinitely. Recommendation:
    set `audit.retention_days` (Settings → Application, e.g. 365) once billing
@@ -49,7 +49,7 @@ checked, what passed, and the small list of things to do before taking money.
 
 - [ ] Human security review of auth/session/crypto paths (AI-generated code
       carrying the production warning until then — that warning is load-bearing).
-- [ ] NTP on all boxes; alerting on clock drift.
+- [ ] NTP on all boxes (app host, Guacamole/DB host, all guests); alerting on clock drift.
 - [ ] Set `audit.retention_days` (billing history vs. disk tradeoff, your call).
 - [ ] Backups: Postgres point-in-time + `.proxvm/config.json` (master key!)
       tested restore. Losing the master key = losing every vault credential.

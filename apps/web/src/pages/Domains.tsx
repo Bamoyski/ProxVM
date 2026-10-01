@@ -347,7 +347,7 @@ export default function Domains() {
             <div className="flex gap-2">
               <input
                 className={input}
-                placeholder="proxvm2.benmoyer.org"
+                placeholder="proxvm4.example.org"
                 value={aliasInput}
                 onChange={(e) => setAliasInput(e.target.value)}
               />

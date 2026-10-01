@@ -57,7 +57,7 @@ export function normalizeHttpBaseUrl(raw: string): string {
     url = new URL(raw.trim());
   } catch {
     throw new Error(
-      `"${raw}" is not a valid URL. Use the full Guacamole base URL, e.g. http://192.168.1.22:8080/guacamole`,
+      `"${raw}" is not a valid URL. Use the full Guacamole base URL, e.g. https://guacamole.example.com`,
     );
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
