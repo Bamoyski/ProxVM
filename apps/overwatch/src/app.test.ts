@@ -109,6 +109,18 @@ describe("overwatch gates", () => {
     expect([401, 403]).toContain(nonAdmin.statusCode);
   });
 
+  it("works on admin session alone when no bearer token is configured", async () => {
+    delete process.env.PROXVM_OVERWATCH_TOKEN;
+    try {
+      const res = await app.inject({ method: "GET", url: "/overview", headers: { cookie: adminCookie } });
+      expect(res.statusCode).toBe(200);
+      const locked = await app.inject({ method: "GET", url: "/overview", headers: { cookie: userCookie } });
+      expect([401, 403]).toContain(locked.statusCode);
+    } finally {
+      process.env.PROXVM_OVERWATCH_TOKEN = TOKEN;
+    }
+  });
+
   it("overview and activity answer for token + admin", async () => {
     const res = await app.inject({ method: "GET", url: "/overview", headers: { cookie: adminCookie, ...bearer } });
     expect(res.statusCode).toBe(200);

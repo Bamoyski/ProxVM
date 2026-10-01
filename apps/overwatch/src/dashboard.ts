@@ -39,7 +39,7 @@ pre { background: #020617; border: 1px solid #1e293b; border-radius: 6px; paddin
     <button id="saveToken">Use token</button>
     <span id="authState" class="muted"></span>
   </div>
-  <div class="muted">Needs an ADMIN session too — log into ProxVM in this browser first (same host shares the cookie).</div>
+  <div class="muted">Needs an ADMIN session — log into ProxVM in this browser first (same host shares the cookie). Bearer token only if the server enforces one; otherwise leave blank.</div>
 </div>
 <div class="card"><h2>Fleet overview</h2><div class="row"><button id="btnOverview">Refresh</button></div><pre id="overview">—</pre></div>
 <div class="card"><h2>Activity</h2>

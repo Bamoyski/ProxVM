@@ -39,14 +39,17 @@ interface OverwatchRequest extends FastifyRequest {
 }
 
 async function extremeGuard(ctx: CoreContext, request: OverwatchRequest): Promise<UserWithRoles> {
+  // Bearer token is an OPTIONAL second lock: when PROXVM_OVERWATCH_TOKEN is
+  // set it is enforced, otherwise the admin session alone gates access (the
+  // service is still localhost-only with no CORS, so there is no cross-site
+  // angle). Zero config still means working — just slightly less paranoid.
   const required = (process.env.PROXVM_OVERWATCH_TOKEN ?? "").trim();
-  if (!required) {
-    throw new AppError("CONFIGURATION_ERROR", "Overwatch is not configured (PROXVM_OVERWATCH_TOKEN).", 503);
-  }
-  const got = parseBearerToken(request.headers.authorization);
-  if (!timingSafeEqualStr(required, got)) {
-    ctx.logger.warn({ method: request.method, url: request.url }, "overwatch denied: bad or missing bearer token");
-    throw AppError.unauthorized();
+  if (required) {
+    const got = parseBearerToken(request.headers.authorization);
+    if (!timingSafeEqualStr(required, got)) {
+      ctx.logger.warn({ method: request.method, url: request.url }, "overwatch denied: bad or missing bearer token");
+      throw AppError.unauthorized();
+    }
   }
   const sid = request.cookies[OVERWATCH_COOKIE];
   const session = typeof sid === "string" && sid ? await ctx.sessions.validate(sid) : null;
@@ -318,6 +321,12 @@ async function main(): Promise<void> {
   const app = await buildOverwatchApp({ ...ctx, queue });
   await app.listen({ port, host });
   logger.info({ url: `http://${host}:${port}` }, "Overwatch console started");
+  if (!(process.env.PROXVM_OVERWATCH_TOKEN ?? "").trim()) {
+    logger.warn(
+      {},
+      "PROXVM_OVERWATCH_TOKEN is unset: admin session is the only gate. Set a token for the extra bearer lock.",
+    );
+  }
 }
 
 if (require.main === module) {

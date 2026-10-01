@@ -7,17 +7,19 @@ except SQL, which is itself double-gated (see below).
 
 ## Threat model (read this before exposing it)
 
-1. Every route except `/healthz` requires **both**: an `ADMIN`-role session
-   (same `proxvm_session` cookie as the main app) **and** a static bearer
-   token (`Authorization: Bearer …`).
-2. The bearer token is **fail-closed**: with `PROXVM_OVERWATCH_TOKEN` empty,
-   every protected route refuses. Generate one with `openssl rand -hex 32`
-   into the local `.env` (gitignored).
-3. Reachable only from the Docker host by default (compose publishes
-   `127.0.0.1:4001:4001`). The process itself listens on `0.0.0.0` *inside*
-   the container — required, or published-port traffic is accepted then
-   dropped (empty responses). Expose further only behind real authentication
-   (Cloudflare Access, Tailscale) — never the open internet.
+1. Every route except `/healthz` requires an `ADMIN`-role session (same
+   `proxvm_session` cookie as the main app), **plus** a static bearer token
+   (`Authorization: Bearer …`) **when `PROXVM_OVERWATCH_TOKEN` is set**.
+   Unset means session-only gating with a boot warning — zero config, still
+   localhost-only with no CORS, so there is no cross-site angle either way.
+   Set the token (e.g. `openssl rand -hex 32` into the local `.env`,
+   gitignored) for the extra lock.
+2. Binds `127.0.0.1` on the host side (compose publishes
+   `127.0.0.1:4001:4001`).
+3. The process itself listens on `0.0.0.0` *inside* the container —
+   required, or published-port traffic is accepted then dropped (empty
+   responses). Expose further only behind real authentication (Cloudflare
+   Access, Tailscale) — never the open internet.
 4. **No CORS plugin installed on purpose**: cross-origin browsers cannot read
    responses, which makes the bearer token CSRF-proof.
 5. Rate-limited (60/min). Denials are logged; SQL executions are audited.
