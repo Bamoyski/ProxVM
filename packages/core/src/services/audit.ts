@@ -40,6 +40,8 @@ export class AuditService {
     event?: string;
     vmId?: string;
     actorUserId?: string | null;
+    since?: Date;
+    until?: Date;
   }): Promise<AuditRecord[]> {
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -54,6 +56,14 @@ export class AuditService {
     if (opts.actorUserId !== undefined) {
       params.push(opts.actorUserId);
       conditions.push(`actor_user_id = $${params.length}`);
+    }
+    if (opts.since) {
+      params.push(opts.since.toISOString());
+      conditions.push(`created_at >= $${params.length}`);
+    }
+    if (opts.until) {
+      params.push(opts.until.toISOString());
+      conditions.push(`created_at <= $${params.length}`);
     }
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     params.push(opts.limit ?? 50, opts.offset ?? 0);

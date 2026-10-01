@@ -26,11 +26,23 @@ except SQL, which is itself double-gated (see below).
 
 ## Endpoints
 
+## Access
+
+Same origin as the app: `https://your-domain/overwatch/` (nginx strips the
+prefix and forwards). That is what makes the dashboard work with no extra
+login — the session cookie flows because the host is identical. Direct
+`http://localhost:4001/` works too, but only with a session cookie minted
+for `localhost` (i.e. logged in via `localhost:8080`), which is why a
+public-domain login seemingly "doesn't work" there.
+
 | Method | Path | What |
 |---|---|---|
 | GET | `/healthz` | Public liveness (docker healthcheck) |
+| GET | `/auth-mode` | Public ping: whether a bearer is enforced (lets the UI adapt) |
 | GET | `/overview` | Users/VMs/jobs/sessions/tickets/audit-24h/DB size/queue/Proxmox — each source best-effort, partial beats 500 |
-| GET | `/activity?limit=&event=` | Recent audit rows (cap 200) |
+| GET | `/activity?limit=&offset=&event=&vmId=&actor=&since=&until=` | Audit rows (cap 200); actor is a username, since/until are ISO datetimes |
+| GET | `/activity/export?...` | Same filters as CSV download (cap 5000) |
+| GET | `/activity/summary` | Security rollups: failed logins by user/IP, secret touches, quota denials, console use, 7-day volume |
 | GET | `/sessions` | Active sessions metadata **only** — never sid hashes or CSRF tokens |
 | GET | `/queue` | BullMQ waiting/active/delayed/failed/paused counts |
 | GET | `/proxmox/summary` | Nodes + guest counts, or `{configured:false}` |

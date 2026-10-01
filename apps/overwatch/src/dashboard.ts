@@ -42,8 +42,9 @@ pre { background: #020617; border: 1px solid #1e293b; border-radius: 6px; paddin
   <div class="muted">Needs an ADMIN session — log into ProxVM in this browser first (same host shares the cookie). Bearer token only if the server enforces one; otherwise leave blank.</div>
 </div>
 <div class="card"><h2>Fleet overview</h2><div class="row"><button id="btnOverview">Refresh</button></div><pre id="overview">—</pre></div>
+<div class="card"><h2>Security summary</h2><div class="row"><button id="btnSummary">Load</button></div><pre id="summary">—</pre></div>
 <div class="card"><h2>Activity</h2>
-  <div class="row"><input id="actLimit" value="25" size="4" /><input id="actEvent" placeholder="event filter (optional)" size="28" /><button id="btnActivity">Load</button></div>
+  <div class="row"><input id="actLimit" value="25" size="4" /><input id="actEvent" placeholder="event (optional)" size="18" /><input id="actActor" placeholder="actor username" size="16" /><input id="actVm" placeholder="vm id" size="20" /><input id="actSince" placeholder="since 2026-09-01" size="14" /><input id="actUntil" placeholder="until 2026-10-01" size="14" /><button id="btnActivity">Load</button><button id="btnExport">Export CSV</button></div>
   <div id="activity">—</div>
 </div>
 <div class="card"><h2>Sessions</h2><div class="row"><button id="btnSessions">Load</button></div><div id="sessions">—</div></div>
@@ -127,12 +128,18 @@ $("btnOverview").onclick = async () => {
     el.textContent = JSON.stringify(o, null, 1);
   } catch (e) { showError(el, e); }
 };
+function activityQuery() {
+  const p = new URLSearchParams({ limit: $("actLimit").value || "25" });
+  for (const [id, name] of [["actEvent", "event"], ["actActor", "actor"], ["actVm", "vmId"], ["actSince", "since"], ["actUntil", "until"]]) {
+    const v = $(id).value.trim();
+    if (v) p.set(name, v);
+  }
+  return p.toString();
+}
 $("btnActivity").onclick = async () => {
   const el = $("activity");
   try {
-    const q = "?limit=" + encodeURIComponent($("actLimit").value || "25") +
-      ($("actEvent").value ? "&event=" + encodeURIComponent($("actEvent").value) : "");
-    const j = await get("/activity" + q);
+    const j = await get("/activity?" + activityQuery());
     el.textContent = "";
     el.appendChild(table(
       ["time", "event", "actor", "vm"],
@@ -140,6 +147,37 @@ $("btnActivity").onclick = async () => {
     ));
   } catch (e) { showError(el, e); }
 };
+$("btnExport").onclick = async () => {
+  try {
+    const res = await fetch("/activity/export?" + activityQuery(), { headers: headers(false) });
+    if (!res.ok) {
+      let detail = res.status + "";
+      try {
+        const j = await res.json();
+        if (j && j.message) detail = j.message;
+      } catch (_) {}
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "overwatch-activity.csv";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) {
+    showError($("activity"), e);
+  }
+};
+$("btnSummary").onclick = async () => {
+  const el = $("summary");
+  try {
+    const j = await get("/activity/summary");
+    el.textContent = JSON.stringify(j, null, 1);
+  } catch (e) { showError(el, e); }
+};
+fetch("/auth-mode").then((r) => r.json()).then((j) => {
+  setAuthState(true, j && j.tokenEnforced ? "bearer token enforced" : "session-only mode (no bearer configured)");
+}).catch(() => {});
 $("btnSessions").onclick = async () => {
   const el = $("sessions");
   try {

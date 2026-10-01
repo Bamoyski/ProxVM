@@ -163,6 +163,12 @@ export async function buildOverwatchApp(ctx: OwContext): Promise<FastifyInstance
 
   app.get("/healthz", async () => ({ status: "OK", service: "overwatch" }));
 
+  // Lets the dashboard adapt (show or skip the token row). Public by design:
+  // it reveals only whether a bearer is enforced, never anything sensitive.
+  app.get("/auth-mode", async () => ({
+    tokenEnforced: (process.env.PROXVM_OVERWATCH_TOKEN ?? "").trim().length > 0,
+  }));
+
   // Same-origin dashboard (public shell; every data call behind the gate).
   // Served from here so the browser needs no CORS and the session cookie
   // rides along automatically; the bearer token is pasted once per tab.
@@ -178,8 +184,121 @@ export async function buildOverwatchApp(ctx: OwContext): Promise<FastifyInstance
   app.get("/activity", async (request) => {
     const user = await extremeGuard(ctx, request as OverwatchRequest);
     void user;
-    const query = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), event: z.string().max(64).optional() }).parse(request.query);
-    return { entries: await ctx.audit.list({ limit: query.limit, event: query.event }) };
+    const query = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+        offset: z.coerce.number().int().min(0).max(100000).default(0),
+        event: z.string().max(64).optional(),
+        vmId: z.string().uuid().optional(),
+        actor: z.string().max(64).optional(),
+        since: z.string().datetime({ offset: true }).optional(),
+        until: z.string().datetime({ offset: true }).optional(),
+      })
+      .parse(request.query);
+    let actorUserId: string | undefined;
+    if (query.actor) {
+      const found = await ctx.users.findByUsername(query.actor);
+      if (!found) return { entries: [] };
+      actorUserId = found.id;
+    }
+    return {
+      entries: await ctx.audit.list({
+        limit: query.limit,
+        offset: query.offset,
+        event: query.event,
+        vmId: query.vmId,
+        actorUserId,
+        since: query.since ? new Date(query.since) : undefined,
+        until: query.until ? new Date(query.until) : undefined,
+      }),
+    };
+  });
+
+  app.get("/activity/export", async (request, reply) => {
+    await extremeGuard(ctx, request as OverwatchRequest);
+    const query = z
+      .object({
+        event: z.string().max(64).optional(),
+        since: z.string().datetime({ offset: true }).optional(),
+        until: z.string().datetime({ offset: true }).optional(),
+      })
+      .parse(request.query);
+    const entries = await ctx.audit.list({
+      limit: 5000,
+      event: query.event,
+      since: query.since ? new Date(query.since) : undefined,
+      until: query.until ? new Date(query.until) : undefined,
+    });
+    const cell = (value: unknown): string => {
+      const text =
+        value === null || value === undefined
+          ? ""
+          : String(
+              value instanceof Date
+                ? value.toISOString()
+                : typeof value === "object"
+                  ? JSON.stringify(value)
+                  : value,
+            );
+      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+    const lines = [
+      "time,event,actor,vm,job,ip",
+      ...entries.map((e) =>
+        [e.createdAt, e.event, e.actorUsername ?? "", e.vmId ?? "", e.jobId ?? "", e.ip ?? ""]
+          .map((v) => cell(v))
+          .join(","),
+      ),
+    ];
+    return reply
+      .header("Content-Type", "text/csv")
+      .header("Content-Disposition", "attachment; filename=\"overwatch-activity.csv\"")
+      .send(lines.join("\n"));
+  });
+
+  // Security-focused rollups for auditing: failed logins, secret touches,
+  // destructive and privilege actions, console use, and 7-day volume.
+  // Every source is best-effort; a null section means "couldn't read", never
+  // "nothing happened".
+  app.get("/activity/summary", async (request) => {
+    await extremeGuard(ctx, request as OverwatchRequest);
+    const summary: Record<string, unknown> = { generatedAt: new Date().toISOString() };
+    const topBy = async (key: string, event: string, by: "actor_username" | "ip", days: number): Promise<void> => {
+      try {
+        const rows = await ctx.db.query<{ name: string | null; count: string }>(
+          `SELECT ${by} AS name, COUNT(*) AS count FROM audit_logs
+           WHERE event = $1 AND created_at > NOW() - ($2 || ' days')::interval
+           GROUP BY ${by} ORDER BY COUNT(*) DESC LIMIT 10`,
+          [event, String(days)],
+        );
+        summary[key] = rows.rows.map((r) => ({ name: r.name ?? "(unknown)", count: Number(r.count) }));
+      } catch {
+        summary[key] = null;
+      }
+    };
+    await topBy("failedLogins24h", "LOGIN_FAILED", "actor_username", 1);
+    await topBy("failedLogins7d", "LOGIN_FAILED", "actor_username", 7);
+    await topBy("failedLoginIps24h", "LOGIN_FAILED", "ip", 1);
+    await topBy("passwordReveals7d", "PASSWORD_REVEALED", "actor_username", 7);
+    await topBy("passwordCopies7d", "PASSWORD_COPIED", "actor_username", 7);
+    await topBy("quotaDenials7d", "QUOTA_DENIED", "actor_username", 7);
+    await topBy("consoleUse7d", "OVERWATCH_SQL", "actor_username", 7);
+    try {
+      // Day bucketing happens in JS (not to_char) so this stays portable
+      // across Postgres and the pg-mem unit-test double.
+      const rows = await ctx.db.query<{ created_at: Date }>(
+        "SELECT created_at FROM audit_logs WHERE created_at > NOW() - INTERVAL '7 days' ORDER BY created_at ASC LIMIT 20000",
+      );
+      const byDay = new Map<string, number>();
+      for (const r of rows.rows) {
+        const day = new Date(r.created_at).toISOString().slice(0, 10);
+        byDay.set(day, (byDay.get(day) ?? 0) + 1);
+      }
+      summary.volume7d = [...byDay.entries()].map(([day, count]) => ({ day, count }));
+    } catch {
+      summary.volume7d = null;
+    }
+    return summary;
   });
 
   app.get("/sessions", async (request) => {
@@ -267,13 +386,19 @@ export async function buildOverwatchApp(ctx: OwContext): Promise<FastifyInstance
   });
 
   app.setErrorHandler((error, request, reply) => {
-    const err = error as { statusCode?: number; message?: string };
-    const statusCode = err.statusCode ?? 500;
-    const message = statusCode < 500 ? (err.message ?? "Request failed") : "Internal server error";
+    // Duck-type ZodError (name + issues) like the main API does: the zod CJS
+    // and ESM builds expose distinct class objects, so instanceof is unreliable.
+    const err = error as { statusCode?: number; message?: string; name?: string; issues?: Array<{ message?: string }> };
+    let statusCode = err.statusCode ?? 500;
+    let message = statusCode < 500 ? (err.message ?? "Request failed") : "Internal server error";
+    if (err.name === "ZodError" && Array.isArray(err.issues)) {
+      statusCode = 400;
+      message = err.issues[0]?.message ?? "Invalid request";
+    }
     if (statusCode >= 500) {
       ctx.logger.error({ error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error) }, "overwatch error");
     }
-    void reply.status(statusCode).send({ code: "INTERNAL_ERROR", message });
+    void reply.status(statusCode).send({ code: statusCode === 400 ? "VALIDATION_ERROR" : "INTERNAL_ERROR", message });
   });
 
   return app;

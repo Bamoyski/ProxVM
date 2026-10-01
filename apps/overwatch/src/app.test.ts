@@ -121,6 +121,37 @@ describe("overwatch gates", () => {
     }
   });
 
+  it("auth-mode ping is public and reflects the token setting", async () => {
+    const res = await app.inject({ method: "GET", url: "/auth-mode" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ tokenEnforced: true });
+  });
+
+  it("activity filters, export, and summary answer for token + admin", async () => {
+    const headers = { cookie: adminCookie, ...bearer };
+    const admin = await ctx.users.findByUsername("admin");
+    await ctx.audit.record({ event: "LOGIN", actorUserId: admin!.id, actorUsername: "admin" });
+    const byEvent = await app.inject({ method: "GET", url: "/activity?event=LOGIN", headers });
+    expect(byEvent.statusCode).toBe(200);
+    expect((byEvent.json() as { entries: unknown[] }).entries.length).toBeGreaterThan(0);
+    const byActor = await app.inject({ method: "GET", url: "/activity?actor=admin", headers });
+    expect((byActor.json() as { entries: Array<{ actorUsername: string }> }).entries.every((e) => e.actorUsername === "admin")).toBe(true);
+    const future = await app.inject({ method: "GET", url: "/activity?since=2999-01-01T00:00:00Z", headers });
+    expect((future.json() as { entries: unknown[] }).entries).toHaveLength(0);
+    const badSince = await app.inject({ method: "GET", url: "/activity?since=junk", headers });
+    expect(badSince.statusCode).toBe(400);
+    const csv = await app.inject({ method: "GET", url: "/activity/export?event=LOGIN", headers });
+    expect(csv.statusCode).toBe(200);
+    expect(csv.headers["content-type"]).toContain("text/csv");
+    expect(csv.body).toContain("LOGIN");
+    const summary = await app.inject({ method: "GET", url: "/activity/summary", headers });
+    expect(summary.statusCode).toBe(200);
+    const body = summary.json() as Record<string, unknown>;
+    for (const key of ["failedLogins24h", "passwordReveals7d", "consoleUse7d", "volume7d"]) {
+      expect(body).toHaveProperty(key);
+    }
+  });
+
   it("overview and activity answer for token + admin", async () => {
     const res = await app.inject({ method: "GET", url: "/overview", headers: { cookie: adminCookie, ...bearer } });
     expect(res.statusCode).toBe(200);
