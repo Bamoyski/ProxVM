@@ -55,10 +55,7 @@ pre { background: #020617; border: 1px solid #1e293b; border-radius: 8px; paddin
   <h1>⛨ Overwatch</h1>
   <span id="modeBadge" class="badge">…</span>
   <span style="flex:1"></span>
-  <span id="tokenRow" class="hidden">
-    <input id="token" type="password" placeholder="Bearer token" size="30" />
-    <button id="saveToken" class="action">Use token</button>
-  </span>
+  <span id="whoami" class="muted"></span>
 </header>
 <main>
   <div id="fatal"></div>
@@ -106,9 +103,10 @@ pre { background: #020617; border: 1px solid #1e293b; border-radius: 8px; paddin
 "use strict";
 const $ = (id) => document.getElementById(id);
 function headers(json) {
+  // No token handling: the session cookie is the credential. (If this server
+  // ever enforces a bearer again, that belongs in a proper login screen, not
+  // a pasted secret.)
   const h = {};
-  const tok = sessionStorage.getItem("ow_token") || "";
-  if (tok) h["Authorization"] = "Bearer " + tok;
   if (json) h["Content-Type"] = "application/json";
   return h;
 }
@@ -188,28 +186,43 @@ const TABS = [["overview", "Overview"], ["activity", "Activity"], ["sessions", "
     nav.appendChild(b);
   }
 })();
-// Auth mode: hide the token row entirely unless the server enforces one.
-fetch("/auth-mode").then((r) => r.json()).then((j) => {
-  const badge = $("modeBadge");
-  if (j && j.tokenEnforced) {
-    badge.textContent = "token enforced";
+// Boot: always attempt to load, and say plainly who we are / what is wrong.
+// whoami doubles as the login check: no session, non-admin, and server-down
+// each get their own message instead of a wall of red "failed" boxes.
+fetch("/auth-mode")
+  .then((r) => r.json())
+  .then((j) => {
+    const badge = $("modeBadge");
+    if (j && j.tokenEnforced) {
+      badge.textContent = "locked (bearer enforced — use curl, see docs)";
+      badge.classList.add("warn");
+    } else {
+      badge.textContent = "admin session mode";
+      badge.classList.add("ok");
+    }
+    return fetch("/overview", { headers: headers(false) });
+  })
+  .then((r) => {
+    if (r.status === 401) throw new Error("not signed in — log into ProxVM as an ADMIN in this browser first");
+    if (r.status === 403) throw new Error("signed in, but not an ADMIN — Overwatch is administrators only");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  })
+  .then((o) => {
+    $("whoami").textContent = "connected";
+    loadOverview();
+  })
+  .catch((e) => {
+    const badge = $("modeBadge");
+    badge.textContent = "server unreachable?";
     badge.classList.add("warn");
-    $("tokenRow").classList.remove("hidden");
-    $("token").value = sessionStorage.getItem("ow_token") || "";
-  } else {
-    badge.textContent = "session-only mode";
-    badge.classList.add("ok");
-  }
-  loadOverview();
-}).catch(() => {
-  const badge = $("modeBadge");
-  badge.textContent = "server unreachable";
-  badge.classList.add("warn");
-});
-$("saveToken").onclick = () => {
-  sessionStorage.setItem("ow_token", $("token").value.trim());
-  loadOverview();
-};
+    const fatal = $("fatal");
+    fatal.textContent = "";
+    const s = document.createElement("div");
+    s.className = "err";
+    s.textContent = e && e.message ? e.message : String(e);
+    fatal.appendChild(s);
+  });
 async function loadOverview() {
   const stats = $("overviewStats");
   const raw = $("overviewRaw");
