@@ -133,9 +133,29 @@ const TABS = [["overview", "Overview"], ["activity", "Activity"], ["sessions", "
     nav.appendChild(b);
   }
 })();
+// Boot: first bounce alias hosts to canonical (same rule as the main SPA:
+// cookies are host-only, so an old domain can never have a usable session).
+// The endpoint is public on purpose. Fail-open: if it errors, boot normally.
+fetch("/api/domains/public")
+  .then((r) => (r.ok ? r.json() : null))
+  .then((j) => {
+    const host = window.location.hostname.toLowerCase();
+    const canonical = j && j.canonical ? String(j.canonical).toLowerCase() : "";
+    if (canonical && host !== canonical && (j.aliases || []).includes(host)) {
+      window.location.replace("https://" + j.canonical + window.location.pathname + window.location.search);
+      return true;
+    }
+    return false;
+  })
+  .catch(() => false)
+  .then((redirecting) => {
+    if (!redirecting) boot();
+  });
+
 // Boot: always attempt to load, and say plainly who we are / what is wrong.
 // whoami doubles as the login check: no session, non-admin, and server-down
 // each get their own message instead of a wall of red "failed" boxes.
+function boot() {
 fetch("/auth-mode")
   .then((r) => r.json())
   .then((j) => {
@@ -150,7 +170,12 @@ fetch("/auth-mode")
     return fetch("/overview", { headers: headers(false) });
   })
   .then((r) => {
-    if (r.status === 401) throw new Error("not signed in — log into ProxVM as an ADMIN in this browser first");
+    if (r.status === 401) {
+      throw new Error(
+        "not signed in here — log into ProxVM as an ADMIN in this browser first. " +
+          "Note the address bar: the login must be on THIS domain (cookies don't cross hostnames).",
+      );
+    }
     if (r.status === 403) throw new Error("signed in, but not an ADMIN — Overwatch is administrators only");
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
@@ -170,6 +195,7 @@ fetch("/auth-mode")
     s.textContent = e && e.message ? e.message : String(e);
     fatal.appendChild(s);
   });
+}
 async function loadOverview() {
   const stats = $("overviewStats");
   const raw = $("overviewRaw");
