@@ -301,6 +301,13 @@ export class VmsRepository {
     await this.db.query("UPDATE vms SET privacy_flag = $2, updated_at = NOW() WHERE id = $1", [id, enabled]);
   }
 
+  async setVmClass(id: string, vmClass: "server" | "user"): Promise<void> {
+    if (vmClass !== "server" && vmClass !== "user") {
+      throw AppError.validation('vmClass must be "server" or "user"');
+    }
+    await this.db.query("UPDATE vms SET vm_class = $2, updated_at = NOW() WHERE id = $1", [id, vmClass]);
+  }
+
   /**
    * Concrete grant (direct/group row, unexpired) or creator-ownership.
    * Ownership is implicit so flagging a VM never requires pre-configuring
@@ -352,5 +359,6 @@ function toVmRecord(row: VmRow): VmRecord {
     deletedAt: row.deleted_at,
     privacyFlag: row.privacy_flag ?? false,
     firewallIsolated: row.firewall_isolated ?? false,
+    vmClass: row.vm_class === "user" ? "user" : "server",
   };
 }

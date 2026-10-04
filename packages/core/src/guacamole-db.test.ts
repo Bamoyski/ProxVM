@@ -175,6 +175,20 @@ describe("guacamole database factory", () => {
   });
 });
 
+describe("session history for idle detection", () => {
+  it("counts open sessions and reads the latest end (MySQL)", async () => {
+    const fake = makeFakeMySqlPool();
+    const client = new GuacamoleMySqlClient(fake.pool as never);
+    fake.results.push([{ count: 2 }]);
+    expect(await client.countActiveSessions("proxvm-vm1")).toBe(2);
+    expect(fake.queries[0]?.sql).toContain("end_date IS NULL");
+    fake.results.push([{ end_date: new Date("2026-01-02T03:04:05Z") }]);
+    expect(await client.lastSessionEnd("proxvm-vm1")).toEqual(new Date("2026-01-02T03:04:05Z"));
+    fake.results.push([{ end_date: null }]);
+    expect(await client.lastSessionEnd("proxvm-never")).toBeNull();
+  });
+});
+
 describe("sha256 salted hash (Guacamole SHA256PasswordEncryptionService compatible)", () => {
   it("produces 32-byte hash and 32-byte salt, salt unique per call", () => {
     const a = sha256SaltedHashPassword("same-password");

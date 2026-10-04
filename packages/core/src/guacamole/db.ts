@@ -37,6 +37,10 @@ export interface GuacamoleDbClient {
   revokeConnectionAccess(connectionName: string, guacUsername: string): Promise<void>;
   grantRootGroupRead(guacUsername: string): Promise<void>;
   revokeRootGroupRead(guacUsername: string): Promise<void>;
+  /** Open (end_date IS NULL) session count for one stored connection. */
+  countActiveSessions(connectionName: string): Promise<number>;
+  /** Latest session end for one stored connection (null if never used). */
+  lastSessionEnd(connectionName: string): Promise<Date | null>;
 }
 
 export function sha256SaltedHashPassword(password: string): { hash: Buffer; salt: Buffer } {
@@ -341,10 +345,31 @@ export class GuacamolePostgresClient implements GuacamoleDbClient {
 
   async revokeRootGroupRead(guacUsername: string): Promise<void> {
     await this.pool.query(
-      `DELETE FROM guacamole_connection_group_permission
+      `DELETE FROM guacamole_connection_permission
        WHERE entity_id = (SELECT entity_id FROM guacamole_entity WHERE name = $1 AND type = 'USER')`,
       [guacUsername],
     );
+  }
+
+  async countActiveSessions(connectionName: string): Promise<number> {
+    const result = await this.pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM guacamole_connection_history h
+       JOIN guacamole_connection c ON c.connection_id = h.connection_id
+       WHERE c.connection_name = $1 AND h.end_date IS NULL`,
+      [connectionName],
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async lastSessionEnd(connectionName: string): Promise<Date | null> {
+    const result = await this.pool.query<{ end_date: Date | string | null }>(
+      `SELECT MAX(h.end_date) AS end_date FROM guacamole_connection_history h
+       JOIN guacamole_connection c ON c.connection_id = h.connection_id
+       WHERE c.connection_name = $1`,
+      [connectionName],
+    );
+    const value = result.rows[0]?.end_date ?? null;
+    return value ? new Date(value) : null;
   }
 }
 
@@ -640,6 +665,27 @@ export class GuacamoleMySqlClient implements GuacamoleDbClient {
        WHERE entity_id = (SELECT entity_id FROM guacamole_entity WHERE name = ? AND type = 'USER')`,
       [guacUsername],
     );
+  }
+
+  async countActiveSessions(connectionName: string): Promise<number> {
+    const rows = await this.query<{ count: number | string }>(
+      `SELECT COUNT(*) AS count FROM guacamole_connection_history h
+       JOIN guacamole_connection c ON c.connection_id = h.connection_id
+       WHERE c.connection_name = ? AND h.end_date IS NULL`,
+      [connectionName],
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async lastSessionEnd(connectionName: string): Promise<Date | null> {
+    const rows = await this.query<{ end_date: Date | string | null }>(
+      `SELECT MAX(h.end_date) AS end_date FROM guacamole_connection_history h
+       JOIN guacamole_connection c ON c.connection_id = h.connection_id
+       WHERE c.connection_name = ?`,
+      [connectionName],
+    );
+    const value = rows[0]?.end_date ?? null;
+    return value ? new Date(value) : null;
   }
 }
 

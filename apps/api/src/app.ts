@@ -3,7 +3,7 @@ import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, checkVmHealth, getAllowedWebOrigins, getDomainConfig, reconcileVmPower, resolveDomainRedirect, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, checkVmHealth, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
@@ -307,8 +307,42 @@ export function startHomelabTickers(
       );
     }
   };
+  // Idle auto-shutdown: user-class VMs with no sessions, idle CPU, and no
+  // recent activity get a graceful ACPI shutdown. Server-class VMs are never
+  // touched, and the whole pass is a no-op unless the global switch is on.
+  const runPower = async (): Promise<void> => {
+    try {
+      const policy = await getIdlePolicy(ctx.settings);
+      if (!policy.enabled) return;
+      const outcomes = await reconcileIdleShutdown(
+        {
+          db: ctx.db,
+          vms: ctx.vms,
+          guac: ctx.guac,
+          getProxmoxClient: () => ctx.getProxmoxClient(),
+          getGuacDb: () => ctx.getGuacDb(),
+          audit: ctx.audit,
+          logger: ctx.logger,
+        },
+        policy,
+      );
+      const shut = outcomes.filter((o) => o.shutdown);
+      if (shut.length > 0) {
+        ctx.logger.info(
+          { vms: shut.map((o) => ({ id: o.vmId, name: o.name, reason: o.reason })) },
+          "idle auto-shutdown completed",
+        );
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "idle auto-shutdown pass failed",
+      );
+    }
+  };
   void runSchedules();
   void runMetering();
+  void runPower();
   const scheduleTimer = setInterval(() => {
     void runSchedules();
   }, scheduleIntervalMs);
@@ -318,13 +352,17 @@ export function startHomelabTickers(
   const meteringTimer = setInterval(() => {
     void runMetering();
   }, healthIntervalMs);
-  for (const timer of [scheduleTimer, healthTimer, meteringTimer]) {
+  const powerTimer = setInterval(() => {
+    void runPower();
+  }, healthIntervalMs);
+  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer]) {
     (timer as unknown as { unref?: () => void }).unref?.();
   }
   app.addHook("onClose", async () => {
     clearInterval(scheduleTimer);
     clearInterval(healthTimer);
     clearInterval(meteringTimer);
+    clearInterval(powerTimer);
   });
 }
 

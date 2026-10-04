@@ -276,6 +276,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         ip: vm.ipAddress,
         createdAt: vm.createdAt,
         private: vm.privacyFlag,
+        vmClass: vm.vmClass,
         viewerAccess,
       },
       proxmox,
@@ -1126,6 +1127,29 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       detail: { granted },
     });
     return { ok: true, private: body.enabled };
+  });
+
+  // -- VM class (idle auto-shutdown eligibility) --------------------------------
+  // Server machines are never touched by the idle ticker; user machines may
+  // be shut down after sustained idleness when the global switch is on.
+  // Changing class needs vm.edit (unlike privacy: it alters power behavior).
+  app.patch("/vms/:id/class", async (request) => {
+    const { id } = request.params as { id: string };
+    const user = await app.requirePermission("vm.edit")(request);
+    const vm = await ctx.vms.requireById(id);
+    if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
+    }
+    const body = z.object({ vmClass: z.enum(["server", "user"]) }).parse(request.body);
+    await ctx.vms.setVmClass(vm.id, body.vmClass);
+    await ctx.audit.record({
+      event: "VM_EDITED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      vmId: vm.id,
+      detail: { vmClass: body.vmClass },
+    });
+    return { ok: true, vmClass: body.vmClass };
   });
 
   app.put("/vms/:id/ip", async (request) => {

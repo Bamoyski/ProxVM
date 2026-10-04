@@ -198,7 +198,7 @@ export default function VmDetail({ me }: { me: Me }) {
 
   if (!data) return error ? <ErrorBox error={error} /> : <div className="text-slate-400">Loading…</div>;
 
-  const vm = data.vm as { name: string; vmid: number; node: string; status: string; ip: string | null; osType: string | null; private?: boolean; viewerAccess?: boolean };
+  const vm = data.vm as { name: string; vmid: number; node: string; status: string; ip: string | null; osType: string | null; private?: boolean; viewerAccess?: boolean; vmClass?: string };
   const proxmox = data.proxmox as Record<string, unknown> | null;
   const cred = data.credential as Record<string, unknown> | null;
   const guac = data.guacamole as { connections?: Array<{ protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string }>; active?: { protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string } | null } | null;
@@ -255,6 +255,20 @@ export default function VmDetail({ me }: { me: Me }) {
         body: { enabled: !vm.private },
       });
       alert(res.private ? "Privacy flag on — only granted users can see this VM now." : "Privacy flag off.");
+      refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const setClass = async (vmClass: "server" | "user") => {
+    try {
+      await api(`/vms/${id}/class`, { method: "PATCH", body: { vmClass } });
+      alert(
+        vmClass === "user"
+          ? "Marked as a user VM — eligible for idle auto-shutdown when the global switch is on."
+          : "Marked as a server VM — never auto-shut down.",
+      );
       refresh();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -506,6 +520,32 @@ export default function VmDetail({ me }: { me: Me }) {
                 >
                   Turn {vm.private ? "off" : "on"}
                 </button>
+              </div>
+            )}
+            {canEdit && (
+              <div>
+                <div className="text-xs font-medium text-slate-400 mb-2">VM class</div>
+                <div className="text-xs text-slate-500 mb-2">
+                  {(vm.vmClass ?? "server") === "user"
+                    ? "👤 User VM — eligible for idle auto-shutdown when the global switch is on."
+                    : "🖥️ Server VM — never auto-shut down."}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void setClass("server")}
+                    disabled={(vm.vmClass ?? "server") === "server"}
+                    className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded"
+                  >
+                    Server
+                  </button>
+                  <button
+                    onClick={() => void setClass("user")}
+                    disabled={vm.vmClass === "user"}
+                    className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded"
+                  >
+                    User
+                  </button>
+                </div>
               </div>
             )}
           </div>

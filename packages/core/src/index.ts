@@ -35,6 +35,7 @@ export * from "./services/queue.js";
 export * from "./services/homelab.js";
 export * from "./services/usage.js";
 export * from "./services/firewall.js";
+export * from "./services/idle.js";
 export * from "./services/filtercheck.js";
 export * from "./provisioning/pipeline.js";
 export * from "./provisioning/defaults.js";

@@ -160,7 +160,13 @@ function AppSettings() {
     queryFn: () =>
       api<{
         app: Record<string, unknown>;
-        settings: { retentionDays: number | null; announcementText: string | null; announcementLevel: "info" | "warn" };
+        settings: {
+          retentionDays: number | null;
+          announcementText: string | null;
+          announcementLevel: "info" | "warn";
+          idleShutdownEnabled: boolean;
+          idleMinutes: number;
+        };
       }>("/settings/app"),
   });
   const [retention, setRetention] = useState("");
@@ -175,6 +181,14 @@ function AppSettings() {
   const shownAnnouncement = announcementTouched ? announcement : (currentAnnouncement ?? "");
   const shownLevel = announcementLevelTouched ? announcementLevel : (data?.settings?.announcementLevel ?? "info");
 
+  const [idleEnabled, setIdleEnabled] = useState<boolean | null>(null);
+  const [idleMinutes, setIdleMinutes] = useState("");
+  const [idleTouched, setIdleTouched] = useState(false);
+  const currentIdleEnabled = data?.settings?.idleShutdownEnabled ?? false;
+  const shownIdleEnabled = idleEnabled ?? currentIdleEnabled;
+  const currentIdleMinutes = data?.settings?.idleMinutes ?? 120;
+  const shownIdleMinutes = idleTouched ? idleMinutes : String(currentIdleMinutes);
+
   const save = async () => {
     setError(null);
     setSaved(null);
@@ -183,7 +197,13 @@ function AppSettings() {
       if (value !== null && (!Number.isInteger(value) || value < 1 || value > 3650)) {
         throw new Error("Retention must be blank (keep forever) or 1-3650 days");
       }
-      const body: { retentionDays: number | null; announcementText?: string | null; announcementLevel?: "info" | "warn" } = {
+      const body: {
+        retentionDays: number | null;
+        announcementText?: string | null;
+        announcementLevel?: "info" | "warn";
+        idleShutdownEnabled?: boolean;
+        idleMinutes?: number;
+      } = {
         retentionDays: value,
       };
       if (announcementTouched || announcementLevelTouched) {
@@ -195,11 +215,20 @@ function AppSettings() {
           body.announcementLevel = shownLevel;
         }
       }
+      if (idleTouched) {
+        const minutes = Number(shownIdleMinutes);
+        if (!Number.isInteger(minutes) || minutes < 5 || minutes > 10080) {
+          throw new Error("Idle minutes must be 5–10080");
+        }
+        body.idleShutdownEnabled = shownIdleEnabled;
+        body.idleMinutes = minutes;
+      }
       await api("/settings/app", { method: "PUT", body });
       setSaved("Application settings saved");
       setTouched(false);
       setAnnouncementTouched(false);
       setAnnouncementLevelTouched(false);
+      setIdleTouched(false);
       void qc.invalidateQueries({ queryKey: ["settings-app"] });
       void qc.invalidateQueries({ queryKey: ["announcement"] });
     } catch (err) {
@@ -249,6 +278,35 @@ function AppSettings() {
           <option value="warn">Warning (amber)</option>
         </select>
       </Field>
+      <Field label="Idle auto-shutdown (user-class VMs only; server VMs never)">
+        <div className="flex flex-wrap gap-2 items-center">
+          <label className="text-xs text-slate-300 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={shownIdleEnabled}
+              onChange={(e) => {
+                setIdleEnabled(e.target.checked);
+                setIdleTouched(true);
+              }}
+            />
+            Shut down idle user VMs
+          </label>
+          <input
+            type="number"
+            className={`${input} w-28`}
+            title="Minutes of no sessions + idle CPU before shutdown"
+            value={shownIdleMinutes}
+            onChange={(e) => {
+              setIdleMinutes(e.target.value);
+              setIdleTouched(true);
+            }}
+          />
+          <span className="text-xs text-slate-500">min idle (5–10080)</span>
+        </div>
+      </Field>
+      <div className="text-xs text-slate-500">
+        A VM shuts down only with zero sessions, idle CPU, and no activity for the full window. Never-used VMs are skipped.
+      </div>
       <button onClick={save} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">Save</button>
     </div>
   );

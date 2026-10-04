@@ -77,6 +77,8 @@ export interface SettingRecord {
   updatedAt: Date;
 }
 
+export type VmClass = "server" | "user";
+
 export interface VmRecord {
   id: string;
   vmid: number;
@@ -93,6 +95,7 @@ export interface VmRecord {
   deletedAt: Date | null;
   privacyFlag: boolean;
   firewallIsolated: boolean;
+  vmClass: VmClass;
 }
 
 export interface VmCredentialRecord {
