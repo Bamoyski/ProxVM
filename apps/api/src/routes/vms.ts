@@ -479,7 +479,25 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     if (body.target === vm.node) throw AppError.validation("Target node must differ from the current node");
     const client = await ctx.getProxmoxClient();
     const online = body.online ?? vm.status === "running";
-    const upid = await client.migrate(vm.node, vm.vmid, body.target, online);
+    // Locally-mounted install media blocks migration (node-local `local:`
+    // volumes can't travel). Eject it first — hot-safe on a running guest —
+    // and record exactly what changed so it can be reattached after.
+    const detachedIso: string[] = [];
+    try {
+      const config = (await client.qemuConfig(vm.node, vm.vmid)) as Record<string, unknown>;
+      for (const [key, value] of Object.entries(config)) {
+        if (!/^(ide|scsi|sata)\d+$/.test(key) || typeof value !== "string") continue;
+        if (!value.includes("media=cdrom") || !/(?:^|,)local:/.test(value)) continue;
+        await client.updateConfig(vm.node, vm.vmid, { [key]: "none,media=cdrom" });
+        detachedIso.push(key);
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { vmId: vm.id, error: err instanceof Error ? err.message : String(err) },
+        "pre-migration ISO scan failed; attempting migration anyway",
+      );
+    }
+    const upid = await client.migrate(vm.node, vm.vmid, body.target, online, true);
     if (upid) await client.waitForTask(vm.node, upid, 1800000);
     await ctx.vms.updateNode(vm.id, body.target);
     await ctx.audit.record({
@@ -487,9 +505,9 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       actorUserId: user.id,
       actorUsername: user.username,
       vmId: vm.id,
-      detail: { from: vm.node, to: body.target, online },
+      detail: { from: vm.node, to: body.target, online, withLocalDisks: true, detachedIso },
     });
-    return { ok: true, node: body.target };
+    return { ok: true, node: body.target, detachedIso };
   });
 
   // -- Resource graphs ---------------------------------------------------------

@@ -85,6 +85,16 @@ describe("ProxmoxClient error reporting", () => {
     expect(requested).toBe("https://192.0.2.1:8006/api2/json/version");
   });
 
+  it("sends with-local-disks on migrate by default", async () => {
+    let body = "";
+    const client = clientWith((async (_url: unknown, init?: RequestInit) => {
+      body = String(init?.body ?? "");
+      return new Response(JSON.stringify({ data: "UPID:1" }), { status: 200 });
+    }) as unknown as typeof fetch);
+    await client.migrate("pve-node-01", 134, "pve-node-03", true);
+    expect(JSON.parse(body)).toMatchObject({ target: "pve-node-03", online: 1, "with-local-disks": 1 });
+  });
+
   it("returns parsed data for valid JSON responses", async () => {
     const client = clientWith((async () =>
       new Response(JSON.stringify({ data: { storage: "local-lvm" } }), { status: 200 })) as unknown as typeof fetch);

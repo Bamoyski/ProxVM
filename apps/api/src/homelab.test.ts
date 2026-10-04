@@ -71,9 +71,17 @@ describe("homelab endpoints", () => {
       calls.push("makeTemplate");
       return "UPID:template";
     },
-    migrate: async () => {
-      calls.push("migrate");
+    migrate: async (...args: unknown[]) => {
+      calls.push(`migrate:${JSON.stringify(args.slice(2))}`);
       return "UPID:migrate";
+    },
+    qemuConfig: async () => ({
+      ide2: "local:iso/debian-13.6.0-amd64-netinst.iso,media=cdrom",
+      scsi0: "local-lvm:vm-200-disk-0",
+    }),
+    updateConfig: async (_node: string, _vmid: number, cfg: Record<string, unknown>) => {
+      calls.push(`updateConfig:${JSON.stringify(cfg)}`);
+      return "";
     },
     start: async () => {
       calls.push("start");
@@ -196,6 +204,19 @@ describe("homelab endpoints", () => {
       payload: { target: "node2" },
     });
     expect(same.statusCode).toBe(400);
+  });
+
+  it("ejects locally-mounted ISOs and migrates with local disks", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/vms/${vmId}/migrate`,
+      headers: authA(),
+      payload: { target: "node3", online: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, node: "node3", detachedIso: ["ide2"] });
+    expect(calls).toContain('updateConfig:{"ide2":"none,media=cdrom"}');
+    expect(calls).toContain('migrate:["node3",true,true]');
   });
 
   it("serves RRD stats with access control", async () => {

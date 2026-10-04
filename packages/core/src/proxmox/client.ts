@@ -263,6 +263,78 @@ export class ProxmoxClient {
     return this.request(`/nodes/${node}/qemu/${vmid}/status/current`);
   }
 
+  async clusterFirewallOptions(): Promise<Record<string, unknown>> {
+    return this.request("/cluster/firewall/options");
+  }
+
+  async guestFirewallOptions(node: string, vmid: number): Promise<Record<string, unknown>> {
+    return this.request(`/nodes/${node}/qemu/${vmid}/firewall/options`);
+  }
+
+  async setGuestFirewallOptions(
+    node: string,
+    vmid: number,
+    opts: { enable?: boolean; policy_in?: "ACCEPT" | "DROP" | "REJECT"; policy_out?: "ACCEPT" | "DROP" | "REJECT" },
+  ): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = {};
+    if (opts.enable !== undefined) body.enable = opts.enable ? 1 : 0;
+    if (opts.policy_in) body.policy_in = opts.policy_in;
+    if (opts.policy_out) body.policy_out = opts.policy_out;
+    return this.request(`/nodes/${node}/qemu/${vmid}/firewall/options`, {
+      method: "PUT",
+      body,
+    });
+  }
+
+  async guestFirewallRules(node: string, vmid: number): Promise<Array<Record<string, unknown>>> {
+    const result = await this.request<Array<Record<string, unknown>> | { data?: Array<Record<string, unknown>> }>(
+      `/nodes/${node}/qemu/${vmid}/firewall/rules`,
+    );
+    if (Array.isArray(result)) return result;
+    if (result && Array.isArray((result as { data?: unknown }).data)) {
+      return (result as { data: Array<Record<string, unknown>> }).data;
+    }
+    return [];
+  }
+
+  async createGuestFirewallRule(
+    node: string,
+    vmid: number,
+    rule: {
+      action: "ACCEPT" | "DROP" | "REJECT";
+      type: "in" | "out" | "forward" | "group";
+      proto?: string;
+      dport?: string;
+      sport?: string;
+      source?: string;
+      dest?: string;
+      comment?: string;
+      enable?: boolean;
+    },
+  ): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = {
+      action: rule.action,
+      type: rule.type,
+      enable: rule.enable === false ? 0 : 1,
+    };
+    if (rule.proto) body.proto = rule.proto;
+    if (rule.dport) body.dport = rule.dport;
+    if (rule.sport) body.sport = rule.sport;
+    if (rule.source) body.source = rule.source;
+    if (rule.dest) body.dest = rule.dest;
+    if (rule.comment) body.comment = rule.comment;
+    return this.request(`/nodes/${node}/qemu/${vmid}/firewall/rules`, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async deleteGuestFirewallRule(node: string, vmid: number, pos: number): Promise<Record<string, unknown>> {
+    return this.request(`/nodes/${node}/qemu/${vmid}/firewall/rules/${pos}`, {
+      method: "DELETE",
+    });
+  }
+
   async qemuConfig(node: string, vmid: number): Promise<ProxmoxVmConfig> {
     return this.request<ProxmoxVmConfig>(`/nodes/${node}/qemu/${vmid}/config`);
   }
@@ -329,11 +401,14 @@ export class ProxmoxClient {
   /**
    * Live-migrate (online) or offline-migrate a VM to another cluster node.
    * Node names are encoded: they originate from user input on some paths.
+   * withLocalDisks defaults on: without it, any VM holding node-local
+   * storage aborts migration at volume scan ("can't live migrate attached
+   * local disks"). Harmless for shared-storage VMs.
    */
-  async migrate(node: string, vmid: number, target: string, online = false): Promise<string> {
+  async migrate(node: string, vmid: number, target: string, online = false, withLocalDisks = true): Promise<string> {
     const result = await this.request<string>(`/nodes/${encodeURIComponent(node)}/qemu/${vmid}/migrate`, {
       method: "POST",
-      body: { target, online: online ? 1 : 0 },
+      body: { target, online: online ? 1 : 0, "with-local-disks": withLocalDisks ? 1 : 0 },
     });
     return typeof result === "string" ? result : "";
   }
@@ -475,6 +550,13 @@ export class ProxmoxClient {
     }));
   }
 
+  // Known limitation (observed against PVE 9.0.11, 2026-09): the guest
+  // agent exec channel does not accept commands containing spaces (the API
+  // rejects them with HTTP 596), and input-data/out-data/err-data are passed
+  // through as raw text rather than base64. Callers must use single-word
+  // binaries and must not rely on shell pipelines here; password rotation
+  // falls back to SSH for this reason. Deliberately unchanged until the wire
+  // format is confirmed across PVE versions.
   async agentExec(node: string, vmid: number, command: string, inputData?: string): Promise<number | null> {
     const result = await this.request<{ pid?: number }>(
       `/nodes/${node}/qemu/${vmid}/agent/exec`,
