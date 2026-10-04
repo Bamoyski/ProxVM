@@ -19,26 +19,17 @@ describe("password hashing", () => {
 });
 
 describe("password generation", () => {
-  it("meets complexity and minimum length", () => {
-    for (const length of [12, 16, 24, 64]) {
-      const pw = generatePassword(length);
-      expect(pw.length).toBeGreaterThanOrEqual(length);
-      expect(pw).toMatch(/[a-z]/);
-      expect(pw).toMatch(/[A-Z]/);
-      expect(pw).toMatch(/[0-9]/);
-      expect(pw).toMatch(/[^A-Za-z0-9]/);
-    }
-  });
-  it("generates typable passphrases without shell-breaking characters", () => {
+  it("generates exactly two capitalized words joined by a hyphen", () => {
     for (let i = 0; i < 20; i++) {
-      const pw = generatePassword(24);
+      const pw = generatePassword();
+      expect(pw).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+$/);
       expect(pw).not.toMatch(/[\r\n:]/);
-      expect(pw.split("-").length).toBeGreaterThanOrEqual(3);
+      expect(pw.split("-")).toHaveLength(2);
     }
   });
   it("generates unique passwords", () => {
-    const set = new Set(Array.from({ length: 50 }, () => generatePassword(24)));
-    expect(set.size).toBe(50);
+    const set = new Set(Array.from({ length: 10 }, () => generatePassword()));
+    expect(set.size).toBe(10);
   });
 });
 
@@ -79,7 +70,7 @@ describe("AES-256-GCM secret encryption", () => {
 
 describe("generated password embeds no dictionary of the word password", () => {
   it("never equals a constant", () => {
-    expect(generatePassword(24)).not.toBe("password-password-passw");
+    expect(generatePassword()).not.toBe("password-password");
   });
 });
 

@@ -83,12 +83,12 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
 
   app.post("/vms/:id/credentials/generate", async (request) => {
     await app.requireAuth(request);
-    return { password: generatePassword(24) };
+    return { password: generatePassword() };
   });
 
   app.post("/credentials/generate", async (request) => {
     await app.requireAuth(request);
-    return { password: generatePassword(24) };
+    return { password: generatePassword() };
   });
 
   app.get("/credentials", async (request) => {

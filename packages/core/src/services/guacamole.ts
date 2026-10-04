@@ -175,7 +175,7 @@ export class GuacamoleService {
   ): Promise<GuacUserRow> {
     const existing = await this.findUserRecord(userId);
     const guacUsername = `px_${appUsername.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 40)}`;
-    const password = existing ? this.deps.decrypt(existing.password_ciphertext) : generatePassword(24);
+    const password = existing ? this.deps.decrypt(existing.password_ciphertext) : generatePassword();
     await guacDb.createUser({ username: guacUsername, password });
     await guacDb.setUserPassword(guacUsername, password);
     await guacDb.grantRootGroupRead(guacUsername);
@@ -273,7 +273,7 @@ export class GuacamoleService {
         if (opts?.trackSessionId) {
           await this.trackSessionToken(opts.trackSessionId, token.authToken).catch(() => undefined);
         }
-        return { url: buildClientLaunchUrl(publicUrl || guacUrl, identifier, token.authToken), mode: "direct" };
+        return { url: buildClientLaunchUrl(publicUrl || guacUrl, identifier, token.authToken, token.dataSource), mode: "direct" };
       } catch (err) {
         return { url: buildLoginUrl(publicUrl || guacUrl), mode: "login", detail: err instanceof Error ? err.message : String(err) };
       }

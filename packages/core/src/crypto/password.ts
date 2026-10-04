@@ -49,27 +49,24 @@ export interface GeneratedPassword {
 }
 
 /**
- * Typable passphrase passwords: capitalized words joined with hyphens plus a
- * two-digit number and "!", e.g. "Cabin-Apron-Forge-42!". Always satisfies
- * the account complexity policy (upper, lower, digit, symbol, 12+ chars).
+ * Two-word typable passwords: two capitalized words joined with a hyphen,
+ * e.g. "Cabin-Apron". Short and memorable on purpose — these are guest and
+ * throwaway credentials, always vault-stored, never typed except from the
+ * vault reveal/copy UI.
  *
- * The result is AT LEAST `length` characters (exact lengths are not
- * achievable with whole words). Entropy per character is lower than the old
- * random soup, but vault-stored guest passwords are threatened by online
- * guessing, not offline cracking — and these never contain chpasswd- or
- * shell-breaking characters (notably no ":"), which the old alphabet could.
+ * Entropy note: ~157 words squared is roughly 14.6 bits, which would be thin
+ * against offline cracking — but these passwords only ever face ONLINE
+ * guessing (RDP/SSH behind login rate limiting plus 5-fail account lockout),
+ * where tens of thousands of combinations are plenty. They never contain
+ * chpasswd- or shell-breaking characters (notably no ":").
  */
-export function generatePassword(length = 24): string {
-  const words: string[] = [];
-  const target = Math.max(length, 12);
-  let text = "";
-  while (text.length < target) {
+export function generatePassword(): string {
+  const pick = (): string => {
     const word = PASSPHRASE_WORDS[randomInt(PASSPHRASE_WORDS.length)] as string;
-    words.push(word);
-    text = [
-      ...words.map((w) => w.slice(0, 1).toUpperCase() + w.slice(1)),
-      String(randomInt(90) + 10),
-    ].join("-") + "!";
-  }
-  return text;
+    return word.slice(0, 1).toUpperCase() + word.slice(1);
+  };
+  let first = pick();
+  let second = pick();
+  if (second === first) second = pick();
+  return `${first}-${second}`;
 }

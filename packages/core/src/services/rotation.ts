@@ -64,7 +64,7 @@ export async function rotateVmCredential(
   }
   const username = opts.username ?? existing.username;
   const oldPassword = deps.decrypt(existing.password_ciphertext);
-  const newPassword = opts.newPassword ?? generatePassword(24);
+  const newPassword = opts.newPassword ?? generatePassword();
 
   if (existing.status === "ROTATING") {
     // A previous run never settled (process restart mid-rotation, or a
