@@ -6,6 +6,7 @@ import type { SettingsService } from "./settings.js";
 import type { VmsRepository } from "./vms.js";
 import type { GuacamoleService } from "./guacamole.js";
 import type { AuditService } from "./audit.js";
+import type { Logger } from "../util/logger.js";
 
 /**
  * Idle auto-shutdown for user-class VMs ("service" machines are never
@@ -74,7 +75,7 @@ export interface IdleDeps {
   getProxmoxClient: () => Promise<ProxmoxClient>;
   getGuacDb: () => Promise<GuacamoleDbClient>;
   audit: Pick<AuditService, "record">;
-  logger: { debug: (obj: unknown, msg: string) => void; warn: (obj: unknown, msg: string) => void };
+  logger: Logger;
 }
 
 /** Average CPU fraction over roughly the last `windowMinutes` (null when unreadable). */
