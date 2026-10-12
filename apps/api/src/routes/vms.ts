@@ -619,6 +619,8 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const from = vm.node;
     const detachedIso = query.detachedIso ? query.detachedIso.split(",").filter(Boolean) : [];
     await ctx.vms.updateNode(vm.id, query.target);
+    // Request-scoped audit (fills client IP + actor): never ctx.audit.record
+    // directly on HTTP paths.
     await app.audit(request, {
       event: "VM_MIGRATED",
       actorUserId: user.id,

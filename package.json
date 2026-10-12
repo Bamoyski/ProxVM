@@ -16,7 +16,8 @@
     "typecheck": "npm run typecheck -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web -w @proxvm/overwatch",
     "test": "npm run test -w @proxvm/shared -w @proxvm/core -w @proxvm/api",
     "test:integration": "npm run test:integration -w @proxvm/api",
-    "db:migrate": "npm run db:migrate -w @proxvm/api"
+    "db:migrate": "npm run db:migrate -w @proxvm/api",
+    "audit:ci": "npm audit --omit=dev --audit-level=moderate"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

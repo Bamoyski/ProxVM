@@ -2,6 +2,8 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
+# Local agent notes — never push (per operator instruction).
+AGENTS.md
 .env
 .env.*
 !.env.example
