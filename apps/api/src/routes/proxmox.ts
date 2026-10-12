@@ -59,14 +59,41 @@ export async function proxmoxRoutes(app: FastifyInstance, opts: { ctx: CoreConte
     await guard(request);
     const client = await opts.ctx.getProxmoxClient();
     const node = requireNode(request.query);
-    return { storage: await client.storages(node) };
+    const rows = await client.storages(node);
+    // Project: upstream storage rows can carry config text, digests and
+    // comments — tenants only need capacity/identity fields.
+    return {
+      storage: rows.map((s) => ({
+        node: s.node ?? node,
+        storage: s.storage ?? null,
+        type: s.type ?? null,
+        content: s.content ?? null,
+        total: s.total ?? null,
+        used: s.used ?? null,
+        avail: s.avail ?? null,
+        shared: s.shared ?? null,
+        active: s.active ?? null,
+        enabled: s.enabled ?? null,
+      })),
+    };
   });
 
   app.get("/proxmox/networks", async (request) => {
     await guard(request);
     const client = await opts.ctx.getProxmoxClient();
     const node = requireNode(request.query);
-    return { networks: await client.networks(node) };
+    const rows = await client.networks(node);
+    return {
+      networks: rows.map((n) => ({
+        iface: n.iface ?? null,
+        type: n.type ?? null,
+        address: n.address ?? null,
+        netmask: n.netmask ?? null,
+        gateway: n.gateway ?? null,
+        bridge_ports: n.bridge_ports ?? null,
+        active: n.active ?? null,
+      })),
+    };
   });
 
   app.get("/proxmox/templates", async (request) => {

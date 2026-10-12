@@ -69,16 +69,21 @@ export default function CommandPalette({ open, onClose, nav, canViewUsers, go }:
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center pt-24" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-24" style={{ background: "rgba(0,0,0,0.55)" }} onClick={onClose}>
       <div
-        className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-lg shadow-xl overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Command palette"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%", maxWidth: 560, background: "var(--pv-surface)",
+          border: "1px solid var(--pv-border)", borderRadius: 8,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.5)", overflow: "hidden",
+        }}
       >
         <input
           ref={inputRef}
-          className="w-full bg-transparent px-4 py-3 text-sm outline-none border-b border-slate-800"
+          className="pv-input"
+          style={{ border: "none", borderBottom: "1px solid var(--pv-border-soft)", borderRadius: 0, height: 44, fontSize: "0.9rem" }}
           placeholder="Type a page, VM, or user… (Esc to close)"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -95,20 +100,26 @@ export default function CommandPalette({ open, onClose, nav, canViewUsers, go }:
             }
           }}
         />
-        <div className="max-h-80 overflow-y-auto py-1">
+        <div style={{ maxHeight: 320, overflowY: "auto", padding: "4px 0" }}>
           {entries.map((e, i) => (
             <button
               key={`${e.kind}-${e.to}`}
-              className={`w-full text-left px-4 py-2 text-sm flex items-center gap-3 ${i === index ? "bg-slate-800" : ""}`}
               onMouseEnter={() => setIndex(i)}
               onClick={() => choose(i)}
+              style={{
+                width: "100%", textAlign: "left", display: "flex", alignItems: "center", gap: 12,
+                padding: "8px 16px", fontSize: "0.85rem", cursor: "pointer",
+                background: i === index ? "var(--pv-surface-2)" : "none",
+                border: "none", borderLeft: i === index ? "2px solid var(--pv-accent)" : "2px solid transparent",
+                color: "var(--pv-text)",
+              }}
             >
-              <span className="text-[10px] uppercase tracking-wide text-slate-500 w-10 shrink-0">{e.kind}</span>
-              <span className="text-slate-200">{e.label}</span>
-              <span className="text-xs text-slate-500 ml-auto truncate">{e.hint}</span>
+              <span className="pv-mono" style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)", width: 40, flex: "none" }}>{e.kind}</span>
+              <span>{e.label}</span>
+              <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.hint}</span>
             </button>
           ))}
-          {!entries.length && <div className="px-4 py-3 text-sm text-slate-500">No matches.</div>}
+          {!entries.length && <div style={{ padding: "12px 16px", fontSize: "0.85rem", color: "var(--pv-text-3)" }}>No matches.</div>}
         </div>
       </div>
     </div>

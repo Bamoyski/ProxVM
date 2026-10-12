@@ -246,4 +246,122 @@ describe("VM user-access management API", () => {
     expect(await ctx.vms.hasAccess(vmId, bobId)).toBe(false);
     expect(await ctx.vms.listAccessUserIds(vmId)).not.toContain(bobId);
   });
+
+  it("delegated invites are time-boxed and never exceed the inviter's reach", async () => {
+    const hour = new Date(Date.now() + 3600000).toISOString();
+    const twoDays = new Date(Date.now() + 2 * 86400000).toISOString();
+    const mkUser = async (username: string) => {
+      const u = await ctx.users.create({
+        username,
+        passwordHash: await hashPassword("User-Password-1!"),
+        roles: ["USER"],
+      });
+      return u;
+    };
+    const carol = await mkUser("carol");
+    const dave = await mkUser("dave");
+    const erin = await mkUser("erin");
+    const frank = await mkUser("frank");
+    const aliceAuth = { cookie: alice.cookie, "x-csrf-token": alice.csrf };
+    const adminAuth = { cookie: admin.cookie, "x-csrf-token": admin.csrf };
+    const invite = (auth: Record<string, string>, payload: object) =>
+      app.inject({ method: "POST", url: `/api/vms/${vmId}/invite`, headers: auth, payload });
+
+    // Permanent invite by a mere grantee is denied.
+    expect((await invite(aliceAuth, { username: "carol" })).statusCode).toBe(403);
+    expect(await ctx.vms.hasAccess(vmId, carol.id)).toBe(false);
+
+    // Over-long delegated expiry is denied.
+    expect((await invite(aliceAuth, { username: "carol", expiresAt: twoDays })).statusCode).toBe(403);
+    expect(await ctx.vms.hasAccess(vmId, carol.id)).toBe(false);
+
+    // Scope alice to ssh-only, then try delegating rdp: denied.
+    await ctx.vms.replaceAccess(vmId, aliceId, { protocols: ["ssh"] });
+    expect((await invite(aliceAuth, { username: "dave", protocols: ["rdp"], expiresAt: hour })).statusCode).toBe(403);
+    expect(await ctx.vms.hasAccess(vmId, dave.id)).toBe(false);
+
+    // Valid delegated invite (subset + expiry) succeeds and is scoped.
+    const ok = await invite(aliceAuth, { username: "erin", protocols: ["ssh"], expiresAt: hour });
+    expect(ok.statusCode).toBe(200);
+    const rows = await ctx.db.query<{ protocols: string[] | null; expires_at: Date | null }>(
+      "SELECT protocols, expires_at FROM vm_access WHERE vm_id = $1 AND user_id = $2",
+      [vmId, erin.id],
+    );
+    expect(rows.rows[0]!.protocols).toEqual(["ssh"]);
+    expect(new Date(rows.rows[0]!.expires_at!).getTime()).toBeGreaterThan(Date.now());
+
+    // Manager permanent invite still works (managers use the managed grant path).
+    const adminUser = await ctx.users.findByUsername("admin");
+    await ctx.vms.setAccess(vmId, adminUser!.id, null);
+    const managed = await invite(adminAuth, { username: "frank" });
+    expect(managed.statusCode).toBe(200);
+    expect(await ctx.vms.hasAccess(vmId, frank.id)).toBe(true);
+  });
+
+  it("a revoked inviter loses revoke power over their invite", async () => {
+    const inviter = await ctx.users.create({
+      username: "inviter",
+      passwordHash: await hashPassword("User-Password-1!"),
+      roles: ["USER"],
+    });
+    const target = await ctx.users.create({
+      username: "invitee",
+      passwordHash: await hashPassword("User-Password-1!"),
+      roles: ["USER"],
+    });
+    const owned = await ctx.vms.create({
+      vmid: 303,
+      node: "node1",
+      name: "invite-vm",
+      status: "stopped",
+      createdByUserId: inviter.id,
+    });
+    const session = await login(app, "inviter", "User-Password-1!");
+    const auth = { cookie: session.cookie, "x-csrf-token": session.csrf };
+    expect(
+      (await app.inject({ method: "POST", url: `/api/vms/${owned.id}/invite`, headers: auth, payload: { username: "invitee" } })).statusCode,
+    ).toBe(200);
+    expect(await ctx.vms.hasAccess(owned.id, target.id)).toBe(true);
+
+    // A manager removes the INVITER's own route to the VM (owner row deleted
+    // directly: ownership itself is the grant here).
+    await ctx.db.query("UPDATE vms SET created_by_user_id = NULL WHERE id = $1", [owned.id]);
+    const revoke = await app.inject({
+      method: "DELETE",
+      url: `/api/vms/${owned.id}/access/${target.id}`,
+      headers: auth,
+    });
+    expect(revoke.statusCode).toBe(403);
+    expect(await ctx.vms.hasAccess(owned.id, target.id)).toBe(true);
+  });
+
+  it("owner permanent invites still work", async () => {
+    const owner = await ctx.users.create({
+      username: "owner",
+      passwordHash: await hashPassword("User-Password-1!"),
+      roles: ["USER"],
+    });
+    const owned = await ctx.vms.create({
+      vmid: 302,
+      node: "node1",
+      name: "owned-vm",
+      status: "stopped",
+      osType: "linux",
+      createdByUserId: owner.id,
+    });
+    const guest = await ctx.users.create({
+      username: "guest",
+      passwordHash: await hashPassword("User-Password-1!"),
+      roles: ["USER"],
+    });
+    const session = await login(app, "owner", "User-Password-1!");
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/vms/${owned.id}/invite`,
+      headers: { cookie: session.cookie, "x-csrf-token": session.csrf },
+      payload: { username: "guest" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await ctx.vms.hasAccess(owned.id, guest.id)).toBe(true);
+  });
 });

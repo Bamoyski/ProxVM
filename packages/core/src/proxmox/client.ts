@@ -310,6 +310,10 @@ export class ProxmoxClient {
       dest?: string;
       comment?: string;
       enable?: boolean;
+      /** Explicit chain position. Proxmox defaults new rules to the TOP
+       * (pos 0), which silently inverts any intended order — callers that
+       * care about first-match-wins evaluation must pass pos. */
+      pos?: number;
     },
   ): Promise<Record<string, unknown>> {
     const body: Record<string, unknown> = {
@@ -323,6 +327,7 @@ export class ProxmoxClient {
     if (rule.source) body.source = rule.source;
     if (rule.dest) body.dest = rule.dest;
     if (rule.comment) body.comment = rule.comment;
+    if (rule.pos !== undefined) body.pos = rule.pos;
     return this.request(`/nodes/${node}/qemu/${vmid}/firewall/rules`, {
       method: "POST",
       body,
@@ -417,6 +422,24 @@ export class ProxmoxClient {
   async makeTemplate(node: string, vmid: number): Promise<string> {
     const result = await this.request<string>(`/nodes/${encodeURIComponent(node)}/qemu/${vmid}/template`, {
       method: "POST",
+    });
+    return typeof result === "string" ? result : "";
+  }
+
+  /**
+   * Start a vzdump backup of one guest toward a PBS-backed PVE storage.
+   * Returns the UPID immediately; the caller polls taskStatus (the backup
+   * itself runs for minutes to hours, so nobody awaits it inline). `mode`
+   * snapshot works on running VMs; suspend/stop pause or power off the
+   * guest — the caller (backup service) gates which modes are offered.
+   */
+  async createBackup(
+    node: string,
+    opts: { vmid: number; storage: string; mode: "snapshot" | "suspend" | "stop" },
+  ): Promise<string> {
+    const result = await this.request<string>(`/nodes/${encodeURIComponent(node)}/vzdump`, {
+      method: "POST",
+      body: { vmid: opts.vmid, storage: opts.storage, mode: opts.mode, quiet: 1 },
     });
     return typeof result === "string" ? result : "";
   }

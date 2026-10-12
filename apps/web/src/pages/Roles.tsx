@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, useConfirm } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Empty, Btn, useConfirm } from "../components/ui.js";
 
 interface Role {
   id: string;
@@ -19,9 +19,6 @@ interface CatalogEntry {
   description: string;
   scope: string;
 }
-
-const input = "w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-const label = "block text-xs font-medium text-slate-400 mb-1";
 
 function grouped(catalog: CatalogEntry[]): Array<[string, CatalogEntry[]]> {
   const map = new Map<string, CatalogEntry[]>();
@@ -97,95 +94,90 @@ export default function Roles() {
   };
 
   return (
-    <div>
-      <PageTitle title="Roles" />
+    <div className="pv-page">
+      <PageTitle title="Roles" description="Named permission sets assigned to users and groups." />
       {dialog}
       {error && <ErrorBox error={error} />}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">{editingId ? "Edit role" : "Create custom role"}</h2>
-          <div className="space-y-3">
-            <div>
-              <label className={label}>Name</label>
-              <input className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            </div>
-            <div>
-              <label className={label}>Description</label>
-              <input className={input} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-            </div>
-            <div>
-              <label className={label}>Permissions ({form.permissions.length} selected)</label>
-              <div className="max-h-64 overflow-y-auto space-y-2">
-                {grouped(catalog).map(([category, entries]) => (
-                  <div key={category}>
-                    <div className="text-xs text-slate-500 mb-1">{category}</div>
-                    {entries.map((p) => (
-                      <label key={p.code} className="flex items-start gap-2 text-sm text-slate-300 cursor-pointer" title={p.description}>
-                        <input type="checkbox" className="mt-1" checked={form.permissions.includes(p.code)} onChange={() => togglePerm(p.code)} />
-                        <span className="font-mono text-xs">{p.code}</span>
-                      </label>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={save}
-                disabled={!form.name.trim()}
-                className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
-              >
-                {editingId ? "Save changes" : "Create role"}
-              </button>
-              {editingId && (
-                <button onClick={cancelEdit} className="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">
-                  Cancel
-                </button>
-              )}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-10">
+        <Section title={editingId ? "Edit role" : "Create custom role"}>
+          <div className="pv-field">
+            <label className="pv-label">Name</label>
+            <input className="pv-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </div>
+          <div className="pv-field">
+            <label className="pv-label">Description</label>
+            <input className="pv-input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+          </div>
+          <div className="pv-field">
+            <label className="pv-label">Permissions ({form.permissions.length} selected)</label>
+            <div style={{ maxHeight: 256, overflowY: "auto", border: "1px solid var(--pv-border-soft)", borderRadius: 6, padding: 10 }}>
+              {grouped(catalog).map(([category, entries]) => (
+                <div key={category} style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)", marginBottom: 4 }}>{category}</div>
+                  {entries.map((p) => (
+                    <label key={p.code} className="pv-checkrow" style={{ padding: "3px 0", cursor: "pointer" }} title={p.description}>
+                      <input type="checkbox" checked={form.permissions.includes(p.code)} onChange={() => togglePerm(p.code)} />
+                      <span className="pv-mono">{p.code}</span>
+                    </label>
+                  ))}
+                </div>
+              ))}
             </div>
           </div>
-        </div>
-        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">All roles</h2>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
-                <th className="py-2">Role</th>
-                <th className="py-2">Permissions</th>
-                <th className="py-2">Users</th>
-                <th className="py-2">Groups</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(rolesData?.roles ?? []).map((r) => (
-                <tr key={r.id} className="border-b border-slate-800/50">
-                  <td className="py-2">
-                    {r.name}
-                    {r.is_system && (
-                      <span className="ml-2 text-[10px] uppercase tracking-wide bg-slate-800 text-slate-400 rounded px-1.5 py-0.5" title="Built-in roles cannot be modified or deleted">
-                        built-in
-                      </span>
-                    )}
-                    {r.description && <div className="text-xs text-slate-500">{r.description}</div>}
-                  </td>
-                  <td className="text-xs text-slate-400 max-w-xs">
-                    <span title={r.permissions.join(", ")}>{r.permissions.length} permissions</span>
-                  </td>
-                  <td className="font-mono">{r.userCount}</td>
-                  <td className="font-mono">{r.groupCount}</td>
-                  <td>
-                    {!r.is_system && (
-                      <div className="flex gap-2 justify-end">
-                        <button className="text-xs underline" onClick={() => startEdit(r)}>Edit</button>
-                        <button className="text-xs text-red-300 underline" onClick={() => del(r)}>Delete</button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn kind="primary" onClick={save} disabled={!form.name.trim()}>
+              {editingId ? "Save changes" : "Create role"}
+            </Btn>
+            {editingId && (
+              <Btn onClick={cancelEdit}>Cancel</Btn>
+            )}
+          </div>
+        </Section>
+        <div className="lg:col-span-2">
+          <Section title="All roles" hint={`${(rolesData?.roles ?? []).length} total`}>
+            <div className="pv-table-wrap">
+              <table className="pv-table">
+                <thead>
+                  <tr>
+                    <th>Role</th>
+                    <th>Permissions</th>
+                    <th className="num">Users</th>
+                    <th className="num">Groups</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(rolesData?.roles ?? []).map((r) => (
+                    <tr key={r.id}>
+                      <td>
+                        {r.name}
+                        {r.is_system && (
+                          <span className="pv-mono" style={{ marginLeft: 6, color: "var(--pv-text-3)" }} title="Built-in roles cannot be modified or deleted">
+                            built-in
+                          </span>
+                        )}
+                        {r.description && <div style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }}>{r.description}</div>}
+                      </td>
+                      <td style={{ color: "var(--pv-text-2)" }}>
+                        <span title={r.permissions.join(", ")}>{r.permissions.length} permissions</span>
+                      </td>
+                      <td className="num pv-mono">{r.userCount}</td>
+                      <td className="num pv-mono">{r.groupCount}</td>
+                      <td>
+                        {!r.is_system && (
+                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                            <Btn size="sm" kind="link" onClick={() => startEdit(r)}>Edit</Btn>
+                            <Btn size="sm" kind="link" onClick={() => del(r)}>Delete</Btn>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {!rolesData?.roles.length && <Empty title="No roles" />}
+          </Section>
         </div>
       </div>
     </div>

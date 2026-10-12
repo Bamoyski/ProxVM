@@ -5,6 +5,7 @@ import { PASSWORD_RULES } from "@proxvm/shared";
 
 function ruleMet(rule: (typeof PASSWORD_RULES)[number], password: string): boolean {
   if (rule.minLength !== null) return password.length >= rule.minLength;
+  if (rule.maxLength !== null) return password.length <= rule.maxLength;
   return rule.test !== null && rule.test.test(password);
 }
 
@@ -59,88 +60,94 @@ export default function Login() {
   const rulesOk = PASSWORD_RULES.every((r) => ruleMet(r, password)) && password === confirm && password.length > 0;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center">
-      <form onSubmit={mode === "login" ? submit : submitRegister} className="bg-slate-900 border border-slate-800 rounded-lg p-8 w-96">
-        <h1 className="text-2xl font-bold text-blue-400 mb-1">ProxVM</h1>
-        <p className="text-xs text-slate-400 mb-4">
-          Open-source virtual-machine management for Proxmox VE and Apache Guacamole.
+    <div className="pv-shell" style={{ alignItems: "center", justifyContent: "center" }}>
+      <form onSubmit={mode === "login" ? submit : submitRegister} className="pv-panel" style={{ width: 380, maxWidth: "calc(100vw - 32px)" }}>
+        <div className="pv-brand" style={{ padding: "0 0 2px" }}>Prox<b>VM</b></div>
+        <p className="pv-sub" style={{ marginBottom: 18 }}>
+          {mode === "login"
+            ? "Sign in to manage virtual machines."
+            : "Request an account. An administrator approves every request."}
         </p>
-        <div className="space-y-3">
+        <div className="pv-field">
+          <label className="pv-label" htmlFor="login-username">Username</label>
           <input
-            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
-            placeholder="Username"
+            id="login-username"
+            className="pv-input"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             autoFocus
+            autoComplete="username"
           />
+        </div>
+        <div className="pv-field">
+          <label className="pv-label" htmlFor="login-password">Password</label>
           <input
+            id="login-password"
             type="password"
-            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
-            placeholder="Password"
+            className="pv-input"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
           />
-          {mode === "register" && (
-            <>
+        </div>
+        {mode === "register" && (
+          <>
+            <div className="pv-field">
+              <label className="pv-label" htmlFor="login-email">Email <span style={{ fontWeight: 400 }}>(optional)</span></label>
               <input
-                className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
-                placeholder="Email (optional)"
+                id="login-email"
+                className="pv-input"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
               />
+            </div>
+            <div className="pv-field">
+              <label className="pv-label" htmlFor="login-confirm">Confirm password</label>
               <input
+                id="login-confirm"
                 type="password"
-                className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
-                placeholder="Confirm password"
+                className="pv-input"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
+                autoComplete="new-password"
               />
-              <div className="bg-slate-800 border border-slate-700 rounded p-3 text-xs space-y-1">
-                <div className="font-medium text-slate-300 mb-1">Password must have:</div>
-                {PASSWORD_RULES.map((rule) => {
-                  const ok = ruleMet(rule, password);
-                  return (
-                    <div key={rule.id} className={ok ? "text-green-300" : "text-slate-400"}>
-                      {ok ? "✓" : "○"} {rule.label}
-                    </div>
-                  );
-                })}
-                <div className={password && password === confirm ? "text-green-300" : "text-slate-400"}>
-                  {password && password === confirm ? "✓" : "○"} Passwords match
-                </div>
-              </div>
-            </>
-          )}
-          {error && <div className="bg-red-900/50 border border-red-700 text-red-200 rounded p-2 text-sm">{error}</div>}
-          {registered && (
-            <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-2 text-sm">
-              Request sent. An administrator must approve it before you can sign in.
             </div>
-          )}
-          <button
-            disabled={busy || (mode === "register" && (!username || !rulesOk))}
-            className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm font-medium"
-          >
-            {busy ? (mode === "login" ? "Signing in…" : "Sending…") : mode === "login" ? "Sign in" : "Request account"}
-          </button>
-          <button
-            type="button"
-            onClick={() => switchMode(mode === "login" ? "register" : "login")}
-            className="w-full mt-2 text-xs text-blue-400 hover:underline"
-          >
-            {mode === "login" ? "No account? Request one" : "Have an account? Sign in"}
-          </button>
-          <div className="text-xs text-slate-500 mt-4 text-center">
-            <a
-              href="https://github.com/Bamoyski/ProxVM"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-400 hover:underline"
-            >
-              GitHub repository &amp; documentation
-            </a>
-            <div className="mt-1">by bamoyskistudios</div>
-          </div>
+            <div className="pv-panel" style={{ padding: "10px 12px", marginBottom: 12, background: "var(--pv-inset)" }}>
+              <div className="pv-label" style={{ marginBottom: 6 }}>Password must have</div>
+              {PASSWORD_RULES.map((rule) => {
+                const ok = ruleMet(rule, password);
+                return (
+                  <div key={rule.id} style={{ fontSize: "0.8rem", color: ok ? "var(--pv-ok)" : "var(--pv-text-3)" }}>
+                    {ok ? "✓" : "○"} {rule.label}
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: "0.8rem", color: password && password === confirm ? "var(--pv-ok)" : "var(--pv-text-3)" }}>
+                {password && password === confirm ? "✓" : "○"} Passwords match
+              </div>
+            </div>
+          </>
+        )}
+        {error && <div className="pv-error">{error}</div>}
+        {registered && (
+          <div className="pv-notice pv-notice-ok">Request sent. An administrator must approve it before you can sign in.</div>
+        )}
+        <button
+          disabled={busy || (mode === "register" && (!username || !rulesOk))}
+          className="pv-btn pv-btn-primary"
+          style={{ width: "100%", marginBottom: 10 }}
+        >
+          {busy ? (mode === "login" ? "Signing in…" : "Sending…") : mode === "login" ? "Sign in" : "Request account"}
+        </button>
+        <button type="button" onClick={() => switchMode(mode === "login" ? "register" : "login")} className="pv-btn pv-btn-link" style={{ width: "100%", fontSize: "0.8rem" }}>
+          {mode === "login" ? "No account? Request one" : "Have an account? Sign in"}
+        </button>
+        <div style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginTop: 16, textAlign: "center" }}>
+          <a href="https://github.com/Bamoyski/ProxVM" target="_blank" rel="noopener noreferrer">
+            GitHub repository &amp; documentation
+          </a>
+          <div style={{ marginTop: 2 }}>by bamoyskistudios</div>
         </div>
       </form>
     </div>

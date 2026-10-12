@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import type { JobStatus, JobStep, ProvisioningStepRecord, StepState } from "@proxvm/shared";
 import { AppError } from "../util/errors.js";
 import { isUuid, newId } from "../util/misc.js";
+import type { Queryable } from "../db/pool.js";
 import type { JobRow, StepRow } from "./rows.js";
 
 export interface JobRecord {
@@ -21,13 +22,16 @@ export interface JobRecord {
 export class JobsRepository {
   constructor(private readonly db: Pool) {}
 
-  async create(opts: {
-    vmId: string | null;
-    request: Record<string, unknown>;
-    createdByUserId: string | null;
-    bullJobId?: string | null;
-  }): Promise<JobRecord> {
-    const result = await this.db.query<JobRow>(
+  async create(
+    opts: {
+      vmId: string | null;
+      request: Record<string, unknown>;
+      createdByUserId: string | null;
+      bullJobId?: string | null;
+    },
+    q: Queryable = this.db,
+  ): Promise<JobRecord> {
+    const result = await q.query<JobRow>(
       `INSERT INTO provisioning_jobs (id, vm_id, status, request, created_by_user_id, bull_job_id)
        VALUES ($1, $2, 'PENDING', $3, $4, $5)
        RETURNING *`,
@@ -162,8 +166,8 @@ export class JobsRepository {
   /** An active (non-terminal) job by the same creator for the same VM name,
    *  if any. Used to reject accidental duplicate submissions (e.g. double
    *  form submit) that would otherwise provision two identical VMs. */
-  async activeJobWithName(createdByUserId: string, name: string): Promise<JobRecord | null> {
-    const result = await this.db.query<JobRow>(
+  async activeJobWithName(createdByUserId: string, name: string, q: Queryable = this.db): Promise<JobRecord | null> {
+    const result = await q.query<JobRow>(
       `SELECT * FROM provisioning_jobs
         WHERE created_by_user_id = $1
           AND status <> 'READY' AND status <> 'FAILED' AND status <> 'CANCELLED'

@@ -2,18 +2,17 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import { hashPassword, verifyPassword, toPublicUser } from "@proxvm/core";
-import { loginSchema, registrationSchema } from "@proxvm/shared";
+import { loginSchema, passwordComplexity, registrationSchema } from "@proxvm/shared";
 import { SESSION_COOKIE } from "../plugins/auth.js";
+
+// Fixed Argon2id hash (m=19456,t=2,p=1, same cost as real verifies) used only
+// to equalize timing on the unknown-user login path. Not a credential.
+const DUMMY_TIMING_HASH =
+  "$argon2id$v=19$m=19456,t=2,p=1$mlVrf1gpnLB8krhX/navaw$2io4mZnn1EEPLTkKmGuXFuoOtG2ZOEwFGqRs3BNBrME";
 
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(512),
-  newPassword: z
-    .string()
-    .min(12)
-    .regex(/[a-z]/, "Password must contain a lowercase letter")
-    .regex(/[A-Z]/, "Password must contain an uppercase letter")
-    .regex(/[0-9]/, "Password must contain a number")
-    .regex(/[^A-Za-z0-9]/, "Password must contain a special character"),
+  newPassword: passwordComplexity,
 });
 
 export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
@@ -46,45 +45,64 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
       } catch (err) {
         ctx.logger.warn({ error: err instanceof Error ? err.message : String(err) }, "login throttle unavailable; continuing");
       }
+      // Enumeration-hardened: every failure below returns the identical 401
+      // code/message. Lockout, disablement, and nonexistence are recorded
+      // with distinct audit reasons (threat detection reads those; attackers
+      // only see the uniform response). Unknown users still burn one Argon2
+      // verify against a fixed dummy hash so timing matches the bad-password
+      // path.
+      const GENERIC_FAILURE = "Invalid username or password";
       const user = await ctx.users.findByUsername(body.username);
       if (!user) {
-        await ctx.audit.record({
+        await verifyPassword(DUMMY_TIMING_HASH, body.password);
+        await app.audit(request, {
           event: "LOGIN_FAILED",
           actorUsername: body.username,
-          ip: request.ip,
           detail: { reason: "unknown-user" },
         });
-        return reply.status(401).send({ code: "UNAUTHORIZED", message: "Invalid username or password" });
+        return reply.status(401).send({ code: "UNAUTHORIZED", message: GENERIC_FAILURE });
       }
       if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
-        const remaining = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
-        return reply.status(423).send({
-          code: "ACCOUNT_LOCKED",
-          message: `Account locked. Try again in ${remaining} minute(s).`,
+        await app.audit(request, {
+          event: "LOGIN_FAILED",
+          actorUserId: user.id,
+          actorUsername: user.username,
+          detail: { reason: "account-locked" },
         });
+        return reply.status(401).send({ code: "UNAUTHORIZED", message: GENERIC_FAILURE });
       }
       const valid = await verifyPassword(user.passwordHash, body.password);
       if (!valid) {
         const result = await ctx.users.recordFailedLogin(body.username, 5, 15);
-        await ctx.audit.record({
+        await app.audit(request, {
           event: "LOGIN_FAILED",
           actorUserId: user.id,
           actorUsername: user.username,
           ip: request.ip,
           detail: { reason: "bad-password", remainingAttempts: result.remaining },
         });
-        return reply.status(401).send({ code: "UNAUTHORIZED", message: "Invalid username or password" });
+        return reply.status(401).send({ code: "UNAUTHORIZED", message: GENERIC_FAILURE });
       }
       if (!user.active) {
-        return reply.status(403).send({ code: "FORBIDDEN", message: "Account is disabled" });
+        await app.audit(request, {
+          event: "LOGIN_FAILED",
+          actorUserId: user.id,
+          actorUsername: user.username,
+          detail: { reason: "account-disabled" },
+        });
+        return reply.status(401).send({ code: "UNAUTHORIZED", message: GENERIC_FAILURE });
       }
       const session = await ctx.sessions.create(user.id, {
         ip: request.ip,
         userAgent: request.headers["user-agent"] ?? null,
       });
       await ctx.users.clearFailedLogins(user.username);
+      // Never downgrade: configured Secure wins, otherwise upgrade when the
+      // request itself arrived over TLS (request.protocol honors
+      // X-Forwarded-Proto only from trusted proxy hops, else the socket).
+      const secureCookie = ctx.localConfig.app.cookieSecure || request.protocol === "https";
       await ctx.users.setLastLogin(user.id);
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "LOGIN",
         actorUserId: user.id,
         actorUsername: user.username,
@@ -93,7 +111,7 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
       reply.setCookie(SESSION_COOKIE, session.sid, {
         httpOnly: true,
         sameSite: "strict",
-        secure: ctx.localConfig.app.cookieSecure,
+        secure: secureCookie,
         path: "/",
         maxAge: ctx.localConfig.app.sessionDurationHours * 3600,
       });
@@ -120,7 +138,7 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
           email: body.email,
           passwordHash: await hashPassword(body.password),
         });
-        await ctx.audit.record({
+        await app.audit(request, {
           event: "REGISTRATION_REQUESTED",
           actorUsername: body.username,
           ip: request.ip,
@@ -153,22 +171,49 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
       } catch {
         // logout must never fail because of Guacamole cleanup
       }
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "LOGOUT",
         actorUserId: request.user?.id ?? null,
         actorUsername: request.user?.username ?? null,
         ip: request.ip,
       });
     }
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    // Mirror the login attributes so strict browsers actually drop the cookie.
+    reply.clearCookie(SESSION_COOKIE, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "strict",
+      secure: ctx.localConfig.app.cookieSecure || request.protocol === "https",
+    });
     return { ok: true };
   });
 
-  app.post("/auth/change-password", async (request, reply) => {
-    const user = await app.requireAuth(request);
+  app.post(
+    "/auth/change-password",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const user = await app.requireAuth(request);
+      // Per-account throttle on top of the per-IP route limit: distributed
+      // IPs must not grind currentPassword against a stolen session.
+      try {
+        const key = `proxvm:password-change-throttle:${user.id}`;
+        const attempts = await ctx.redis.incr(key);
+        if (attempts === 1) await ctx.redis.expire(key, 60);
+        if (attempts > 10) {
+          return reply.status(429).send({ ok: false, error: "Too many password attempts. Please slow down." });
+        }
+      } catch (err) {
+        ctx.logger.warn({ error: err instanceof Error ? err.message : String(err) }, "password-change throttle unavailable; continuing");
+      }
     const body = changePasswordSchema.parse(request.body);
     const ok = await verifyPassword(user.passwordHash, body.currentPassword);
     if (!ok) {
+      await app.audit(request, {
+        event: "PERMISSION_CHANGED",
+        actorUserId: user.id,
+        actorUsername: user.username,
+        detail: { action: "password_change_failed", reason: "bad-current-password" },
+      });
       return reply.status(400).send({ ok: false, error: "Current password is incorrect" });
     }
     await ctx.users.changePassword(user.id, await hashPassword(body.newPassword));
@@ -184,12 +229,13 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
     } catch {
       // best-effort; must never fail the password change
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "PERMISSION_CHANGED",
       actorUserId: user.id,
       actorUsername: user.username,
       detail: { action: "password_changed" },
     });
     return { ok: true };
-  });
+    },
+  );
 }

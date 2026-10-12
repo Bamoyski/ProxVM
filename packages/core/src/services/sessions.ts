@@ -4,6 +4,7 @@ import type { SessionRecord } from "@proxvm/shared";
 import { AppError } from "../util/errors.js";
 import { newId, nowIso } from "../util/misc.js";
 import { randomToken, timingSafeEqualStr } from "../crypto/cipher.js";
+import { deriveCsrfKey, deriveCsrfToken } from "../crypto/csrf.js";
 
 export interface SessionMeta {
   ip: string | null;
@@ -20,15 +21,23 @@ export interface ActiveSession {
 }
 
 export class SessionsService {
+  private readonly csrfKey: Buffer;
+
   constructor(
     private readonly db: Pool,
     private readonly sessionDurationHours: number,
     private readonly idleTimeoutMinutes: number,
-  ) {}
+    sessionSigningKey: string,
+  ) {
+    this.csrfKey = deriveCsrfKey(sessionSigningKey);
+  }
 
   async create(userId: string, meta: SessionMeta): Promise<ActiveSession> {
     const sid = randomToken(32);
-    const csrfToken = randomToken(32);
+    // CSRF tokens are derived from the session id, never stored: the plaintext
+    // secret therefore never exists at rest, and every request presenting the
+    // same cookie deterministically derives the same token (concurrent tabs).
+    const csrfToken = deriveCsrfToken(sid, this.csrfKey);
     const record: SessionRecord = {
       id: newId(),
       sidHash: hashSid(sid),
@@ -43,14 +52,13 @@ export class SessionsService {
       revokedAt: null,
     };
     await this.db.query(
-      `INSERT INTO sessions (id, sid_hash, user_id, csrf_token, expires_at, last_active_at,
+      `INSERT INTO sessions (id, sid_hash, user_id, expires_at, last_active_at,
         idle_timeout_minutes, ip, user_agent)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         record.id,
         record.sidHash,
         record.userId,
-        record.csrfToken,
         record.expiresAt,
         record.lastActiveAt,
         record.idleTimeoutMinutes,
@@ -83,7 +91,6 @@ export class SessionsService {
       id: string;
       sid_hash: string;
       user_id: string;
-      csrf_token: string;
       expires_at: Date;
       last_active_at: Date;
       idle_timeout_minutes: number;
@@ -98,7 +105,9 @@ export class SessionsService {
       id: row.id,
       sidHash: row.sid_hash,
       userId: row.user_id,
-      csrfToken: row.csrf_token,
+      // Derived, not stored: deterministic for this session id so idempotent
+      // /me and concurrent tabs all observe the same token.
+      csrfToken: deriveCsrfToken(sid, this.csrfKey),
       expiresAt: row.expires_at,
       lastActiveAt: row.last_active_at,
       idleTimeoutMinutes: row.idle_timeout_minutes,

@@ -117,8 +117,12 @@ export class VmsRepository {
     await this.db.query("UPDATE vms SET status = $2, updated_at = NOW() WHERE id = $1", [id, status]);
   }
 
-  async updateIp(id: string, ip: string | null): Promise<void> {
-    await this.db.query("UPDATE vms SET ip_address = $2, updated_at = NOW() WHERE id = $1", [id, ip]);
+  async updateIp(id: string, ip: string | null, opts?: { static?: boolean }): Promise<void> {
+    await this.db.query("UPDATE vms SET ip_address = $2, ip_static = $3, updated_at = NOW() WHERE id = $1", [
+      id,
+      ip,
+      opts?.static ?? false,
+    ]);
   }
 
   async updateOsInfo(id: string, osName: string | null): Promise<void> {
@@ -308,6 +312,10 @@ export class VmsRepository {
     await this.db.query("UPDATE vms SET vm_class = $2, updated_at = NOW() WHERE id = $1", [id, vmClass]);
   }
 
+  async setStartOnBoot(id: string, enabled: boolean): Promise<void> {
+    await this.db.query("UPDATE vms SET start_on_boot = $2, updated_at = NOW() WHERE id = $1", [id, enabled]);
+  }
+
   /**
    * Concrete grant (direct/group row, unexpired) or creator-ownership.
    * Ownership is implicit so flagging a VM never requires pre-configuring
@@ -342,6 +350,24 @@ export class VmsRepository {
   }
 }
 
+/**
+ * Re-listing a grantee must not silently widen their existing scope: scoped
+ * protocols and expiries survive, new grants take the requested scope as-is.
+ * Pure so the rule is unit-testable without Guacamole.
+ */
+export function mergeGrantScope(
+  existing: { protocols: string[] | null; expiresAt: Date | null } | null,
+  requested: { protocols: string[] | null; expiresAt: Date | string | null },
+): { protocols: string[] | null; expiresAt: Date | null } {
+  if (!existing) {
+    return {
+      protocols: requested.protocols,
+      expiresAt: requested.expiresAt ? new Date(requested.expiresAt) : null,
+    };
+  }
+  return { protocols: existing.protocols, expiresAt: existing.expiresAt };
+}
+
 function toVmRecord(row: VmRow): VmRecord {
   return {
     id: row.id,
@@ -360,5 +386,7 @@ function toVmRecord(row: VmRow): VmRecord {
     privacyFlag: row.privacy_flag ?? false,
     firewallIsolated: row.firewall_isolated ?? false,
     vmClass: row.vm_class === "user" ? "user" : "server",
+    startOnBoot: row.start_on_boot ?? false,
+    ipStatic: row.ip_static ?? false,
   };
 }

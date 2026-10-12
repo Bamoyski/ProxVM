@@ -55,6 +55,7 @@ export async function firewallRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         allowFrom: z.string().max(128).optional(),
         allowDnsTo: z.string().max(128).optional(),
         inboundPorts: z.array(z.string().min(1).max(32)).max(20).optional(),
+        allowInternet: z.boolean().optional(),
       })
       .parse(request.body);
     const proxmox = await ctx.getProxmoxClient();
@@ -64,16 +65,17 @@ export async function firewallRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         allowFrom: body.allowFrom?.trim() || undefined,
         allowDnsTo: body.allowDnsTo?.trim() || undefined,
         inboundPorts: body.inboundPorts,
+        allowInternet: body.allowInternet ?? true,
       });
     } else {
       result = await removeIsolation(ctx.db, proxmox, vm.id, vm.node, vm.vmid);
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_FIREWALL_CHANGED",
       actorUserId: user.id,
       actorUsername: user.username,
       vmId: vm.id,
-      detail: { isolated: body.isolated, ...result },
+      detail: { isolated: body.isolated, allowInternet: body.isolated ? (body.allowInternet ?? true) : undefined, ...result },
     });
     const status = await getIsolationStatus(proxmox, vm.node, vm.vmid);
     return { isolated: body.isolated, ...result, status };
@@ -88,7 +90,7 @@ export async function firewallRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     const body = assertFirewallRuleInput(request.body);
     const proxmox = await ctx.getProxmoxClient();
     await proxmox.createGuestFirewallRule(vm.node, vm.vmid, { ...body, comment: body.comment });
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_FIREWALL_CHANGED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -121,7 +123,7 @@ export async function firewallRoutes(app: FastifyInstance, opts: { ctx: CoreCont
       });
     }
     await proxmox.deleteGuestFirewallRule(vm.node, vm.vmid, posNum);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_FIREWALL_CHANGED",
       actorUserId: user.id,
       actorUsername: user.username,

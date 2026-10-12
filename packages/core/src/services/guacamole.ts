@@ -15,12 +15,14 @@ import {
   buildLoginUrl,
 } from "../guacamole/api.js";
 import { testConnection, type ConnectionTestResult } from "../guacamole/test-connection.js";
+import type { HostKeyService } from "../ssh/host-keys.js";
 import type { GuacConnectionRow, GuacUserRow } from "./rows.js";
 
 export interface GuacamoleServiceDeps {
   db: Pool;
   encrypt: (plaintext: string) => string;
   decrypt: (stored: string) => string;
+  hostKeys: HostKeyService;
 }
 
 export class GuacamoleService {
@@ -259,6 +261,13 @@ export class GuacamoleService {
     const password = this.deps.decrypt(userRecord.password_ciphertext);
     if (guacApi) {
       try {
+        // Single live token per ProxVM session: retire previously minted
+        // tokens before issuing a new one, so at most one replayable
+        // session token exists per login. Best-effort; a failed revocation
+        // still leaves Guacamole's own api-session-timeout as the backstop.
+        if (opts?.trackSessionId) {
+          await this.revokeSessionTokens(opts.trackSessionId, guacApi).catch(() => undefined);
+        }
         const token = await guacApi.requestToken(userRecord.guac_username, password);
         let identifier = connection.guac_identifier;
         if (token.dataSource) {
@@ -304,6 +313,11 @@ export class GuacamoleService {
         port: connection.port,
         username: connection.username,
         password,
+        hostKey: this.deps.hostKeys.policy({
+          vmId,
+          host: connection.hostname,
+          port: connection.port,
+        }),
       })),
     };
   }

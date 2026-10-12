@@ -93,6 +93,52 @@ describe("guacamole session token tracking", () => {
     expect(gone.rows).toHaveLength(0);
   });
 
+  it("a new launch revokes the previous session token (single live token)", async () => {
+    const user = await ctx.users.create({
+      username: "tokholder3",
+      passwordHash: await hashPassword("Tokholder-Pass-1!"),
+      roles: ["USER"],
+    });
+    const vm = await ctx.vms.create({ vmid: 801, node: "n1", name: "tok-vm", status: "running" });
+    const s = await ctx.sessions.create(user.id, { ip: null, userAgent: null });
+    await ctx.db.query(
+      "INSERT INTO guacamole_users (id, user_id, guac_username, password_ciphertext, key_id, status) VALUES ($1, $2, $3, $4, 'v1', 'ACTIVE')",
+      ["11111111-1111-4111-8111-111111111111", user.id, "px_tokholder3", ctx.encrypt("Guac-Pass-1!")],
+    );
+    await ctx.db.query(
+      "INSERT INTO guacamole_connections (id, vm_id, protocol, hostname, port, username, password_ciphertext, key_id, guac_connection_name, guac_identifier, status) VALUES ($1, $2, 'rdp', '10.0.0.9', 3389, 'victim', $3, 'v1', 'proxvm-tok-vm', 'ident-0', 'ACTIVE')",
+      ["22222222-2222-4222-8222-222222222222", vm.id, ctx.encrypt("Guest-Pass-1!")],
+    );
+    let n = 0;
+    const deleted: string[] = [];
+    const fakeApi = {
+      requestToken: async () => {
+        n += 1;
+        return { authToken: `tok-${n}`, username: "px_tokholder3", dataSource: "postgresql", availableDataSources: [] };
+      },
+      findConnectionIdentifier: async () => "ident-1",
+      deleteToken: async (token: string) => void deleted.push(token),
+    } as never;
+
+    const r1 = await ctx.guac.launch(vm.id, user.id, fakeApi, "http://guac:8080/guacamole", null, "rdp", {
+      trackSessionId: s.id,
+    });
+    expect(r1.mode).toBe("direct");
+    expect(r1.url).toContain("tok-1");
+    const r2 = await ctx.guac.launch(vm.id, user.id, fakeApi, "http://guac:8080/guacamole", null, "rdp", {
+      trackSessionId: s.id,
+    });
+    expect(r2.mode).toBe("direct");
+    // The first token was invalidated server-side when the second launched.
+    expect(deleted).toEqual(["tok-1"]);
+    const rows = await ctx.db.query<{ token_ciphertext: string }>(
+      "SELECT token_ciphertext FROM guac_session_tokens WHERE proxvm_session_id = $1",
+      [s.id],
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(ctx.decrypt(rows.rows[0]!.token_ciphertext)).toBe("tok-2");
+  });
+
   it("revocation still drops rows when the Guacamole API is unreachable", async () => {
     const user = await ctx.users.create({
       username: "tokholder2",

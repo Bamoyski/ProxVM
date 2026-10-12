@@ -12,6 +12,10 @@ COPY apps/web apps/web
 RUN npm run build -w @proxvm/shared && cd apps/web && npx vite build
 
 FROM nginx:alpine
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+# HSTS stays off by default; the nginx entrypoint substitutes this line at
+# container start. Enable by setting PROXVM_HSTS_HEADER to a full add_header
+# line (see docker/nginx.conf.template). Plain-HTTP installs are unaffected.
+ENV PROXVM_HSTS_HEADER="# HSTS disabled (set PROXVM_HSTS_HEADER to enable)"
+COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 80

@@ -7,6 +7,7 @@ import {
   checkAccess,
   listConnectionHealth,
   resolveEffectiveAccess,
+  startVmForLaunchIfStopped,
 } from "@proxvm/core";
 
 export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
@@ -68,7 +69,7 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
     return { health };
   });
 
-  app.post("/vms/:id/guacamole/launch", async (request) => {
+  app.post("/vms/:id/guacamole/launch", async (request, reply) => {
     const { id } = request.params as { id: string };
     const user = await app.requirePermission("guac.launch")(request);
     const body = launchSchema.parse(request.body ?? {});
@@ -89,7 +90,7 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
             // best-effort; the periodic sweep retries later
           }
           await ctx.vms.revokeAccess(id, user.id);
-          await ctx.audit.record({
+          await app.audit(request, {
             event: "TEMPORARY_ACCESS_EXPIRED",
             actorUserId: user.id,
             actorUsername: user.username,
@@ -122,6 +123,21 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
     }
     if (!usable.length) throw AppError.notFound("No Guacamole connection exists for this VM");
     const resolvedProtocol = body.protocol ?? usable[0]!.protocol;
+
+    // A session launch is an authorized, user-initiated demand for the VM.
+    // Check live Proxmox state (rather than stale local status) and start a
+    // stopped VM before handing Guacamole a connection URL.
+    const autoStarted = await startVmForLaunchIfStopped(await ctx.getProxmoxClient(), vm);
+    if (autoStarted) {
+      await ctx.vms.updateStatus(vm.id, "running");
+      await app.audit(request, {
+        event: "VM_AUTO_STARTED",
+        actorUserId: user.id,
+        actorUsername: user.username,
+        vmId: vm.id,
+        detail: { reason: "guacamole_launch", protocol: resolvedProtocol },
+      });
+    }
     const guacApi = await ctx.getGuacApi();
     const guacSettings = await ctx.settings.guacamole();
     const result = await ctx.guac.launch(vm.id, user.id, guacApi, guacSettings?.url ?? "", guacSettings?.publicUrl ?? null, resolvedProtocol, {
@@ -134,13 +150,16 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
         "guacamole direct launch unavailable; falling back to login page",
       );
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GUAC_LAUNCHED",
       actorUserId: user.id,
       actorUsername: user.username,
       vmId: vm.id,
-      detail: { mode: result.mode, detail: result.detail ?? null, protocol: resolvedProtocol },
+      detail: { mode: result.mode, detail: result.detail ?? null, protocol: resolvedProtocol, autoStarted },
     });
+    // The payload can carry a reusable Guacamole session token: never let
+    // intermediaries or disk caches store it.
+    reply.header("Cache-Control", "no-store");
     return result;
   });
 
@@ -172,7 +191,7 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
     }
     const guacDb = await ctx.getGuacDb();
     await ctx.guac.deleteVmResources(vm.id, guacDb);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GUAC_CONNECTION_DELETED",
       actorUserId: user.id,
       actorUsername: user.username,

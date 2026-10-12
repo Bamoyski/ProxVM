@@ -5,6 +5,7 @@ import type { ProxmoxClient } from "../proxmox/client.js";
 import type { GuacamoleDbClient } from "../guacamole/db.js";
 import type { GuacamoleApiClient } from "../guacamole/api.js";
 import type { SettingsService } from "./settings.js";
+import { fetchWithSsrfGuard } from "../util/ssrf.js";
 
 export interface HealthDeps {
   db: Pool;
@@ -64,7 +65,7 @@ export async function runHealthChecks(deps: HealthDeps): Promise<HealthCheckResu
   results.push(await timed("guacamole_web", async () => {
     const settings = await deps.settings.guacamole();
     if (!settings) throw new Error("Guacamole is not configured");
-    const response = await fetch(settings.url, { signal: AbortSignal.timeout(8000), redirect: "follow" });
+    const response = await fetchWithSsrfGuard(settings.url, { signal: AbortSignal.timeout(8000) }, 1);
     if (response.status >= 500) {
       throw new Error(`Guacamole web app returned HTTP ${response.status}`);
     }

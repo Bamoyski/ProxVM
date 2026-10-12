@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
 
 interface DomainConfig {
   canonical: string | null;
@@ -26,9 +26,8 @@ interface DnsRecord {
   ttl: number;
 }
 
-const input = "w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-const label = "block text-xs font-medium text-slate-400 mb-1";
-const btn = "px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded";
+const input = "pv-input";
+const label = "pv-label";
 
 export default function Domains() {
   const qc = useQueryClient();
@@ -135,8 +134,8 @@ export default function Domains() {
       const tunneled = res.tunnel.managed ? ` Tunnel route ensured (${res.tunnel.service}).` : "";
       setStatus(
         verified
-          ? `Boom — now serving ${res.canonical} (${res.record.name} → ${res.record.content}). DNS + HTTPS verified; old URLs redirect automatically.${tunneled}`
-          : `⚠️ Switched to ${res.canonical} (${res.record.name} → ${res.record.content}), BUT: ${res.verification.detail}.${tunneled} Finish TLS/proxy setup, then open the new domain and confirm login before retiring the old one.`,
+          ? `Now serving ${res.canonical} (${res.record.name} → ${res.record.content}). DNS + HTTPS verified; old URLs redirect automatically.${tunneled}`
+          : `Switched to ${res.canonical} (${res.record.name} → ${res.record.content}), but verification is incomplete: ${res.verification.detail}.${tunneled} Finish TLS/proxy setup, then open the new domain and confirm login before retiring the old one.`,
       );
       reload();
     } catch (err) {
@@ -178,70 +177,67 @@ export default function Domains() {
   const [recordType, setRecordType] = useState("");
 
   return (
-    <div className="max-w-3xl">
-      <PageTitle title="Domains" />
+    <div className="pv-page pv-page-narrow">
+      <PageTitle title="Domains" description="Canonical hostname, DNS, tunnel ingress, and filter watch." />
       {error && <ErrorBox error={error} />}
-      {status && <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-3 mb-4 text-sm">{status}</div>}
+      {status && <div className="pv-notice pv-notice-ok">{status}</div>}
 
-      <div className="bg-slate-900 border border-slate-800 rounded p-5 mb-4">
-        <div className="space-y-2 text-sm">
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400 w-36">API key</span>
+      <Section title="Status">
+        <dl className="pv-kv">
+          <dt>API key</dt>
+          <dd>
             {!config?.cloudflare.zoneId ? (
-              <span className="text-slate-500">not wired — set server env (see .env.example)</span>
+              <span style={{ color: "var(--pv-text-3)" }}>not wired — set server env (see .env.example)</span>
             ) : cfTesting ? (
-              <span className="text-slate-400">checking…</span>
+              <span style={{ color: "var(--pv-text-3)" }}>checking…</span>
             ) : keyOk ? (
-              <span className="text-green-300">✓ works{cfTest?.zone ? ` (zone ${cfTest.zone.name})` : ""}</span>
+              <span className="pv-status pv-status-ok">works{cfTest?.zone ? ` (zone ${cfTest.zone.name})` : ""}</span>
             ) : (
-              <span className="text-red-300">✗ not working — check the token and Zone ID below</span>
+              <span className="pv-status pv-status-err">not working — check the token and Zone ID</span>
             )}
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400 w-36">Current domain</span>
-            <span className="font-mono text-blue-300">{config?.canonical ?? "(none set yet)"}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400 w-36">Tunnel ingress</span>
+          </dd>
+          <dt>Current domain</dt>
+          <dd><span className="pv-mono">{config?.canonical ?? "(none set yet)"}</span></dd>
+          <dt>Tunnel ingress</dt>
+          <dd>
             {!config?.cloudflare.accountId || !config?.cloudflare.tunnelId ? (
-              <span className="text-slate-500">manual — save an Account + Tunnel ID below for full-auto</span>
+              <span style={{ color: "var(--pv-text-3)" }}>manual — save an Account + Tunnel ID below for full-auto</span>
             ) : tunnelTesting ? (
-              <span className="text-slate-400">checking…</span>
+              <span style={{ color: "var(--pv-text-3)" }}>checking…</span>
             ) : tunnel?.managed ? (
-              <span className="text-green-300">
-                ✓ auto{tunnel.canonicalService ? ` (current → ${tunnel.canonicalService})` : ""} ·{" "}
+              <span className="pv-status pv-status-ok">
+                auto{tunnel.canonicalService ? ` (current → ${tunnel.canonicalService})` : ""} ·{" "}
                 {tunnel.hostnames.length} hostname{tunnel.hostnames.length === 1 ? "" : "s"} routed
               </span>
             ) : (
-              <span className="text-amber-300">local config.yml — convert to cloud-managed once, or route by hand</span>
+              <span className="pv-status pv-status-warn">local config.yml — convert to cloud-managed once, or route by hand</span>
             )}
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-slate-400 w-36">School filter</span>
+          </dd>
+          <dt>School filter</dt>
+          <dd>
             {!filter ? (
-              <span className="text-slate-400">checking…</span>
+              <span style={{ color: "var(--pv-text-3)" }}>checking…</span>
             ) : filter.status === "blocked" ? (
-              <span className="text-red-300">
-                ⛔ BLOCKED{filter.ruleId ? ` (rule ${filter.ruleId})` : ""} — {filter.hostname}: {filter.detail}
+              <span className="pv-status pv-status-err">
+                blocked{filter.ruleId ? ` (rule ${filter.ruleId})` : ""} — {filter.hostname}: {filter.detail}
               </span>
             ) : filter.status === "clean" ? (
-              <span className="text-green-300">✓ reachable — {filter.hostname}: {filter.detail}</span>
+              <span className="pv-status pv-status-ok">reachable — {filter.hostname}: {filter.detail}</span>
             ) : (
-              <span className="text-slate-500">{filter.detail}</span>
+              <span style={{ color: "var(--pv-text-3)" }}>{filter.detail}</span>
             )}
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-slate-400 w-36">Redirecting</span>
-            <span className="font-mono text-slate-300">
+          </dd>
+          <dt>Redirecting</dt>
+          <dd>
+            <span className="pv-mono">
               {(config?.aliases ?? []).length > 0 ? config!.aliases.join(", ") : "(none — old URLs serve normally)"}
             </span>
-          </div>
-        </div>
-      </div>
+          </dd>
+        </dl>
+      </Section>
 
-      <div className="bg-slate-900 border border-slate-800 rounded p-5 mb-4">
-        <h2 className="text-sm font-medium text-slate-300 mb-3">Switch domain</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      <Section title="Switch domain">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" style={{ marginBottom: 8 }}>
           <input
             className={input}
             placeholder="proxvm3"
@@ -249,7 +245,7 @@ export default function Domains() {
             onChange={(e) => setSwitchName(e.target.value)}
           />
           <select
-            className={input}
+            className="pv-select"
             value={copyFrom}
             onChange={(e) => applyCopyFrom(e.target.value)}
           >
@@ -264,7 +260,7 @@ export default function Domains() {
             value={targetInput}
             onChange={(e) => { setTargetInput(e.target.value); setCopyFrom(""); }}
           />
-          <select className={input} value={recordType} onChange={(e) => setRecordType(e.target.value)}>
+          <select className="pv-select" value={recordType} onChange={(e) => setRecordType(e.target.value)}>
             <option value="">Type: auto</option>
             <option value="A">A (IPv4)</option>
             <option value="AAAA">AAAA (IPv6)</option>
@@ -284,91 +280,87 @@ export default function Domains() {
           </datalist>
         </div>
         {(tunnel?.routes ?? []).length > 0 && (
-          <div className="text-xs text-slate-500 mt-2 space-y-0.5">
-            <div className="font-medium text-slate-400">Existing tunnel routes (pick a service from here):</div>
+          <div style={{ fontSize: "0.78rem", color: "var(--pv-text-2)", marginBottom: 8 }}>
+            <div className="pv-label">Existing tunnel routes (pick a service from here)</div>
             {tunnel!.routes.map((r) => (
-              <div key={r.hostname} className="font-mono">
+              <div key={r.hostname} className="pv-mono">
                 {r.hostname} → {r.service}
               </div>
             ))}
           </div>
         )}
         {needsTarget && (
-          <div className="text-xs text-slate-500 mt-2">
+          <div className="pv-hint" style={{ marginBottom: 8 }}>
             No current domain set yet — pick “copy from” above (easiest) or type the public target by hand.
             Never a URL, never a 192.168.x LAN address.
           </div>
         )}
-        <button onClick={doSwitch} disabled={!switchName.trim() || !keyOk || (needsTarget && !targetInput.trim())} className={`${btn} mt-3`}>
+        <Btn kind="primary" onClick={doSwitch} disabled={!switchName.trim() || !keyOk || (needsTarget && !targetInput.trim())}>
           Switch
-        </button>
-        {!keyOk && <div className="text-xs text-slate-500 mt-2">Cloudflare isn't wired — set the server env vars (see .env.example).</div>}
-      </div>
+        </Btn>
+        {!keyOk && <div className="pv-hint" style={{ marginTop: 8 }}>Cloudflare isn't wired — set the server env vars (see .env.example).</div>}
+      </Section>
 
-      <details className="bg-slate-900 border border-slate-800 rounded p-5 mb-4 text-sm">
-        <summary className="cursor-pointer text-slate-300 font-medium">DNS records</summary>
-        <div className="space-y-3 mt-3">
-          <div>
-            <label className={label}>DNS records (A / AAAA / CNAME)</label>
-            <input className={`${input} mb-2`} placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            <div className="space-y-1 max-h-72 overflow-y-auto">
-              {(dns?.records ?? []).map((r) => (
-                <div key={r.id} className="flex flex-wrap gap-2 items-center text-xs py-1 border-b border-slate-800/50">
-                  <span className="font-mono text-slate-500 w-14">{r.type}</span>
-                  <span className="font-mono text-slate-200">{r.name}</span>
-                  <span className="font-mono text-slate-500">→ {r.content}</span>
-                  {r.proxied && <span className="text-amber-300">☁</span>}
-                  {config?.canonical && r.name.toLowerCase() === config.canonical && (
-                    <span className="text-green-300">● current</span>
-                  )}
-                  {(config?.aliases ?? []).includes(r.name.toLowerCase()) && (
-                    <span className="text-blue-300">↪ redirect</span>
-                  )}
-                </div>
-              ))}
-              {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <div className="text-xs text-slate-500">No records match.</div>}
-              {!config?.cloudflare.zoneId && <div className="text-xs text-slate-500">No Zone ID wired on the server — see .env.example.</div>}
-            </div>
-          </div>
-          <div>
-            <label className={label}>School user email (filter watch oracle scope — a student address from the filtered school)</label>
-            <div className="flex gap-2">
-              <input
-                className={input}
-                placeholder="student@students.example.org"
-                value={securlyEmail}
-                onChange={(e) => setSecurlyEmail(e.target.value)}
-              />
-              <button onClick={saveSecurly} className={btn}>Save</button>
-            </div>
-          </div>
-          <div>
-            <label className={label}>Redirect an old hostname here (visitors bounce to the current domain)</label>
-            <div className="flex gap-2">
-              <input
-                className={input}
-                placeholder="proxvm4.example.org"
-                value={aliasInput}
-                onChange={(e) => setAliasInput(e.target.value)}
-              />
-              <button onClick={addAlias} disabled={!aliasInput.trim()} className={btn}>Add</button>
-            </div>
-          </div>
-          {(config?.aliases ?? []).length > 0 && (
-            <div>
-              <label className={label}>Stop redirecting (old URLs will die)</label>
-              <div className="space-y-1">
-                {(config?.aliases ?? []).map((a) => (
-                  <div key={a} className="flex justify-between text-sm py-0.5">
-                    <span className="font-mono text-slate-300">{a}</span>
-                    <button className="text-xs text-red-300 underline" onClick={() => void removeAlias(a)}>Remove</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+      <Section title="DNS records">
+        <div className="pv-field">
+          <label className={label}>Filter (A / AAAA / CNAME)</label>
+          <input className={input} placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-      </details>
+        <div style={{ maxHeight: 288, overflowY: "auto", marginBottom: 16 }}>
+          {(dns?.records ?? []).map((r) => (
+            <div key={r.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "0.78rem", padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+              <span className="pv-mono" style={{ color: "var(--pv-text-3)", width: 56 }}>{r.type}</span>
+              <span className="pv-mono">{r.name}</span>
+              <span className="pv-mono" style={{ color: "var(--pv-text-3)" }}>→ {r.content}</span>
+              {r.proxied && <span className="pv-mono" title="Proxied through Cloudflare" style={{ color: "var(--pv-warn)" }}>proxied</span>}
+              {config?.canonical && r.name.toLowerCase() === config.canonical && (
+                <span className="pv-status pv-status-ok">current</span>
+              )}
+              {(config?.aliases ?? []).includes(r.name.toLowerCase()) && (
+                <span className="pv-status pv-status-info">redirect</span>
+              )}
+            </div>
+          ))}
+          {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <Empty title="No records match" />}
+          {!config?.cloudflare.zoneId && <Empty title="No Zone ID wired" body="See .env.example on the server." />}
+        </div>
+        <div className="pv-field">
+          <label className={label}>School user email</label>
+          <div className="pv-hint" style={{ marginBottom: 6 }}>Filter-watch oracle scope — a student address from the filtered school.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              className={input}
+              placeholder="student@students.example.org"
+              value={securlyEmail}
+              onChange={(e) => setSecurlyEmail(e.target.value)}
+            />
+            <Btn kind="primary" onClick={saveSecurly}>Save</Btn>
+          </div>
+        </div>
+        <div className="pv-field">
+          <label className={label}>Redirect an old hostname here</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              className={input}
+              placeholder="proxvm4.example.org"
+              value={aliasInput}
+              onChange={(e) => setAliasInput(e.target.value)}
+            />
+            <Btn kind="primary" onClick={addAlias} disabled={!aliasInput.trim()}>Add</Btn>
+          </div>
+        </div>
+        {(config?.aliases ?? []).length > 0 && (
+          <div className="pv-field">
+            <label className={label}>Stop redirecting (old URLs will die)</label>
+            {(config?.aliases ?? []).map((a) => (
+              <div key={a} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: "0.85rem" }}>
+                <span className="pv-mono">{a}</span>
+                <Btn size="sm" kind="link" onClick={() => void removeAlias(a)}>Remove</Btn>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
     </div>
   );
 }

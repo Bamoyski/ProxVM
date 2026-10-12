@@ -96,6 +96,7 @@ describe("credential rotation apply-failure", () => {
           guac: ctx.guac,
           audit: ctx.audit,
           decrypt: ctx.decrypt,
+          hostKeys: ctx.hostKeys,
           getProxmoxClient: async () => failingProxmox,
           getGuacDb: () => ctx.getGuacDb(),
         },
@@ -119,7 +120,7 @@ describe("credential rotation apply-failure", () => {
     expect((failure!.detail as Record<string, unknown>).result).toBe("failed");
   });
 
-  it("a stale ROTATING status is detected, retried, and audited", async () => {
+  it("a stuck ROTATING claim rejects concurrent rotations; forced retry proceeds and is audited", async () => {
     const vm = await ctx.vms.create({
       vmid: 702,
       node: "n1",
@@ -144,32 +145,36 @@ describe("credential rotation apply-failure", () => {
       },
     } as never;
 
+    const deps = {
+      db: ctx.db,
+      logger: silentLogger,
+      settings: ctx.settings,
+      vms: ctx.vms,
+      creds: ctx.creds,
+      guac: ctx.guac,
+      audit: ctx.audit,
+      decrypt: ctx.decrypt,
+      hostKeys: ctx.hostKeys,
+      getProxmoxClient: async () => failingProxmox,
+      getGuacDb: () => ctx.getGuacDb(),
+    };
+    // Without force: concurrent rotation is rejected, guest untouched.
     await expect(
-      rotateVmCredential(
-        {
-          db: ctx.db,
-          logger: silentLogger,
-          settings: ctx.settings,
-          vms: ctx.vms,
-          creds: ctx.creds,
-          guac: ctx.guac,
-          audit: ctx.audit,
-          decrypt: ctx.decrypt,
-          getProxmoxClient: async () => failingProxmox,
-          getGuacDb: () => ctx.getGuacDb(),
-        },
-        vm.id,
-        {},
-        { userId: actor.id, username: "actor2" },
-      ),
+      rotateVmCredential(deps, vm.id, {}, { userId: actor.id, username: "actor2" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    // With force (operator-confirmed recovery): proceeds, fails to apply,
+    // and audits both the forced retry and the failure.
+    await expect(
+      rotateVmCredential(deps, vm.id, { force: true }, { userId: actor.id, username: "actor2" }),
     ).rejects.toThrow(/Failed to apply the new password/);
 
-    // Stored password untouched; audit shows both the stale detection and the failure.
+    // Stored password untouched; audit shows both the forced retry and the failure.
     const row = await ctx.creds.findByVm(vm.id);
     expect(ctx.decrypt(row!.password_ciphertext)).toBe("Old-Password-1!");
     const audit = await ctx.audit.list({ vmId: vm.id, limit: 10 });
     const results = audit.map((a) => (a.detail as Record<string, unknown>).result);
-    expect(results).toContain("stale-retry");
+    expect(results).toContain("forced-retry-after-stuck-claim");
     expect(results).toContain("failed");
   });
 });

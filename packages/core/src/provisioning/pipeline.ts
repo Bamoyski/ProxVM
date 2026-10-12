@@ -15,6 +15,11 @@ import type { TemplatesService } from "../services/templates.js";
 import type { GuacamoleService } from "../services/guacamole.js";
 import { publishProgress } from "../services/progress.js";
 import { probeSsh } from "../ssh/client.js";
+import type { HostKeyService } from "../ssh/host-keys.js";
+import { countProvisionLoad, getUserQuota } from "../services/usage.js";
+import { hasPermission, isAdmin } from "../services/rbac.js";
+import { resolveEffectiveAccess } from "../services/iam.js";
+import { validateProvisionPolicy } from "./policy.js";
 
 export class RescheduleError extends Error {
   constructor(message: string) {
@@ -37,6 +42,7 @@ export interface ProvisioningDeps {
   jobs: JobsRepository;
   templates: TemplatesService;
   guac: GuacamoleService;
+  hostKeys: HostKeyService;
   encrypt: (plaintext: string) => string;
   decrypt: (stored: string) => string;
   getProxmoxClient: () => Promise<ProxmoxClient>;
@@ -60,10 +66,85 @@ const STEP_STATUS: Partial<Record<JobStep, JobStatus>> = {
   VERIFY_GUACAMOLE: "GUACAMOLE_CREATING",
 };
 
+/**
+ * Resolves the human behind a provisioning job for audit attribution.
+ * The worker has no HTTP request, so without this every pipeline event
+ * logs as "system". Returns the stored creator id (stable even if the
+ * user row is gone) plus the current username on a best-effort basis.
+ */
+export async function jobAuditActor(
+  deps: Pick<ProvisioningDeps, "db" | "jobs">,
+  jobId: string,
+): Promise<{ actorUserId: string | null; actorUsername: string | null }> {
+  const job = await deps.jobs.require(jobId);
+  if (!job.createdByUserId) return { actorUserId: null, actorUsername: null };
+  const { UsersService } = await import("../services/users.js");
+  const creator = await new UsersService(deps.db).findById(job.createdByUserId);
+  return { actorUserId: job.createdByUserId, actorUsername: creator?.username ?? null };
+}
+
 export async function runProvisioningJob(deps: ProvisioningDeps, jobId: string, attempt: number): Promise<RunOutcome> {
   const job = await deps.jobs.require(jobId);
   if (job.status === "READY") return "SKIPPED";
   if (job.status === "FAILED" || job.status === "CANCELLED") return "FAILED";
+  // Revalidate on execution: the queue is not a trust boundary. A creator
+  // who was disabled, deleted, or stripped of vm.create since enqueueing —
+  // or whose quota filled up meanwhile — must not still get a VM. The job's
+  // own in-flight row counts toward the load, so only strictly-over-quota
+  // fails here (at request time load-after-insert <= quota passed).
+  // Admin exemption for the execution-time policy check below. Hoisted so the
+  // in-try validation can reuse the already-loaded effective access.
+  let policyAdmin = true;
+  let creatorMayEdit = true;
+  if (!job.createdByUserId) {
+    // Fail closed: jobs without a creator cannot be re-authorized. No route
+    // creates creator-less jobs; only a direct DB writer could.
+    const reason = "job has no creator; refusing to provision without re-authorization";
+    await deps.jobs.updateStatus(jobId, "FAILED", reason);
+    await deps.audit.record({
+      event: "PROVISIONING_FAILED",
+      actorUserId: null,
+      jobId,
+      vmId: job.vmId,
+      detail: { error: reason, attempt, during: "authorization-recheck" },
+    });
+    deps.logger.warn({ jobId, reason }, "provisioning job rejected at execution");
+    return "FAILED";
+  }
+  {
+    const { UsersService } = await import("../services/users.js");
+    const creator = await new UsersService(deps.db).findById(job.createdByUserId);
+    const effective = await resolveEffectiveAccess(deps.db, job.createdByUserId);
+    const mayProvision =
+      !!creator && creator.active && (hasPermission(creator, "vm.create") || effective.permissions.has("vm.create"));
+    policyAdmin = !!creator && (isAdmin(creator) || effective.roles.includes("ADMIN"));
+    // assignToUserIds required vm.edit at enqueue time; re-check it here so
+    // a creator stripped of vm.edit cannot still confer access at execution.
+    const rawAssigns = ((job.request as Record<string, unknown>).assignToUserIds as unknown) as string[] | undefined;
+    creatorMayEdit =
+      !!creator && creator.active && (hasPermission(creator, "vm.edit") || effective.permissions.has("vm.edit"));
+    const quota = await getUserQuota(deps.db, job.createdByUserId);
+    const overQuota = quota !== null && (await countProvisionLoad(deps.db, job.createdByUserId)) > quota;
+    const staleAssigns = Array.isArray(rawAssigns) && rawAssigns.length > 0 && !creatorMayEdit;
+    if (!mayProvision || overQuota || staleAssigns) {
+      const reason = !mayProvision
+        ? "creator no longer authorized to provision"
+        : overQuota
+          ? `quota exceeded (limit ${quota})`
+          : "creator no longer holds vm.edit for delegated access grants";
+      await deps.jobs.updateStatus(jobId, "FAILED", reason);
+      await deps.audit.record({
+        event: "PROVISIONING_FAILED",
+        actorUserId: job.createdByUserId,
+        jobId,
+        vmId: job.vmId,
+        detail: { error: reason, attempt, during: "authorization-recheck" },
+      });
+      deps.logger.warn({ jobId, reason }, "provisioning job rejected at execution");
+      return "FAILED";
+    }
+  }
+  const jobActor = await jobAuditActor(deps, jobId);
   const rawRequest = job.request as Record<string, unknown>;
   const request = {
     ...rawRequest,
@@ -74,7 +155,8 @@ export async function runProvisioningJob(deps: ProvisioningDeps, jobId: string, 
   await deps.jobs.updateStatus(jobId, "PROVISIONING", null);
   await deps.audit.record({
     event: "PROVISIONING_STARTED",
-    actorUserId: job.createdByUserId,
+    actorUserId: jobActor.actorUserId,
+    actorUsername: jobActor.actorUsername,
     jobId,
     vmId: job.vmId,
     detail: { attempt },
@@ -97,6 +179,16 @@ export async function runProvisioningJob(deps: ProvisioningDeps, jobId: string, 
   }
 
   try {
+    // Execution-time policy: ceilings + static-IP rules re-checked against
+    // the resolved request. Violations fail the job like any validation.
+    {
+      const net = (request.network ?? null) as { mode?: string; ip?: string | null; gateway?: string | null } | null;
+      await validateProvisionPolicy(
+        { db: deps.db, settings: deps.settings },
+        { cpu: request.cpu ?? 0, ramMb: request.ramMb ?? 0, diskGb: request.diskGb ?? 0, network: net },
+        { isAdmin: policyAdmin, excludeVmId: job.vmId },
+      );
+    }
     // Retry recovery: a previous attempt may have completed VALIDATE_PROXMOX_RESOURCES
     // but failed before the VM record was created (job.vmId still null), leaving
     // StepRunner.template unresolved. Re-resolve it from the job request so
@@ -204,7 +296,8 @@ export async function runProvisioningJob(deps: ProvisioningDeps, jobId: string, 
     });
     await deps.audit.record({
       event: "VM_CREATED",
-      actorUserId: job.createdByUserId,
+      actorUserId: jobActor.actorUserId,
+      actorUsername: jobActor.actorUsername,
       jobId,
       vmId,
       detail: { vmid: request.vmid ?? stepRunner.shared.vmid, name: request.name },
@@ -234,7 +327,8 @@ export async function runProvisioningJob(deps: ProvisioningDeps, jobId: string, 
     });
     await deps.audit.record({
       event: "PROVISIONING_FAILED",
-      actorUserId: job.createdByUserId,
+      actorUserId: jobActor.actorUserId,
+      actorUsername: jobActor.actorUsername,
       jobId,
       vmId: job.vmId,
       detail: { error: message, attempt },
@@ -328,6 +422,17 @@ class StepRunner {
     return this.shared.vmRecId;
   }
 
+  /** TOFU host-key pinning scope for this VM's guest, shared by every SSH
+   *  verification step so a key change blocks them consistently. */
+  private hostKeyPolicy() {
+    return this.deps.hostKeys.policy({
+      vmId: this.shared.vmRecId,
+      host: this.shared.ip as string,
+      port: 22,
+      jobId: this.jobId,
+    });
+  }
+
   isTemplateResolved(): boolean {
     return this.template !== null;
   }
@@ -349,6 +454,14 @@ class StepRunner {
 
   private async setStep(step: JobStep, state: "RUNNING" | "SUCCEEDED" | "FAILED" | "PENDING" | "SKIPPED", detail?: Record<string, unknown> | null, error?: string | null): Promise<void> {
     await this.deps.jobs.setStep(this.jobId, step, state, detail ?? null, error ?? null);
+  }
+
+  private jobActorCache: { actorUserId: string | null; actorUsername: string | null } | null = null;
+
+  /** Who triggered this job — cached per run so step audits attribute the human, not "system". */
+  private async stepActor(): Promise<{ actorUserId: string | null; actorUsername: string | null }> {
+    this.jobActorCache ??= await jobAuditActor(this.deps, this.jobId);
+    return this.jobActorCache;
   }
 
   async run(step: JobStep, fn: () => Promise<Record<string, unknown> | void>): Promise<void> {
@@ -585,7 +698,7 @@ class StepRunner {
     await this.deps.creds.store(this.shared.vmRecId as string, this.request.guestUser, this.request.password, "PROVISIONED");
     await this.deps.audit.record({
       event: "PASSWORD_CREATED",
-      actorUserId: null,
+      ...(await this.stepActor()),
       jobId: this.jobId,
       vmId: this.shared.vmRecId,
       detail: { username: this.request.guestUser, mechanism: "cloud-init" },
@@ -679,7 +792,18 @@ class StepRunner {
       throw new RescheduleError("WAITING FOR GUEST IP");
     }
     this.shared.ip = ip;
-    if (this.shared.vmRecId) await this.deps.vms.updateIp(this.shared.vmRecId, ip);
+    if (this.shared.vmRecId) {
+      try {
+        await this.deps.vms.updateIp(this.shared.vmRecId, ip, { static: source === "static_config" });
+      } catch (err) {
+        // Lost an allocation race after passing the policy pre-check: fail
+        // the job loudly instead of recording a duplicate address.
+        if (err && typeof err === "object" && (err as { code?: string }).code === "23505") {
+          throw AppError.validation(`IP address ${ip} was allocated to another VM while provisioning (source: ${source})`);
+        }
+        throw err;
+      }
+    }
     return { ip, source };
   }
 
@@ -691,6 +815,7 @@ class StepRunner {
         port: 22,
         username: this.request.guestUser,
         password: this.request.password,
+        hostKey: this.hostKeyPolicy(),
       });
       if (result.status !== "AUTHENTICATED") {
         throw AppError.external(
@@ -716,6 +841,7 @@ class StepRunner {
         port: 22,
         username: this.request.guestUser,
         password: this.request.password,
+        hostKey: this.hostKeyPolicy(),
       });
       if (result.status !== "AUTHENTICATED") {
         await this.deps.creds.setStatus(this.shared.vmRecId as string, "FAILED");
@@ -727,7 +853,7 @@ class StepRunner {
       await this.deps.creds.setStatus(this.shared.vmRecId as string, "VERIFIED");
       await this.deps.audit.record({
         event: "PASSWORD_VERIFIED",
-        actorUserId: null,
+        ...(await this.stepActor()),
         jobId: this.jobId,
         vmId: this.shared.vmRecId,
         detail: { mechanism: "ssh", username: this.request.guestUser },
@@ -772,7 +898,7 @@ class StepRunner {
       await this.deps.vms.setAccess(vmRec.id, user.id);
       await this.deps.audit.record({
         event: "VM_ACCESS_GRANTED",
-        actorUserId: null,
+        ...(await this.stepActor()),
         jobId: this.jobId,
         vmId: vmRec.id,
         detail: { userId, username: user.username },
@@ -788,7 +914,7 @@ class StepRunner {
     }
     await this.deps.audit.record({
       event: "GUAC_CONNECTION_CREATED",
-      actorUserId: null,
+      ...(await this.stepActor()),
       jobId: this.jobId,
       vmId: vmRec.id,
       detail: { protocols: this.shared.protocols, hostname: this.shared.ip },

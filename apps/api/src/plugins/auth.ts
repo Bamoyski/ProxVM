@@ -2,7 +2,7 @@ import fastifyPlugin from "fastify-plugin";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { UserWithRoles } from "@proxvm/shared";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, checkCsrf, type Permission } from "@proxvm/core";
+import { AppError, checkCsrf, type AuditEntryInput, type Permission } from "@proxvm/core";
 import { hasPermission, isAdmin, resolveEffectiveAccess } from "@proxvm/core";
 
 export interface FastifyAuthRequest extends FastifyRequest {
@@ -28,7 +28,12 @@ export function buildAuthPlugin(ctx: CoreContext) {
       if (!user || !user.active) return;
       request.user = user;
       request.sessionId = session.id;
-      void ctx.sessions.touch(session.id).catch(() => undefined);
+      // Reads refresh idle time here; writes refresh only after their CSRF
+      // check passes below, so failed-forgery traffic cannot keep a stolen
+      // session alive.
+      if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") {
+        void ctx.sessions.touch(session.id).catch(() => undefined);
+      }
     });
 
     app.addHook("preHandler", async (request: FastifyAuthRequest, reply: FastifyReply) => {
@@ -42,6 +47,9 @@ export function buildAuthPlugin(ctx: CoreContext) {
       const session = await ctx.sessions.findBySid(request.cookies[SESSION_COOKIE] ?? "");
       if (!session) return;
       checkCsrf(session.csrfToken, request.headers["x-csrf-token"] as string | undefined);
+      if (request.sessionId) {
+        void ctx.sessions.touch(request.sessionId).catch(() => undefined);
+      }
     });
 
     app.decorate("requireAuth", async (request: FastifyAuthRequest) => {
@@ -136,6 +144,21 @@ export function buildAuthPlugin(ctx: CoreContext) {
       },
     );
 
+    // Request-scoped audit writer. Every HTTP-triggered audit event must go
+    // through here instead of ctx.audit.record directly: it fills the client
+    // IP and the authenticated actor from the request, so events can never
+    // silently log NULL ip/actor when a call site forgets them. Explicit
+    // fields always win (background jobs, share links, and login-failure
+    // paths pass their own actor/ip deliberately).
+    app.decorate("audit", (request: FastifyRequest, entry: AuditEntryInput) => {
+      return ctx.audit.record({
+        ...entry,
+        actorUserId: entry.actorUserId ?? request.user?.id ?? null,
+        actorUsername: entry.actorUsername ?? request.user?.username ?? null,
+        ip: entry.ip ?? request.ip ?? null,
+      });
+    });
+
     app.decorate("requireAdmin", async (request: FastifyAuthRequest) => {
       if (!request.user) {
         ctx.logger.warn(
@@ -178,5 +201,6 @@ declare module "fastify" {
       permission: Permission | Permission[],
     ) => (request: FastifyRequest) => Promise<UserWithRoles>;
     requireAdmin: (request: FastifyRequest) => Promise<UserWithRoles>;
+    audit: (request: FastifyRequest, entry: AuditEntryInput) => Promise<void>;
   }
 }

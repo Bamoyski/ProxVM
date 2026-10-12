@@ -42,7 +42,7 @@ export async function listRoles(db: Queryable): Promise<RoleDetail[]> {
       [role.id],
     );
     const users = await db.query<{ c: string }>(
-      "SELECT COUNT(*)::text AS c FROM user_roles WHERE role_id = $1",
+      "SELECT COUNT(*)::text AS c FROM user_roles WHERE role_id = $1 AND (expires_at IS NULL OR expires_at > NOW())",
       [role.id],
     );
     const groups = await db.query<{ c: string }>(

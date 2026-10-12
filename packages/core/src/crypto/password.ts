@@ -8,11 +8,20 @@ const HASH_OPTIONS: argon2.Options = {
   parallelism: 1,
 };
 
+export const MAX_PASSWORD_LENGTH = 128;
+export const MAX_PASSWORD_VERIFY_LENGTH = 512;
+
 export async function hashPassword(password: string): Promise<string> {
+  if (typeof password !== "string" || password.length > MAX_PASSWORD_LENGTH) {
+    throw new Error("Password exceeds maximum length");
+  }
   return argon2.hash(password, HASH_OPTIONS);
 }
 
 export async function verifyPassword(hash: string, password: string): Promise<boolean> {
+  if (typeof password !== "string" || password.length > MAX_PASSWORD_VERIFY_LENGTH) {
+    return false;
+  }
   try {
     return await argon2.verify(hash, password);
   } catch {
@@ -49,24 +58,34 @@ export interface GeneratedPassword {
 }
 
 /**
- * Two-word typable passwords: two capitalized words joined with a hyphen,
- * e.g. "Cabin-Apron". Short and memorable on purpose — these are guest and
- * throwaway credentials, always vault-stored, never typed except from the
- * vault reveal/copy UI.
+ * Two-word typable passwords with a numeric tail: two capitalized words plus
+ * two digits, e.g. "Cabin-Apron-42". Short and memorable on purpose — these
+ * are guest and throwaway credentials, always vault-stored, never typed
+ * except from the vault reveal/copy UI.
  *
- * Entropy note: ~157 words squared is roughly 14.6 bits, which would be thin
- * against offline cracking — but these passwords only ever face ONLINE
- * guessing (RDP/SSH behind login rate limiting plus 5-fail account lockout),
- * where tens of thousands of combinations are plenty. They never contain
- * chpasswd- or shell-breaking characters (notably no ":").
+ * The numeric tail is not decoration: generated passwords must satisfy the
+ * same complexity policy shown to users (12+ chars, upper, lower, number,
+ * symbol) so the system never mints credentials its own rules would reject.
+ * Short word pairs are re-rolled until the 12-character minimum holds.
+ *
+ * Entropy note: ~157 words squared times 100 is roughly 21 bits, which
+ * would be thin against offline cracking — but these passwords only ever
+ * face ONLINE guessing (RDP/SSH behind login rate limiting plus 5-fail
+ * account lockout), where millions of combinations are plenty. They never
+ * contain chpasswd- or shell-breaking characters (notably no ":").
  */
 export function generatePassword(): string {
   const pick = (): string => {
     const word = PASSPHRASE_WORDS[randomInt(PASSPHRASE_WORDS.length)] as string;
     return word.slice(0, 1).toUpperCase() + word.slice(1);
   };
-  let first = pick();
-  let second = pick();
-  if (second === first) second = pick();
-  return `${first}-${second}`;
+  for (;;) {
+    let first = pick();
+    let second = pick();
+    if (second === first) second = pick();
+    const digits = String(randomInt(100)).padStart(2, "0");
+    const candidate = `${first}-${second}-${digits}`;
+    // Shortest pairs (e.g. Ash-Dune-07 at 11 chars) miss the policy minimum.
+    if (candidate.length >= 12) return candidate;
+  }
 }

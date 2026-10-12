@@ -491,12 +491,12 @@ describe("RBAC authorization model", () => {
     expect(adminEntries.filter((e) => e.vmId === assignedVmId)).toHaveLength(0);
     expect(adminEntries.length).toBeGreaterThan(0);
 
-    // Alice invites admin; admin is in.
+    // Alice invites admin (delegated: time-boxed); admin is in.
     const invite = await app.inject({
       method: "POST",
       url: `/api/vms/${assignedVmId}/invite`,
       headers: authU,
-      payload: { username: "admin" },
+      payload: { username: "admin", expiresAt: new Date(Date.now() + 3600000).toISOString() },
     });
     expect(invite.statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: `/api/vms/${assignedVmId}`, headers: authA })).statusCode).toBe(200);

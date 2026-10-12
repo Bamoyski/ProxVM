@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, explainDenial, jobEventSource } from "../api.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
-import { StatusBadge, PageTitle, ErrorBox, useConfirm } from "../components/ui.js";
+import { StatusBadge, PageTitle, ErrorBox, Section, Empty, Btn, useConfirm } from "../components/ui.js";
 import VmFirewallSection from "./VmFirewallSection.js";
 
 interface Me {
@@ -62,6 +62,17 @@ export default function VmDetail({ me }: { me: Me }) {
   const [cloneTarget, setCloneTarget] = useState("");
   const [migrateTarget, setMigrateTarget] = useState("");
   const [migrateOnline, setMigrateOnline] = useState(true);
+  // Async migration: POST /migrate returns 202 immediately (long migrations
+  // exceed Cloudflare's 100s proxy timeout), then we poll until Proxmox
+  // reports the task stopped. Survives nothing on unmount — polling simply
+  // stops; the migration continues server-side and the next poll finalizes.
+  const [migrating, setMigrating] = useState<{
+    target: string;
+    upid: string;
+    online: boolean;
+    detachedIso: string[];
+    startedAt: number;
+  } | null>(null);
   const [templateName, setTemplateName] = useState("");
   const [templateOpen, setTemplateOpen] = useState(false);
   const [timeframe, setTimeframe] = useState("day");
@@ -95,6 +106,70 @@ export default function VmDetail({ me }: { me: Me }) {
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["vm", id] });
   };
+
+  // Hooks must run before any early return (Rules of Hooks): this effect is
+  // a no-op until a migration starts (migrating === null), so it is safe —
+  // and required — to register it unconditionally on every render.
+  useEffect(() => {
+    if (!migrating) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+    const deadline = migrating.startedAt + 40 * 60 * 1000;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const qs = new URLSearchParams({
+          upid: migrating.upid,
+          target: migrating.target,
+          online: String(migrating.online),
+          detachedIso: migrating.detachedIso.join(","),
+        });
+        const st = await api<{ state: string; exitStatus?: string }>(`/vms/${id}/migration?${qs.toString()}`);
+        if (cancelled) return;
+        if (st.state === "done") {
+          setMigrating(null);
+          alert(`Migration to ${migrating.target} complete.`);
+          void qc.invalidateQueries({ queryKey: ["vm", id] });
+          return;
+        }
+        if (st.state === "error") {
+          setMigrating(null);
+          alert(
+            `Migration to ${migrating.target} failed: ${st.exitStatus ?? "unknown error"}. The VM is still on its source node.`,
+          );
+          void qc.invalidateQueries({ queryKey: ["vm", id] });
+          return;
+        }
+        failures = 0;
+        if (Date.now() > deadline) {
+          setMigrating(null);
+          alert("Migration is still running but status polling timed out — it continues server-side; reload this page to check.");
+          return;
+        }
+        timer = setTimeout(() => void tick(), 5000);
+      } catch {
+        // Transient blips (proxy hiccups) shouldn't kill the poll; give up
+        // only after repeated consecutive failures.
+        failures += 1;
+        if (failures >= 5) {
+          if (!cancelled) {
+            setMigrating(null);
+            alert("Lost contact with the migration status check — the migration may still be running server-side; reload this page to check.");
+          }
+          return;
+        }
+        timer = setTimeout(() => void tick(), 5000);
+      }
+    };
+    timer = setTimeout(() => void tick(), 3000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // qc is context-stable; refresh is deliberately excluded (recreated per
+    // render and would restart polling every render).
+  }, [migrating, id, qc]);
 
   const doAction = async (action: string) => {
     try {
@@ -196,9 +271,9 @@ export default function VmDetail({ me }: { me: Me }) {
     });
   };
 
-  if (!data) return error ? <ErrorBox error={error} /> : <div className="text-slate-400">Loading…</div>;
+  if (!data) return error ? <ErrorBox error={error} /> : <div style={{ color: "var(--pv-text-3)" }}>Loading…</div>;
 
-  const vm = data.vm as { name: string; vmid: number; node: string; status: string; ip: string | null; osType: string | null; private?: boolean; viewerAccess?: boolean; vmClass?: string };
+  const vm = data.vm as { name: string; vmid: number; node: string; status: string; ip: string | null; osType: string | null; private?: boolean; viewerAccess?: boolean; vmClass?: string; startOnBoot?: boolean };
   const proxmox = data.proxmox as Record<string, unknown> | null;
   const cred = data.credential as Record<string, unknown> | null;
   const guac = data.guacamole as { connections?: Array<{ protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string }>; active?: { protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string } | null } | null;
@@ -229,9 +304,17 @@ export default function VmDetail({ me }: { me: Me }) {
 
   const doMigrate = async () => {
     try {
-      await api(`/vms/${id}/migrate`, { method: "POST", body: { target: migrateTarget, online: migrateOnline } });
-      alert(`Migration to ${migrateTarget} started.`);
-      refresh();
+      const res = await api<{ accepted: boolean; upid: string; detachedIso: string[] }>(`/vms/${id}/migrate`, {
+        method: "POST",
+        body: { target: migrateTarget, online: migrateOnline },
+      });
+      setMigrating({
+        target: migrateTarget,
+        upid: res.upid,
+        online: migrateOnline,
+        detachedIso: res.detachedIso ?? [],
+        startedAt: Date.now(),
+      });
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
@@ -255,6 +338,20 @@ export default function VmDetail({ me }: { me: Me }) {
         body: { enabled: !vm.private },
       });
       alert(res.private ? "Privacy flag on — only granted users can see this VM now." : "Privacy flag off.");
+      refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const setStartOnBoot = async (enabled: boolean) => {
+    try {
+      await api(`/vms/${id}/start-on-boot`, { method: "PATCH", body: { enabled } });
+      alert(
+        enabled
+          ? "Start on host boot is on — Proxmox will power this VM on automatically when its node boots."
+          : "Start on host boot is off — this VM stays stopped across node reboots.",
+      );
       refresh();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -317,118 +414,125 @@ export default function VmDetail({ me }: { me: Me }) {
   };
 
   return (
-    <div>
+    <div className="pv-page">
       {dialog}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <Link to="/vms" className="text-blue-400 text-sm hover:underline">← Virtual Machines</Link>
-          <h1 className="text-2xl font-semibold mt-1">
-            {vm.private && <span title="Privacy-flagged: invisible without a direct grant">🔒 </span>}{vm.name} <span className="text-slate-500 text-lg font-mono">({vm.vmid} @ {vm.node})</span>
-          </h1>
-        </div>
-        <div className="flex gap-2">
+      <div style={{ marginBottom: 4 }}>
+        <Link to="/vms" style={{ fontSize: "0.8rem" }}>← Virtual Machines</Link>
+      </div>
+      <div className="pv-title-row" style={{ marginBottom: 14 }}>
+        <h1 className="pv-title">
+          {vm.name}{" "}
+          <span className="pv-mono" style={{ color: "var(--pv-text-3)", fontWeight: 400 }}>
+            {vm.vmid} @ {vm.node}
+          </span>
+          {vm.private && <span className="pv-mono" title="Privacy-flagged: invisible without a direct grant" style={{ marginLeft: 8, color: "var(--pv-text-3)" }}>private</span>}
+        </h1>
+        <div className="pv-title-actions">
           {canLaunch && guac?.connections?.length && (
-            <div className="flex items-center gap-2">
+            <>
               <select
                 value={launchProtocol ?? ""}
                 onChange={(e) => setLaunchProtocol(e.target.value || null)}
-                className="px-2 py-1.5 text-sm bg-slate-800 border border-slate-700 rounded"
+                className="pv-select pv-input-auto"
+                style={{ height: 32 }}
+                aria-label="Protocol"
               >
-                <option value="">Select protocol…</option>
+                <option value="">Protocol…</option>
                 {guac.connections.map((c) => (
                   <option key={c.protocol} value={c.protocol}>{c.protocol.toUpperCase()} ({c.hostname}:{c.port})</option>
                 ))}
               </select>
-              <button
-                onClick={() => void launch(launchProtocol ?? undefined)}
-                className="px-3 py-2 text-sm bg-blue-600 hover:bg-blue-500 rounded"
-                disabled={!launchProtocol}
-              >
-                Open Guacamole
-              </button>
-            </div>
+              <Btn kind="primary" onClick={() => void launch(launchProtocol ?? undefined)} disabled={!launchProtocol}>
+                Open
+              </Btn>
+            </>
           )}
           {canManage && (
             <>
-              <button onClick={() => void doAction("start")} className="px-3 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">Start</button>
-              <button onClick={() => void doAction("stop")} className="px-3 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">Stop</button>
-              <button onClick={() => void doAction("restart")} className="px-3 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">Restart</button>
+              <Btn onClick={() => void doAction("start")}>Start</Btn>
+              <Btn onClick={() => void doAction("stop")}>Stop</Btn>
+              <Btn onClick={() => void doAction("restart")}>Restart</Btn>
             </>
           )}
-          {canReveal && <button onClick={() => void reveal()} className="px-3 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">Reveal Credential</button>}
-          {canRotate && <button onClick={() => void rotate()} className="px-3 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">Rotate Password</button>}
-          {canDelete && <button onClick={() => del(vm.name)} className="px-3 py-2 text-sm bg-red-800 hover:bg-red-700 rounded">Delete</button>}
+          {canReveal && <Btn onClick={() => void reveal()}>Reveal credential</Btn>}
+          {canRotate && <Btn onClick={() => void rotate()}>Rotate password</Btn>}
+          {canDelete && <Btn kind="link" onClick={() => del(vm.name)}>Delete</Btn>}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 text-sm">
-        <Info label="Status"><StatusBadge status={String(proxmox?.status ?? vm.status)} /></Info>
-        <Info label="IP"><span className="font-mono">{vm.ip ?? "WAITING FOR GUEST IP"}</span></Info>
-        <Info label="CPU cores">{String(proxmox?.cores ?? "—")}</Info>
-        <Info label="RAM">{String(proxmox?.memory ?? "—")} MB</Info>
-        <Info label="Uptime">{proxmox?.uptime ? `${Math.floor(Number(proxmox.uptime) / 3600)}h ${Math.floor((Number(proxmox.uptime) % 3600) / 60)}m` : "—"}</Info>
-        <Info label="Guest agent">{String(proxmox?.agent ?? "—")}</Info>
-        <Info label="Guacamole">{guac?.active ? <StatusBadge status={String(guac.active.status)} /> : "not created"}</Info>
-        <Info label="Credential status">{cred ? <StatusBadge status={String(cred.status)} /> : "none"}</Info>
-        <Info label="Guest user">{cred?.username ? String(cred.username) : "—"}</Info>
-      </div>
+      <dl className="pv-kv pv-kv-3" style={{ marginBottom: 24 }}>
+        <dt>Status</dt><dd><StatusBadge status={String(proxmox?.status ?? vm.status)} /></dd>
+        <dt>IP</dt><dd><span className="pv-mono">{vm.ip ?? "—"}</span></dd>
+        <dt>CPUs</dt><dd>{String(proxmox?.cores ?? "—")}</dd>
+        <dt>Memory</dt><dd>{proxmox?.memory ? `${proxmox.memory} MB` : "—"}</dd>
+        <dt>Uptime</dt><dd>{proxmox?.uptime ? `${Math.floor(Number(proxmox.uptime) / 3600)}h ${Math.floor((Number(proxmox.uptime) % 3600) / 60)}m` : "—"}</dd>
+        <dt>Guest agent</dt><dd>{String(proxmox?.agent ?? "—")}</dd>
+        <dt>Guacamole</dt><dd>{guac?.active ? <StatusBadge status={String(guac.active.status)} /> : "not created"}</dd>
+        <dt>Credential</dt><dd>{cred ? <StatusBadge status={String(cred.status)} /> : "none"}{cred?.username ? ` · ${String(cred.username)}` : ""}</dd>
+      </dl>
 
       {guac?.connections?.length && (
-        <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
-          <div className="text-sm font-medium text-slate-300 mb-2">Guacamole Connections</div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            {guac.connections.map((c) => (
-              <div key={c.protocol} className="bg-slate-800 border border-slate-700 rounded p-3">
-                <div className="flex justify-between">
-                  <span className="font-mono uppercase text-blue-400">{c.protocol}</span>
-                  <StatusBadge status={c.status} />
-                </div>
-                <div className="text-xs text-slate-400 mt-1">{c.hostname}:{c.port}</div>
-                <div className="text-xs text-slate-400">User: {c.username}</div>
-                {canLaunch && (
-                  <div className="mt-2">
-                    <button
-                      onClick={() => void testConnection(c.protocol)}
-                      disabled={connTest[c.protocol]?.testing}
-                      className="text-xs text-blue-400 underline disabled:opacity-40 disabled:no-underline"
-                    >
-                      {connTest[c.protocol]?.testing ? "Testing…" : "Test connection"}
-                    </button>
-                    {connTest[c.protocol]?.text && (
-                      <div className={`text-xs mt-1 ${connTest[c.protocol]?.ok ? "text-green-300" : "text-red-300"}`}>
-                        {connTest[c.protocol]?.text}
-                      </div>
+        <Section title="Remote connections" hint={`${guac.connections.length} protocol${guac.connections.length > 1 ? "s" : ""} via Guacamole`}>
+          <div className="pv-table-wrap">
+            <table className="pv-table">
+              <thead>
+                <tr><th>Protocol</th><th>Status</th><th>Target</th><th>User</th>{canLaunch && <th>Check</th>}</tr>
+              </thead>
+              <tbody>
+                {guac.connections.map((c) => (
+                  <tr key={c.protocol}>
+                    <td className="pv-mono" style={{ textTransform: "uppercase" }}>{c.protocol}</td>
+                    <td><StatusBadge status={c.status} /></td>
+                    <td className="pv-mono">{c.hostname}:{c.port}</td>
+                    <td>{c.username}</td>
+                    {canLaunch && (
+                      <td>
+                        <Btn
+                          size="sm"
+                          kind="link"
+                          onClick={() => void testConnection(c.protocol)}
+                          disabled={connTest[c.protocol]?.testing}
+                        >
+                          {connTest[c.protocol]?.testing ? "Testing…" : "Test"}
+                        </Btn>
+                        {connTest[c.protocol]?.text && (
+                          <div style={{ fontSize: "0.76rem", marginTop: 2, color: connTest[c.protocol]?.ok ? "var(--pv-ok)" : "var(--pv-err)" }}>
+                            {connTest[c.protocol]?.text}
+                          </div>
+                        )}
+                      </td>
                     )}
-                  </div>
-                )}
-              </div>
-            ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
+        </Section>
       )}
 
       {(canClone || canTemplate || canManage || canEdit) && (
-        <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
-          <div className="text-sm font-medium text-slate-300 mb-3">Clone, migrate, template & privacy</div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+        <Section title="Manage" hint="Clone, migrate, template, privacy, class">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4 text-sm">
             {canClone && (
               <div>
-                <div className="text-xs font-medium text-slate-400 mb-2">Clone this VM</div>
+                <div className="pv-label">Clone this VM</div>
                 {!cloneOpen ? (
-                  <button onClick={() => { setCloneOpen(true); setCloneName(`${vm.name}-copy`); }} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+                  <Btn size="sm" onClick={() => { setCloneOpen(true); setCloneName(`${vm.name}-copy`); }}>
                     Clone…
-                  </button>
+                  </Btn>
                 ) : (
-                  <div className="space-y-2">
+                  <div>
                     <input
-                      className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+                      className="pv-input"
+                      style={{ marginBottom: 8 }}
                       placeholder="Clone name"
                       value={cloneName}
                       onChange={(e) => setCloneName(e.target.value)}
                     />
                     {(nodesData?.nodes ?? []).length > 0 && (
                       <select
-                        className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+                        className="pv-select"
+                        style={{ marginBottom: 8 }}
                         value={cloneTarget}
                         onChange={(e) => setCloneTarget(e.target.value)}
                       >
@@ -438,13 +542,13 @@ export default function VmDetail({ me }: { me: Me }) {
                         ))}
                       </select>
                     )}
-                    <div className="flex gap-2">
-                      <button onClick={() => void doClone()} disabled={!cloneName.trim()} className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded">
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Btn size="sm" kind="primary" onClick={() => void doClone()} disabled={!cloneName.trim()}>
                         Clone
-                      </button>
-                      <button onClick={() => setCloneOpen(false)} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+                      </Btn>
+                      <Btn size="sm" onClick={() => setCloneOpen(false)}>
                         Cancel
-                      </button>
+                      </Btn>
                     </div>
                   </div>
                 )}
@@ -452,11 +556,12 @@ export default function VmDetail({ me }: { me: Me }) {
             )}
             {canManage && (
               <div>
-                <div className="text-xs font-medium text-slate-400 mb-2">Migrate to another node</div>
+                <div className="pv-label">Migrate to another node</div>
                 {(nodesData?.nodes ?? []).filter((n) => n.node !== vm.node).length > 0 ? (
-                  <div className="space-y-2">
+                  <div>
                     <select
-                      className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+                      className="pv-select"
+                      style={{ marginBottom: 8 }}
                       value={migrateTarget}
                       onChange={(e) => setMigrateTarget(e.target.value)}
                     >
@@ -465,42 +570,46 @@ export default function VmDetail({ me }: { me: Me }) {
                         <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
                       ))}
                     </select>
-                    <label className="flex items-center gap-2 text-xs text-slate-400">
+                    <label className="pv-checkrow" style={{ marginBottom: 8 }}>
                       <input type="checkbox" checked={migrateOnline} onChange={(e) => setMigrateOnline(e.target.checked)} />
                       Online migration (running VMs)
                     </label>
-                    <button onClick={() => void doMigrate()} disabled={!migrateTarget} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded">
-                      Migrate
-                    </button>
+                    <Btn size="sm" onClick={() => void doMigrate()} disabled={!migrateTarget || migrating !== null}>
+                      {migrating ? `Migrating to ${migrating.target}…` : "Migrate"}
+                    </Btn>
+                    {migrating && (
+                      <div className="pv-hint">Migration running — checking status every few seconds. Safe to leave this page.</div>
+                    )}
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-500">Single-node cluster or node list unavailable.</div>
+                  <div className="pv-hint">Single-node cluster or node list unavailable.</div>
                 )}
               </div>
             )}
             {canTemplate && (
               <div>
-                <div className="text-xs font-medium text-slate-400 mb-2">Save as template</div>
+                <div className="pv-label">Save as template</div>
                 {!templateOpen ? (
-                  <button onClick={() => { setTemplateOpen(true); setTemplateName(`${vm.name}-template`); }} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+                  <Btn size="sm" onClick={() => { setTemplateOpen(true); setTemplateName(`${vm.name}-template`); }}>
                     New template…
-                  </button>
+                  </Btn>
                 ) : (
-                  <div className="space-y-2">
+                  <div>
                     <input
-                      className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+                      className="pv-input"
+                      style={{ marginBottom: 8 }}
                       placeholder="Template name"
                       value={templateName}
                       onChange={(e) => setTemplateName(e.target.value)}
                     />
-                    <div className="text-xs text-slate-500">The VM must be stopped; Proxmox converts it in place.</div>
-                    <div className="flex gap-2">
-                      <button onClick={() => void doMakeTemplate()} disabled={!templateName.trim()} className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded">
+                    <div className="pv-hint" style={{ marginBottom: 8 }}>The VM must be stopped; Proxmox converts it in place.</div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Btn size="sm" kind="primary" onClick={() => void doMakeTemplate()} disabled={!templateName.trim()}>
                         Convert
-                      </button>
-                      <button onClick={() => setTemplateOpen(false)} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+                      </Btn>
+                      <Btn size="sm" onClick={() => setTemplateOpen(false)}>
                         Cancel
-                      </button>
+                      </Btn>
                     </div>
                   </div>
                 )}
@@ -508,72 +617,79 @@ export default function VmDetail({ me }: { me: Me }) {
             )}
             {(vm.viewerAccess || !vm.private || me.roles.includes("ADMIN")) && (
               <div>
-                <div className="text-xs font-medium text-slate-400 mb-2">Privacy flag</div>
-                <div className="text-xs text-slate-500 mb-2">
+                <div className="pv-label">Privacy</div>
+                <div className="pv-hint" style={{ marginBottom: 8 }}>
                   {vm.private
-                    ? "🔒 On — invisible to everyone without a direct grant, including administrators."
+                    ? "On — invisible to everyone without a direct grant, including administrators."
                     : "Off — administrators can see and manage this VM without a grant."}
                 </div>
-                <button
-                  onClick={() => void togglePrivacy()}
-                  className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded"
-                >
+                <Btn size="sm" onClick={() => void togglePrivacy()}>
                   Turn {vm.private ? "off" : "on"}
-                </button>
+                </Btn>
               </div>
             )}
             {canEdit && (
               <div>
-                <div className="text-xs font-medium text-slate-400 mb-2">VM class</div>
-                <div className="text-xs text-slate-500 mb-2">
-                  {(vm.vmClass ?? "server") === "user"
-                    ? "👤 User VM — eligible for idle auto-shutdown when the global switch is on."
-                    : "🖥️ Server VM — never auto-shut down."}
+                <div className="pv-label">Start on host boot</div>
+                <div className="pv-hint" style={{ marginBottom: 8 }}>
+                  {vm.startOnBoot
+                    ? "On — Proxmox powers this VM on automatically when its node boots."
+                    : "Off — this VM stays stopped across node reboots."}
                 </div>
-                <div className="flex gap-2">
-                  <button
+                <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                  <Btn size="sm" onClick={() => void setStartOnBoot(true)} disabled={vm.startOnBoot === true}>
+                    On
+                  </Btn>
+                  <Btn size="sm" onClick={() => void setStartOnBoot(false)} disabled={!vm.startOnBoot}>
+                    Off
+                  </Btn>
+                </div>
+                <div className="pv-label">VM class</div>
+                <div className="pv-hint" style={{ marginBottom: 8 }}>
+                  {(vm.vmClass ?? "server") === "user"
+                    ? "User VM — eligible for idle auto-shutdown when the global switch is on."
+                    : "Server VM — never auto-shut down."}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Btn
+                    size="sm"
                     onClick={() => void setClass("server")}
                     disabled={(vm.vmClass ?? "server") === "server"}
-                    className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded"
                   >
                     Server
-                  </button>
-                  <button
+                  </Btn>
+                  <Btn
+                    size="sm"
                     onClick={() => void setClass("user")}
                     disabled={vm.vmClass === "user"}
-                    className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded"
                   >
                     User
-                  </button>
+                  </Btn>
                 </div>
               </div>
             )}
           </div>
-        </div>
+        </Section>
       )}
 
       {vm.viewerAccess && (
-        <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
-          <div className="text-sm font-medium text-slate-300 mb-1">Invite someone</div>
-          <div className="text-xs text-slate-500 mb-3">
-            Anyone with access can bring one more person in — including an administrator on a privacy-flagged VM.
-          </div>
-          <div className="flex gap-2">
+        <Section
+          title="Invite someone"
+          hint="Anyone with access can bring one more person in — including an administrator on a privacy-flagged VM."
+        >
+          <div style={{ display: "flex", gap: 8 }}>
             <input
-              className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm w-56"
+              className="pv-input"
+              style={{ width: 224 }}
               placeholder="Username to invite…"
               value={inviteUser}
               onChange={(e) => setInviteUser(e.target.value)}
             />
-            <button
-              onClick={() => void doInvite()}
-              disabled={!inviteUser.trim()}
-              className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
-            >
+            <Btn kind="primary" onClick={() => void doInvite()} disabled={!inviteUser.trim()}>
               Invite
-            </button>
+            </Btn>
           </div>
-        </div>
+        </Section>
       )}
 
       <VmGraphs points={statsData?.points ?? []} timeframe={timeframe} setTimeframe={setTimeframe} />
@@ -597,38 +713,40 @@ export default function VmDetail({ me }: { me: Me }) {
       )}
 
       {revealed && (
-        <div className="bg-slate-800 border border-slate-600 rounded p-3 mb-4 text-sm">
-          Credential (auto-hides in 30s): <code className="select-all font-mono text-green-300">{revealed}</code>
-          <button onClick={() => void copy()} className="ml-2 text-xs underline">Copy</button>
+        <div className="pv-notice pv-notice-ok" style={{ fontSize: "0.85rem" }}>
+          Credential (auto-hides in 30s): <code className="pv-mono" style={{ userSelect: "all" }}>{revealed}</code>{" "}
+          <Btn size="sm" kind="link" onClick={() => void copy()}>Copy</Btn>
         </div>
       )}
 
       {progress && (
-        <div className="bg-blue-950 border border-blue-800 text-blue-200 rounded p-3 mb-4 text-sm font-mono">{progress}</div>
+        <div className="pv-notice pv-mono" style={{ fontSize: "0.8rem" }}>{progress}</div>
       )}
 
       {canEdit && <UserAccessSection vmId={id} vmName={vm.name} refresh={refresh} />}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-10">
         <Section title="Provisioning history">
           {(data.jobs as Array<Record<string, unknown>>).map((j) => (
-            <div key={String(j.id)} className="flex justify-between items-center text-sm py-1 border-b border-slate-800/50">
-              <span className="font-mono text-xs">{String(j.id).slice(0, 8)}</span>
+            <div key={String(j.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+              <span className="pv-mono">{String(j.id).slice(0, 8)}</span>
               <StatusBadge status={String(j.status)} />
-              <button className="text-xs text-blue-400 underline" onClick={() => void watchJob(String(j.id))}>
+              <Btn size="sm" kind="link" onClick={() => void watchJob(String(j.id))}>
                 Watch
-              </button>
-              <span className="text-slate-500 text-xs">{new Date(String(j.createdAt)).toLocaleString()}</span>
+              </Btn>
+              <span style={{ marginLeft: "auto", color: "var(--pv-text-3)", fontSize: "0.76rem" }}>{new Date(String(j.createdAt)).toLocaleString()}</span>
             </div>
           ))}
+          {!(data.jobs as Array<unknown>).length && <Empty title="No provisioning jobs" />}
         </Section>
         <Section title="Audit history">
           {(data.audit as Array<Record<string, unknown>>).map((a) => (
-            <div key={String(a.id)} className="flex justify-between text-sm py-1 text-slate-300">
-              <span>{String(a.event)}</span>
-              <span className="text-slate-500 text-xs">{String(a.actorUsername ?? "system")} · {new Date(String(a.createdAt)).toLocaleString()}</span>
+            <div key={String(a.id)} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+              <span className="pv-mono">{String(a.event)}</span>
+              <span style={{ color: "var(--pv-text-3)", fontSize: "0.76rem", whiteSpace: "nowrap" }}>{String(a.actorUsername ?? "system")} · {new Date(String(a.createdAt)).toLocaleString()}</span>
             </div>
           ))}
+          {!(data.audit as Array<unknown>).length && <Empty title="No audit entries" />}
         </Section>
       </div>
     </div>
@@ -739,50 +857,40 @@ function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: st
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
-      <div className="text-sm font-medium text-slate-300 mb-1">User Access</div>
-      <div className="text-xs text-slate-500 mb-3">
-        Assigning a user grants them this VM plus all of its Guacamole connections (SSH/RDP/VNC).
-        Removing revokes both.
-      </div>
+    <Section
+      title="User access"
+      hint="Assigning a user grants them this VM plus all of its Guacamole connections. Removing revokes both."
+    >
       {status && (
-        <div
-          className={`rounded p-2 mb-3 text-sm ${status.ok ? "bg-green-900/50 border border-green-700 text-green-200" : "bg-red-900/50 border border-red-700 text-red-200"}`}
-        >
-          {status.text}
-        </div>
+        <div className={status.ok ? "pv-notice pv-notice-ok" : "pv-error"}>{status.text}</div>
       )}
-      <div className="space-y-1 mb-3">
+      <div style={{ marginBottom: 12 }}>
         {assigned.map((a) => (
-          <div key={`${a.source}-${a.user.id}`} className="flex justify-between items-center text-sm py-1 border-b border-slate-800/50">
+          <div key={`${a.source}-${a.user.id}`} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
             <span>
-              <span className="text-green-400 mr-2">✓</span>
               {a.user.username}
-              <span className="text-slate-500 text-xs ml-2">
+              <span style={{ color: "var(--pv-text-3)", fontSize: "0.76rem", marginLeft: 8 }}>
                 {a.source === "group" ? `via group ${a.groupName ?? ""} · ` : ""}
                 {a.protocols === null ? "all protocols" : a.protocols.length ? a.protocols.join(", ").toUpperCase() : "no protocols"}
                 {a.expiresAt ? ` · expires ${new Date(a.expiresAt).toLocaleString()}` : " · never expires"}
               </span>
             </span>
             {a.source === "direct" ? (
-              <button
-                className="text-xs text-red-300 underline"
-                onClick={() => void remove(a.user.id, a.user.username)}
-              >
+              <Btn size="sm" kind="link" onClick={() => void remove(a.user.id, a.user.username)}>
                 Remove
-              </button>
+              </Btn>
             ) : (
-              <span className="text-xs text-slate-500" title="Group-derived access is managed on the Groups page">managed by group</span>
+              <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }} title="Group-derived access is managed on the Groups page">managed by group</span>
             )}
           </div>
         ))}
         {!assigned.length && !accessQuery.isLoading && (
-          <div className="text-sm text-slate-500">No users assigned to {vmName}.</div>
+          <Empty title={`No users assigned to ${vmName}`} />
         )}
       </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-2 items-center text-sm text-slate-300 mb-3">
-        <span className="text-xs text-slate-400">Protocols:</span>
-        <label className="flex items-center gap-1 text-xs">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", fontSize: "0.8rem", marginBottom: 12 }}>
+        <span className="pv-label" style={{ margin: 0 }}>Protocols</span>
+        <label className="pv-checkrow">
           <input
             type="checkbox"
             checked={grantProtocols === null}
@@ -791,7 +899,7 @@ function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: st
           All
         </label>
         {["ssh", "rdp", "vnc"].map((p) => (
-          <label key={p} className="flex items-center gap-1 text-xs uppercase">
+          <label key={p} className="pv-checkrow" style={{ textTransform: "uppercase" }}>
             <input
               type="checkbox"
               checked={grantProtocols === null || grantProtocols.includes(p)}
@@ -806,9 +914,10 @@ function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: st
             {p}
           </label>
         ))}
-        <span className="text-xs text-slate-400 ml-2">Expires:</span>
+        <span className="pv-label" style={{ margin: 0 }}>Expires</span>
         <select
-          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
+          className="pv-select pv-input-auto"
+          style={{ height: 28, fontSize: "0.78rem" }}
           value={grantExpiry}
           onChange={(e) => setGrantExpiry(e.target.value)}
         >
@@ -821,31 +930,33 @@ function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: st
         {grantExpiry === "custom" && (
           <input
             type="datetime-local"
-            className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
+            className="pv-input pv-input-auto"
+            style={{ height: 28, fontSize: "0.78rem" }}
             value={customExpiry}
             onChange={(e) => setCustomExpiry(e.target.value)}
           />
         )}
       </div>
-      <div className="flex flex-wrap gap-2 items-center">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         {usersQuery.data ? (
-          <div className="relative">
+          <div style={{ position: "relative" }}>
             <input
-              className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-sm w-64"
+              className="pv-input"
+              style={{ width: 256 }}
               placeholder="Search users…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
             {matches.length > 0 && (
-              <div className="absolute z-10 mt-1 w-64 bg-slate-800 border border-slate-700 rounded shadow-lg">
+              <div style={{ position: "absolute", zIndex: 10, marginTop: 4, width: 256, background: "var(--pv-surface)", border: "1px solid var(--pv-border)", borderRadius: 6, boxShadow: "0 8px 30px rgba(0,0,0,0.45)" }}>
                 {matches.map((u) => (
                   <button
                     key={u.id}
-                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-slate-700 flex justify-between"
+                    style={{ width: "100%", textAlign: "left", padding: "7px 12px", fontSize: "0.83rem", background: "none", border: "none", color: "var(--pv-text)", cursor: "pointer", display: "flex", justifyContent: "space-between" }}
                     onClick={() => void assign({ userId: u.id })}
                   >
                     <span>{u.username}</span>
-                    <span className="text-slate-500 text-xs">{u.roles.join(", ")}</span>
+                    <span style={{ color: "var(--pv-text-3)", fontSize: "0.76rem" }}>{u.roles.join(", ")}</span>
                   </button>
                 ))}
               </div>
@@ -853,44 +964,23 @@ function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: st
           </div>
         ) : (
           <input
-            className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-sm w-64"
+            className="pv-input"
+            style={{ width: 256 }}
             placeholder="Username to assign…"
             value={usernameInput}
             onChange={(e) => setUsernameInput(e.target.value)}
           />
         )}
         {!usersQuery.data && (
-          <button
-            className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 rounded disabled:opacity-40"
-            disabled={!usernameInput.trim()}
-            onClick={() => void assign({ username: usernameInput.trim() })}
-          >
+          <Btn size="sm" kind="primary" disabled={!usernameInput.trim()} onClick={() => void assign({ username: usernameInput.trim() })}>
             Assign user
-          </button>
+          </Btn>
         )}
       </div>
       {usersQuery.isError && (
-        <div className="text-xs text-slate-500 mt-2">User directory unavailable — assign by exact username.</div>
+        <div className="pv-hint" style={{ marginTop: 8 }}>User directory unavailable — assign by exact username.</div>
       )}
-    </div>
-  );
-}
-
-function Info({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded p-3">
-      <div className="text-xs text-slate-400 mb-1">{label}</div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded p-4">
-      <div className="text-sm font-medium text-slate-300 mb-2">{title}</div>
-      {children}
-    </div>
+    </Section>
   );
 }
 
@@ -927,9 +1017,9 @@ function MetricChart({ title, current, series, color, series2, color2, label2, f
   if (!series.length) {
     return (
       <div>
-        <div className="flex justify-between text-xs mb-1">
-          <span className="font-medium text-slate-300">{title}</span>
-          <span className="text-slate-400">no data</span>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", marginBottom: 4 }}>
+          <span style={{ fontWeight: 600 }}>{title}</span>
+          <span style={{ color: "var(--pv-text-3)" }}>no data</span>
         </div>
       </div>
     );
@@ -948,13 +1038,13 @@ function MetricChart({ title, current, series, color, series2, color2, label2, f
     .map((i) => ({ x: x(i, series.length), label: fmtTime(series[i]!.t) }));
   return (
     <div>
-      <div className="flex justify-between text-xs mb-1">
-        <span className="font-medium text-slate-300">{title}</span>
-        <span className="font-mono" style={{ color }}>{current}</span>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", marginBottom: 4 }}>
+        <span style={{ fontWeight: 600 }}>{title}</span>
+        <span className="pv-mono" style={{ color }}>{current}</span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-32 bg-slate-950 border border-slate-800 rounded">
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 128, background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6 }}>
         {[0.25, 0.5, 0.75].map((f) => (
-          <line key={f} x1="0" x2={W} y1={H * f} y2={H * f} stroke="#1e293b" strokeWidth="1" />
+          <line key={f} x1="0" x2={W} y1={H * f} y2={H * f} stroke="var(--pv-border)" strokeWidth="1" />
         ))}
         <polygon points={area} fill={color} opacity="0.18" />
         <polyline points={line} fill="none" stroke={color} strokeWidth="1.5" />
@@ -970,7 +1060,7 @@ function MetricChart({ title, current, series, color, series2, color2, label2, f
           max {format(top)}
         </text>
       </svg>
-      {label2 && <div className="text-[10px] text-slate-500 mt-1">solid: in/read · dashed {label2}</div>}
+      {label2 && <div style={{ fontSize: 10, color: "var(--pv-text-3)", marginTop: 4 }}>solid: in/read · dashed {label2}</div>}
     </div>
   );
 }
@@ -998,21 +1088,24 @@ function VmGraphs({ points, timeframe, setTimeframe }: {
   const cpuPct = last && last.maxcpu > 0 ? (last.cpu / last.maxcpu) * 100 : last ? last.cpu * 100 : 0;
   const memPct = last && last.maxmem > 0 ? (last.mem / last.maxmem) * 100 : 0;
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-sm font-medium text-slate-300">Resource graphs</div>
+    <Section
+      title="Resource graphs"
+      actions={
         <select
-          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
+          className="pv-select pv-input-auto"
+          style={{ height: 28, fontSize: "0.78rem" }}
           value={timeframe}
           onChange={(e) => setTimeframe(e.target.value)}
+          aria-label="Time range"
         >
           {["hour", "day", "week", "month"].map((t) => (
             <option key={t} value={t}>{t}</option>
           ))}
         </select>
-      </div>
+      }
+    >
       {!rows.length ? (
-        <div className="text-xs text-slate-500">No data points yet for this range.</div>
+        <Empty title="No data points yet for this range" body="Graphs fill in once the guest reports metrics." />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <MetricChart
@@ -1051,7 +1144,7 @@ function VmGraphs({ points, timeframe, setTimeframe }: {
           />
         </div>
       )}
-    </div>
+    </Section>
   );
 }
 
@@ -1081,15 +1174,13 @@ function VmShareSection({ connections, links, shareProtocol, setShareProtocol, s
 }) {
   const active = links.filter((l) => !l.revokedAt && new Date(l.expiresAt).getTime() > Date.now());
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-6">
-      <div className="text-sm font-medium text-slate-300 mb-1">Shareable session links</div>
-      <div className="text-xs text-slate-500 mb-3">
-        Time-boxed links anyone can open — no account needed. Opening mints a fresh Guacamole session
-        under your identity; revoke anytime to kill them instantly.
-      </div>
-      <div className="flex flex-wrap gap-2 items-center mb-3">
+    <Section
+      title="Shareable session links"
+      hint="Time-boxed links anyone can open — no account needed. Opening mints a fresh Guacamole session under your identity; revoke anytime."
+    >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 12 }}>
         <select
-          className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+          className="pv-select pv-input-auto"
           value={shareProtocol}
           onChange={(e) => setShareProtocol(e.target.value)}
         >
@@ -1099,7 +1190,7 @@ function VmShareSection({ connections, links, shareProtocol, setShareProtocol, s
           ))}
         </select>
         <select
-          className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm"
+          className="pv-select pv-input-auto"
           value={shareExpiry}
           onChange={(e) => setShareExpiry(e.target.value)}
           title="Link lifetime"
@@ -1109,40 +1200,35 @@ function VmShareSection({ connections, links, shareProtocol, setShareProtocol, s
           <option value="10080">7 days</option>
         </select>
         <input
-          className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm w-28"
+          className="pv-input"
+          style={{ width: 112 }}
           placeholder="Max uses (∞)"
           inputMode="numeric"
           value={shareMaxUses}
           onChange={(e) => setShareMaxUses(e.target.value.replace(/[^0-9]/g, ""))}
         />
-        <button
-          onClick={() => shareProtocol && onShare(shareProtocol)}
-          disabled={!shareProtocol}
-          className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
-        >
+        <Btn size="sm" kind="primary" onClick={() => shareProtocol && onShare(shareProtocol)} disabled={!shareProtocol}>
           Create link
-        </button>
+        </Btn>
       </div>
       {shareUrl && (
-        <div className="bg-slate-800 border border-slate-700 rounded p-3 mb-3 text-sm">
-          <div className="text-xs text-slate-400 mb-1">Share this URL (shown once — copy it now):</div>
-          <code className="select-all font-mono text-xs text-green-300 break-all">{shareUrl}</code>
+        <div className="pv-notice pv-notice-ok" style={{ fontSize: "0.8rem" }}>
+          Share this URL (shown once — copy it now):{" "}
+          <code className="pv-mono" style={{ wordBreak: "break-all", userSelect: "all" }}>{shareUrl}</code>
         </div>
       )}
       {active.length > 0 ? (
-        <div className="space-y-1">
-          {active.map((l) => (
-            <div key={l.id} className="flex flex-wrap items-center gap-2 text-xs py-1 border-b border-slate-800/50">
-              <span className="font-mono uppercase text-blue-300">{l.protocol}</span>
-              <span className="text-slate-400">expires {new Date(l.expiresAt).toLocaleString()}</span>
-              <span className="text-slate-400">used {l.useCount}{l.maxUses === null ? "" : `/${l.maxUses}`}</span>
-              <button onClick={() => onRevoke(l.id)} className="text-red-300 underline ml-auto">Revoke</button>
-            </div>
-          ))}
-        </div>
+        active.map((l) => (
+          <div key={l.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, fontSize: "0.8rem", padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+            <span className="pv-mono" style={{ textTransform: "uppercase" }}>{l.protocol}</span>
+            <span style={{ color: "var(--pv-text-2)" }}>expires {new Date(l.expiresAt).toLocaleString()}</span>
+            <span style={{ color: "var(--pv-text-2)" }}>used {l.useCount}{l.maxUses === null ? "" : `/${l.maxUses}`}</span>
+            <Btn size="sm" kind="link" onClick={() => onRevoke(l.id)}>Revoke</Btn>
+          </div>
+        ))
       ) : (
-        <div className="text-xs text-slate-500">No active share links for this VM.</div>
+        <Empty title="No active share links for this VM" />
       )}
-    </div>
+    </Section>
   );
 }

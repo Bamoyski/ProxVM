@@ -1,4 +1,4 @@
-import { PageTitle } from "../components/ui.js";
+import { PageTitle, Section } from "../components/ui.js";
 
 interface HelpSection {
   id: string;
@@ -41,9 +41,9 @@ const SECTIONS: HelpSection[] = [
       "The Virtual Machines page lists every VM you are allowed to see. Regular users only see VMs explicitly assigned to them; privileged roles may also discover untracked Proxmox guests.",
     steps: [
       "Click a VM name to open its detail page.",
-      "Use START, STOP, or RESTART to change power state (needs the matching permission).",
-      "Use OPEN GUACAMOLE to launch a remote session — pick the protocol (SSH, RDP, or VNC) you were granted.",
-      "Use EDIT to change resources or manage which users can access the VM.",
+      "Use Start, Stop, or Restart to change power state (needs the matching permission).",
+      "Use Open to launch a remote session — pick the protocol (SSH, RDP, or VNC) you were granted.",
+      "Use the Manage section to change resources, migrate, or manage which users can access the VM.",
       "Deleting a VM is destructive: type DELETE followed by the VM name to confirm, and the Proxmox VM plus its Guacamole connections are really removed.",
     ],
   },
@@ -232,51 +232,33 @@ export default function Help({ can }: { can: (perm: string) => boolean }) {
   const visible = SECTIONS.filter((s) => !s.perm || can(s.perm));
   const hidden = SECTIONS.length - visible.length;
   return (
-    <div className="max-w-4xl">
-      <PageTitle title="Help & Tutorials" />
-      <p className="text-sm text-slate-400 mb-6">
-        Step-by-step guides for the pages you have access to.
-        {hidden > 0 && (
-          <span className="ml-1">
-            {hidden} {hidden === 1 ? "guide" : "guides"} {hidden === 1 ? "is" : "are"} hidden
-            because your account lacks {hidden === 1 ? "its" : "their"} permission.
-          </span>
-        )}
-      </p>
-      <div className="bg-slate-900 border border-slate-800 rounded p-5 mb-6">
-        <h2 className="text-sm font-medium text-slate-300 mb-3">Contents</h2>
-        <ol className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+    <div className="pv-page pv-page-narrow">
+      <PageTitle
+        title="Help & tutorials"
+        description={`Step-by-step guides for the pages you have access to.${hidden > 0 ? ` ${hidden} ${hidden === 1 ? "guide is" : "guides are"} hidden because your account lacks ${hidden === 1 ? "its" : "their"} permission.` : ""}`}
+      />
+      <Section title="Contents">
+        <ol style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "2px 24px", margin: 0, padding: 0, listStyle: "none" }}>
           {visible.map((s, i) => (
-            <li key={s.id}>
-              <a
-                href={`#${s.id}`}
-                className="flex items-center gap-3 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 hover:border-blue-500 rounded px-3 py-2.5 transition-colors"
-              >
-                <span className="shrink-0 w-6 h-6 rounded-full bg-blue-600/20 border border-blue-500/50 text-blue-300 text-xs font-semibold flex items-center justify-center">
-                  {i + 1}
-                </span>
-                <span className="text-sm text-slate-200">{s.title}</span>
+            <li key={s.id} style={{ padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+              <a href={`#${s.id}`}>
+                <span className="pv-mono" style={{ color: "var(--pv-text-3)", marginRight: 8 }}>{i + 1}.</span>
+                {s.title}
               </a>
             </li>
           ))}
         </ol>
-      </div>
-      <div className="space-y-6">
-        {visible.map((s, i) => (
-          <section key={s.id} id={s.id} className="bg-slate-900 border border-slate-800 rounded p-4 scroll-mt-4">
-            <h2 className="text-base font-medium text-slate-200 mb-1">
-              <span className="text-slate-500 mr-2">{i + 1}.</span>
-              {s.title}
-            </h2>
-            <p className="text-sm text-slate-400 mb-3">{s.about}</p>
-            <ol className="list-decimal list-inside space-y-1.5 text-sm text-slate-300">
-              {s.steps.map((step, j) => (
-                <li key={j}>{step}</li>
-              ))}
-            </ol>
-          </section>
-        ))}
-      </div>
+      </Section>
+      {visible.map((s, i) => (
+        <Section key={s.id} id={s.id} title={`${i + 1}. ${s.title}`}>
+          <p style={{ fontSize: "0.88rem", color: "var(--pv-text-2)", margin: "0 0 12px", maxWidth: "44rem" }}>{s.about}</p>
+          <ol style={{ margin: 0, paddingLeft: 20, fontSize: "0.86rem", display: "grid", gap: 6 }}>
+            {s.steps.map((step, j) => (
+              <li key={j}>{step}</li>
+            ))}
+          </ol>
+        </Section>
+      ))}
     </div>
   );
 }

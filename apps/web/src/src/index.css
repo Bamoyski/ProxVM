@@ -1,0 +1,369 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =====================================================================
+ * ProxVM design system.
+ * Semantic classes below are the only approved UI vocabulary. They are
+ * theme-aware via CSS variables: no per-theme overrides per component.
+ * Rules: one accent (blue) with fixed meaning (action/selection/links);
+ * status is dot + text, never pills; radius 6px controls / 8px panels /
+ * 0 tables; shadows only for floating layers (modal, palette, dropdown).
+ * ===================================================================== */
+:root {
+  --pv-bg: #0b0f14;
+  --pv-surface: #10151c;
+  --pv-surface-2: #151b24;
+  --pv-inset: #0d1218;
+  --pv-border: #222b36;
+  --pv-border-soft: #1a222c;
+  --pv-text: #dde5ee;
+  --pv-text-2: #93a1b3;
+  --pv-text-3: #5f6d7f;
+  --pv-accent: #3f8cff;
+  --pv-accent-ink: #ffffff;
+  --pv-accent-soft: rgba(63, 140, 255, 0.12);
+  --pv-ok: #34c77b;
+  --pv-warn: #e0a63c;
+  --pv-err: #e5605e;
+  --pv-info: #3f8cff;
+  --pv-danger-btn: #c93f3d;
+  --pv-focus: rgba(63, 140, 255, 0.35);
+}
+html.light {
+  --pv-bg: #eef1f5;
+  --pv-surface: #ffffff;
+  --pv-surface-2: #f4f6f9;
+  --pv-inset: #f4f6f9;
+  --pv-border: #d9e0e8;
+  --pv-border-soft: #e6ebf1;
+  --pv-text: #16202c;
+  --pv-text-2: #4c5b6d;
+  --pv-text-3: #8291a3;
+  --pv-accent: #1f6feb;
+  --pv-accent-soft: rgba(31, 111, 235, 0.1);
+  --pv-ok: #1c7d44;
+  --pv-warn: #9a6200;
+  --pv-err: #c03230;
+  --pv-danger-btn: #c03230;
+  --pv-focus: rgba(31, 111, 235, 0.3);
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  background: var(--pv-bg);
+  color: var(--pv-text);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* ---- page scaffold ---- */
+.pv-page { max-width: 1180px; }
+.pv-page-narrow { max-width: 760px; }
+.pv-title-row {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.pv-title { font-size: 1.25rem; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+.pv-sub { color: var(--pv-text-2); font-size: 0.85rem; margin: 0 0 18px; }
+.pv-title-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+/* ---- sections: headings + dividers do the grouping, not boxes ---- */
+.pv-section { margin-bottom: 28px; }
+.pv-section-head {
+  display: flex; align-items: baseline; gap: 10px;
+  border-bottom: 1px solid var(--pv-border-soft);
+  padding-bottom: 8px; margin-bottom: 12px;
+}
+.pv-section-title { font-size: 0.95rem; font-weight: 650; margin: 0; }
+.pv-section-hint { color: var(--pv-text-3); font-size: 0.8rem; margin: 0; }
+.pv-section-actions { margin-left: auto; display: flex; gap: 8px; }
+
+/* Bordered container, only when content truly needs containment
+ * (forms, dialogs, self-contained tools). Not for every section. */
+.pv-panel {
+  background: var(--pv-surface);
+  border: 1px solid var(--pv-border);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+/* ---- buttons: exactly one primary per action group ---- */
+.pv-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 14px; border-radius: 6px;
+  font-size: 0.83rem; font-weight: 550; line-height: 1;
+  border: 1px solid var(--pv-border);
+  background: var(--pv-surface-2); color: var(--pv-text);
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+}
+.pv-btn:hover { border-color: var(--pv-text-3); }
+.pv-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.pv-btn:focus-visible { outline: 2px solid var(--pv-focus); outline-offset: 1px; }
+.pv-btn-primary { background: var(--pv-accent); border-color: var(--pv-accent); color: var(--pv-accent-ink); }
+.pv-btn-primary:hover { filter: brightness(1.08); border-color: var(--pv-accent); }
+.pv-btn-danger { background: var(--pv-danger-btn); border-color: var(--pv-danger-btn); color: #fff; }
+.pv-btn-danger:hover { filter: brightness(1.08); }
+.pv-btn-sm { height: 27px; padding: 0 10px; font-size: 0.78rem; }
+.pv-btn-link {
+  background: none; border: none; padding: 0; height: auto;
+  color: var(--pv-accent); font-size: inherit; font-weight: inherit; cursor: pointer;
+}
+.pv-btn-link:hover { text-decoration: underline; }
+.pv-btn-link:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- forms ---- */
+.pv-field { margin-bottom: 12px; }
+.pv-label { display: block; font-size: 0.78rem; font-weight: 600; color: var(--pv-text-2); margin-bottom: 5px; }
+.pv-hint { font-size: 0.76rem; color: var(--pv-text-3); margin-top: 4px; }
+.pv-input, .pv-select, .pv-textarea {
+  width: 100%; height: 34px;
+  background: var(--pv-inset); border: 1px solid var(--pv-border);
+  border-radius: 6px; padding: 0 10px;
+  font-size: 0.85rem; color: var(--pv-text);
+}
+.pv-textarea { height: auto; padding: 8px 10px; resize: vertical; }
+.pv-input:focus, .pv-select:focus, .pv-textarea:focus {
+  outline: none; border-color: var(--pv-accent);
+  box-shadow: 0 0 0 2px var(--pv-focus);
+}
+.pv-input::placeholder, .pv-textarea::placeholder { color: var(--pv-text-3); }
+.pv-input-auto { width: auto; }
+.pv-checkrow { display: flex; align-items: center; gap: 8px; font-size: 0.83rem; color: var(--pv-text-2); }
+.pv-checkrow input { width: 15px; height: 15px; accent-color: var(--pv-accent); }
+
+/* ---- real tables ---- */
+.pv-table-wrap { overflow-x: auto; border: 1px solid var(--pv-border-soft); border-radius: 8px; background: var(--pv-surface); }
+.pv-table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+.pv-table th {
+  text-align: left; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--pv-text-3);
+  padding: 9px 12px; border-bottom: 1px solid var(--pv-border);
+  background: var(--pv-surface-2); white-space: nowrap;
+}
+.pv-table td { padding: 9px 12px; border-bottom: 1px solid var(--pv-border-soft); vertical-align: middle; }
+.pv-table tbody tr:last-child td { border-bottom: none; }
+.pv-table tbody tr:hover td { background: var(--pv-surface-2); }
+.pv-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.pv-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8em; }
+
+/* compact definition rows (detail pages) */
+.pv-kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 14px; font-size: 0.85rem; }
+.pv-kv dt { color: var(--pv-text-3); }
+.pv-kv dd { margin: 0; }
+/* three pairs per row on wide screens, one pair per row on narrow */
+.pv-kv-3 { grid-template-columns: 110px 1fr 110px 1fr 110px 1fr; }
+@media (max-width: 860px) {
+  .pv-kv-3 { grid-template-columns: 130px 1fr; }
+}
+
+/* ---- status: dot + text, consistent meaning everywhere ---- */
+.pv-status { display: inline-flex; align-items: center; gap: 7px; font-size: 0.83rem; white-space: nowrap; }
+.pv-status::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: var(--pv-text-3); flex: none; }
+.pv-status-ok::before { background: var(--pv-ok); }
+.pv-status-warn::before { background: var(--pv-warn); }
+.pv-status-err::before { background: var(--pv-err); }
+.pv-status-info::before { background: var(--pv-info); }
+
+/* ---- feedback ---- */
+.pv-error {
+  background: color-mix(in srgb, var(--pv-err) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pv-err) 45%, transparent);
+  color: var(--pv-text); border-radius: 6px; padding: 10px 12px; font-size: 0.83rem; margin-bottom: 14px;
+}
+.pv-notice {
+  border: 1px solid var(--pv-border); border-left: 3px solid var(--pv-info);
+  background: var(--pv-surface); border-radius: 0 6px 6px 0;
+  padding: 10px 12px; font-size: 0.83rem; margin-bottom: 14px; color: var(--pv-text-2);
+}
+.pv-notice-warn { border-left-color: var(--pv-warn); }
+.pv-notice-ok { border-left-color: var(--pv-ok); }
+.pv-empty { color: var(--pv-text-3); font-size: 0.85rem; padding: 18px 0; }
+.pv-empty b { display: block; color: var(--pv-text-2); font-weight: 600; margin-bottom: 2px; }
+
+/* ---- nav shell ---- */
+.pv-shell { min-height: 100vh; display: flex; }
+.pv-sidebar {
+  width: 224px; flex: none; background: var(--pv-surface);
+  border-right: 1px solid var(--pv-border-soft);
+  padding: 16px 12px; display: flex; flex-direction: column; gap: 2px;
+}
+.pv-brand { font-size: 1.02rem; font-weight: 700; letter-spacing: -0.01em; padding: 2px 10px 14px; color: var(--pv-text); }
+.pv-brand b { color: var(--pv-accent); font-weight: 700; }
+.pv-navgroup { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--pv-text-3); padding: 14px 10px 5px; }
+.pv-navlink {
+  display: block; padding: 6px 10px; border-radius: 6px; font-size: 0.84rem;
+  color: var(--pv-text-2); text-decoration: none; border-left: 2px solid transparent;
+}
+.pv-navlink:hover { color: var(--pv-text); background: var(--pv-surface-2); }
+.pv-navlink-active { color: var(--pv-text); background: var(--pv-accent-soft); border-left-color: var(--pv-accent); }
+.pv-sidefoot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--pv-border-soft); display: flex; flex-direction: column; gap: 8px; }
+.pv-userline { font-size: 0.8rem; color: var(--pv-text-2); padding: 0 10px; }
+.pv-userline span { color: var(--pv-text-3); }
+.pv-main { flex: 1; min-width: 0; padding: 26px 32px 60px; }
+.pv-topbar { display: none; }
+
+/* meters */
+.pv-meter { height: 4px; border-radius: 999px; background: var(--pv-border-soft); overflow: hidden; }
+.pv-meter > i { display: block; height: 100%; background: var(--pv-accent); border-radius: 999px; }
+.pv-meter-hot > i { background: var(--pv-warn); }
+
+.pv-scrim {
+  display: none;
+  position: fixed; inset: 0; z-index: 35; background: rgba(0, 0, 0, 0.55);
+}
+@media (max-width: 860px) {
+  .pv-scrim { display: block; }
+  .pv-sidebar {
+    position: fixed; inset: 0 auto 0 0; z-index: 40; width: 248px;
+    transform: translateX(-100%); transition: transform 0.15s ease;
+  }
+  .pv-sidebar-open { transform: none; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45); }
+  .pv-main { padding: 66px 16px 60px; }
+  .pv-topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+    background: var(--pv-surface); border-bottom: 1px solid var(--pv-border-soft);
+    padding: 10px 14px;
+  }
+}
+
+/* Light theme: override the slate-based dark surfaces globally so every page
+ * follows the toggle without per-component changes. Accent colors are kept,
+ * only surfaces and text are remapped. Tables scroll horizontally on narrow
+ * screens (mobile pass) instead of breaking layout. */
+html.light .bg-slate-950 {
+  background-color: #f1f5f9;
+}
+html.light .bg-slate-900 {
+  background-color: #ffffff;
+}
+html.light .bg-slate-800 {
+  background-color: #e2e8f0;
+}
+html.light .hover\:bg-slate-800:hover {
+  background-color: #e2e8f0;
+}
+html.light .hover\:bg-slate-700:hover {
+  background-color: #cbd5e1;
+}
+html.light .text-slate-100,
+html.light .text-slate-200 {
+  color: #0f172a;
+}
+html.light .text-slate-300 {
+  color: #334155;
+}
+html.light .text-slate-400,
+html.light .text-slate-500 {
+  color: #64748b;
+}
+html.light .border-slate-800,
+html.light .border-slate-700,
+html.light .border-slate-800\/50 {
+  border-color: #cbd5e1;
+}
+html.light .bg-slate-900\/50 {
+  background-color: rgba(255, 255, 255, 0.7);
+}
+html.light .bg-slate-800\/50 {
+  background-color: rgba(226, 232, 240, 0.7);
+}
+html.light .bg-black\/60 {
+  background-color: rgba(15, 23, 42, 0.4);
+}
+html.light .bg-blue-950 {
+  background-color: #dbeafe;
+}
+html.light .bg-blue-950 .text-blue-200,
+html.light .text-blue-200 {
+  color: #1e40af;
+}
+html.light .bg-green-900,
+html.light .bg-green-900\/50 {
+  background-color: #dcfce7;
+}
+html.light .bg-green-900 .text-green-200,
+html.light .border-green-700 {
+  border-color: #86efac;
+}
+html.light .bg-red-900,
+html.light .bg-red-900\/50 {
+  background-color: #fee2e2;
+}
+html.light .bg-red-900 .text-red-200,
+html.light .border-red-700,
+html.light .border-red-800 {
+  border-color: #fca5a5;
+}
+html.light .bg-yellow-900,
+html.light .bg-yellow-900\/50,
+html.light .bg-yellow-900\/40 {
+  background-color: #fef9c3;
+}
+html.light .bg-yellow-900 .text-yellow-200,
+html.light .text-yellow-200,
+html.light .text-yellow-300,
+html.light .border-yellow-700,
+html.light .border-yellow-700\/60 {
+  border-color: #fde047;
+}
+html.light .bg-yellow-900 .text-yellow-200,
+html.light .text-yellow-200,
+html.light .text-yellow-300 {
+  color: #854d0e;
+}
+html.light .text-amber-200\/90,
+html.light .text-amber-300 {
+  color: #92400e;
+}
+html.light .bg-amber-900\/30 {
+  background-color: #fef3c7;
+}
+html.light .border-amber-700\/50 {
+  border-color: #fcd34d;
+}
+html.light .bg-red-600 {
+  background-color: #dc2626;
+}
+html.light .bg-red-700,
+html.light .hover\:bg-red-700:hover {
+  background-color: #b91c1c;
+}
+html.light .bg-green-700,
+html.light .hover\:bg-green-600:hover {
+  background-color: #16a34a;
+}
+html.light .bg-blue-600,
+html.light .hover\:bg-blue-500:hover {
+  background-color: #2563eb;
+}
+html.light .text-white {
+  color: #ffffff;
+}
+html.light table thead tr {
+  border-color: #cbd5e1;
+}
+html.light .text-blue-400 {
+  color: #1d4ed8;
+}
+html.light .text-blue-300 {
+  color: #1e40af;
+}
+html.light .text-green-400,
+html.light .text-green-300,
+html.light .text-green-200 {
+  color: #15803d;
+}
+html.light .text-red-300,
+html.light .text-red-200 {
+  color: #b91c1c;
+}
+html.light input::placeholder {
+  color: #94a3b8;
+}
+html.light input,
+html.light select,
+html.light textarea {
+  color-scheme: light;
+}

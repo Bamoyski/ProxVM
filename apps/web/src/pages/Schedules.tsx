@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
 
 interface Schedule {
   id: string;
@@ -104,89 +104,78 @@ export default function Schedules() {
     return vm ? `${vm.name} (${vm.vmid}@${vm.node})` : vmId.slice(0, 8);
   };
 
-  const input = "bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-
   return (
-    <div>
-      <PageTitle title="Scheduled Power Actions" />
+    <div className="pv-page">
+      <PageTitle title="Scheduled power actions" description="Start, stop, or restart VMs on a timetable. Evaluated every minute; audited on fire." />
       {error && <ErrorBox error={error} />}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">New schedule</h2>
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Virtual machine</label>
-              <select className={`w-full ${input}`} value={form.vmId} onChange={(e) => setForm({ ...form, vmId: e.target.value })}>
-                <option value="">Select VM…</option>
-                {(vmsData?.vms ?? []).filter((v) => v.id).map((v) => (
-                  <option key={v.id as string} value={v.id as string}>{v.name} ({v.vmid}@{v.node})</option>
-                ))}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-10">
+        <Section title="New schedule">
+          <div className="pv-field">
+            <label className="pv-label">Virtual machine</label>
+            <select className="pv-select" value={form.vmId} onChange={(e) => setForm({ ...form, vmId: e.target.value })}>
+              <option value="">Select VM…</option>
+              {(vmsData?.vms ?? []).filter((v) => v.id).map((v) => (
+                <option key={v.id as string} value={v.id as string}>{v.name} ({v.vmid}@{v.node})</option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="pv-field">
+              <label className="pv-label">Action</label>
+              <select className="pv-select" value={form.action} onChange={(e) => setForm({ ...form, action: e.target.value })}>
+                <option value="start">Start</option>
+                <option value="stop">Stop</option>
+                <option value="restart">Restart</option>
               </select>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Action</label>
-                <select className={`w-full ${input}`} value={form.action} onChange={(e) => setForm({ ...form, action: e.target.value })}>
-                  <option value="start">Start</option>
-                  <option value="stop">Stop</option>
-                  <option value="restart">Restart</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Hour</label>
-                <input type="number" min={0} max={23} className={`w-full ${input}`} value={form.hour} onChange={(e) => setForm({ ...form, hour: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Minute</label>
-                <input type="number" min={0} max={59} className={`w-full ${input}`} value={form.minute} onChange={(e) => setForm({ ...form, minute: e.target.value })} />
-              </div>
+            <div className="pv-field">
+              <label className="pv-label">Hour</label>
+              <input type="number" min={0} max={23} className="pv-input" value={form.hour} onChange={(e) => setForm({ ...form, hour: e.target.value })} />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Days</label>
-              <div className="flex flex-wrap gap-1">
-                {DAYS.map((d, i) => (
-                  <button
-                    key={d}
-                    onClick={() => setForm({ ...form, picked: form.picked.map((v, j) => (j === i ? !v : v)) })}
-                    className={`px-2 py-1 text-xs rounded border ${form.picked[i] ? "bg-blue-600 border-blue-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400"}`}
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
+            <div className="pv-field">
+              <label className="pv-label">Minute</label>
+              <input type="number" min={0} max={59} className="pv-input" value={form.minute} onChange={(e) => setForm({ ...form, minute: e.target.value })} />
             </div>
-            <button
-              onClick={create}
-              disabled={!form.vmId}
-              className="w-full px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
-            >
-              Create schedule
-            </button>
-            <div className="text-xs text-slate-500">Runs are evaluated every minute; each schedule fires at most once per minute. Results are audited.</div>
           </div>
-        </div>
-        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">All schedules</h2>
-          <div className="space-y-2">
+          <div className="pv-field">
+            <label className="pv-label">Days</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {DAYS.map((d, i) => (
+                <button
+                  key={d}
+                  onClick={() => setForm({ ...form, picked: form.picked.map((v, j) => (j === i ? !v : v)) })}
+                  className={form.picked[i] ? "pv-btn pv-btn-primary pv-btn-sm" : "pv-btn pv-btn-sm"}
+                  aria-pressed={form.picked[i]}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Btn kind="primary" style={{ width: "100%" }} onClick={create} disabled={!form.vmId}>
+            Create schedule
+          </Btn>
+          <div className="pv-hint" style={{ marginTop: 8 }}>Each schedule fires at most once per minute. Results are audited.</div>
+        </Section>
+        <div className="lg:col-span-2">
+          <Section title="All schedules" hint={`${(schedData?.schedules ?? []).length} total`}>
             {(schedData?.schedules ?? []).map((s) => (
-              <div key={s.id} className="flex flex-wrap items-center justify-between gap-2 text-sm border-b border-slate-800/50 py-2">
-                <div>
-                  <span className={`font-mono uppercase ${s.enabled ? "text-blue-300" : "text-slate-500"}`}>{s.action}</span>
-                  <span className="ml-2">{vmName(s.vmId)}</span>
-                  <span className="text-xs text-slate-500 ml-2">{fmtTime(s.hour, s.minute)} · {fmtDays(s.days)}</span>
-                  {!s.enabled && <span className="text-xs text-slate-500 ml-2">(disabled)</span>}
-                  {s.lastRunAt && <span className="text-xs text-slate-500 ml-2">last run {new Date(s.lastRunAt).toLocaleString()}</span>}
-                </div>
-                <div className="flex gap-2">
-                  <button className="text-xs text-blue-400 underline" onClick={() => void toggle(s)}>
+              <div key={s.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+                <span className="pv-mono" style={{ textTransform: "uppercase", color: s.enabled ? "var(--pv-text)" : "var(--pv-text-3)" }}>{s.action}</span>
+                <span>{vmName(s.vmId)}</span>
+                <span style={{ color: "var(--pv-text-3)", fontSize: "0.78rem" }}>{fmtTime(s.hour, s.minute)} · {fmtDays(s.days)}</span>
+                {!s.enabled && <span style={{ color: "var(--pv-text-3)", fontSize: "0.78rem" }}>(disabled)</span>}
+                {s.lastRunAt && <span style={{ color: "var(--pv-text-3)", fontSize: "0.78rem" }}>last run {new Date(s.lastRunAt).toLocaleString()}</span>}
+                <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  <Btn size="sm" kind="link" onClick={() => void toggle(s)}>
                     {s.enabled ? "Disable" : "Enable"}
-                  </button>
-                  <button className="text-xs text-red-300 underline" onClick={() => void remove(s)}>Delete</button>
-                </div>
+                  </Btn>
+                  <Btn size="sm" kind="link" onClick={() => void remove(s)}>Delete</Btn>
+                </span>
               </div>
             ))}
-            {!(schedData?.schedules ?? []).length && <div className="text-sm text-slate-500">No schedules yet.</div>}
-          </div>
+            {!(schedData?.schedules ?? []).length && <Empty title="No schedules yet" body="Power actions on a timetable — e.g. stop lab VMs at night." />}
+          </Section>
         </div>
       </div>
     </div>

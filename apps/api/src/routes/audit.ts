@@ -1,12 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
+import { csvCell } from "@proxvm/core";
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
   event: z.string().max(64).optional(),
   vmId: z.string().uuid().optional(),
+  ip: z.string().max(64).optional(),
+  actor: z.string().max(64).optional(),
 });
 
 export async function auditRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
@@ -29,7 +32,10 @@ export async function auditRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       let flagged = flagCache.get(entry.vmId);
       if (flagged === undefined) {
         const vm = await ctx.vms.findById(entry.vmId);
-        flagged = !!vm?.privacyFlag;
+        // A deleted VM's row is gone (grants were revoked with it): treat its
+        // history as private rather than exposing previously-flagged entries
+        // (credential reveals, firewall changes) to every audit reader.
+        flagged = !vm || !!vm.privacyFlag;
         flagCache.set(entry.vmId, flagged);
       }
       if (flagged && !(await ctx.vms.hasAccessOrOwns(entry.vmId, userId))) continue;
@@ -49,16 +55,19 @@ export async function auditRoutes(app: FastifyInstance, opts: { ctx: CoreContext
         offset: query.offset,
         event: query.event,
         vmId: query.vmId,
+        ip: query.ip,
+        actorUsername: query.actor,
       });
       return { entries: await withoutPrivateEntries(user.id, entries) };
     },
   );
 
   // CSV export honoring the same filters. Capped to keep exports bounded;
-  // page through with offset for full retention dumps.
+  // page through with offset for full retention dumps. Throttled: full-table
+  // scans are the most expensive read in the app.
   app.get(
     "/audit/export",
-    { preHandler: app.requirePermission("audit.read") },
+    { preHandler: app.requirePermission("audit.read"), config: { rateLimit: { max: 30, timeWindow: "1 hour" } } },
     async (request, reply) => {
       const query = querySchema.extend({ limit: z.coerce.number().int().min(1).max(50000).default(1000) }).parse(
         request.query,
@@ -71,12 +80,11 @@ export async function auditRoutes(app: FastifyInstance, opts: { ctx: CoreContext
           offset: query.offset,
           event: query.event,
           vmId: query.vmId,
+          ip: query.ip,
+          actorUsername: query.actor,
         }),
       );
-      const cell = (value: unknown): string => {
-        const text = value === null || value === undefined ? "" : String(value instanceof Date ? value.toISOString() : typeof value === "object" ? JSON.stringify(value) : value);
-        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-      };
+      const cell = csvCell;
       const header = "id,created_at,event,actor_username,vm_id,job_id,ip,detail";
       const lines = entries.map((e) =>
         [e.id, e.createdAt, e.event, e.actorUsername, e.vmId, e.jobId, e.ip, e.detail].map(cell).join(","),

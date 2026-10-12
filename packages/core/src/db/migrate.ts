@@ -21,6 +21,11 @@ import { vmPrivacyMigration } from "./migrations/011_vm_privacy.js";
 import { billingFoundationsMigration } from "./migrations/012_billing_foundations.js";
 import { firewallIsolatedMigration } from "./migrations/013_firewall_isolated.js";
 import { vmClassMigration } from "./migrations/014_vm_class.js";
+import { startOnBootMigration } from "./migrations/015_start_on_boot.js";
+import { vmIpUniqueMigration } from "./migrations/016_vm_ip_unique.js";
+import { pbsBackupsMigration } from "./migrations/017_pbs_backups.js";
+import { sshHostKeysMigration } from "./migrations/018_ssh_host_keys.js";
+import { csrfTokenDerivationMigration } from "./migrations/019_csrf_token_derivation.js";
 
 export const MIGRATIONS: Migration[] = [
   { id: "001", name: "initial", sql: initialMigration },
@@ -37,6 +42,11 @@ export const MIGRATIONS: Migration[] = [
   { id: "012", name: "billing_foundations", sql: billingFoundationsMigration },
   { id: "013", name: "firewall_isolated", sql: firewallIsolatedMigration },
   { id: "014", name: "vm_class", sql: vmClassMigration },
+  { id: "015", name: "start_on_boot", sql: startOnBootMigration },
+  { id: "016", name: "vm_ip_unique", sql: vmIpUniqueMigration },
+  { id: "017", name: "pbs_backups", sql: pbsBackupsMigration },
+  { id: "018", name: "ssh_host_keys", sql: sshHostKeysMigration },
+  { id: "019", name: "csrf_token_derivation", sql: csrfTokenDerivationMigration },
 ];
 
 export async function runMigrations(db: Queryable, logger: Logger): Promise<string[]> {

@@ -100,12 +100,44 @@ export class GuacamoleApiClient {
   }
 }
 
+/**
+ * Client-identifier type for a stored connection. The web client only
+ * launches connection objects through direct URLs; groups and active
+ * connections are never linked this way.
+ */
+export type GuacClientObjectType = "c" | "g" | "a";
+
+/**
+ * Encodes a `#/client/` identifier the way the Guacamole web client builds
+ * them (`ClientIdentifier.toString()`): base64 of
+ * `identifier + "\0" + type + "\0" + dataSource`, made URL-safe by swapping
+ * `+`/`/` for `-`/`_` and stripping `=` padding.
+ *
+ * Passing the raw numeric connection id (e.g. `#/client/14`) does NOT work:
+ * the client base64-decodes it into garbage (id becomes `×`, type and data
+ * source become `undefined`) and the tunnel connect fails with HTTP 400.
+ */
+export function encodeClientIdentifier(
+  identifier: string,
+  dataSource: string,
+  type: GuacClientObjectType = "c",
+): string {
+  return Buffer.from([identifier, type, dataSource].join(String.fromCharCode(0)), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
 export function buildClientLaunchUrl(
   guacamoleUrl: string,
   identifier: string,
   authToken: string,
+  dataSource: string,
+  type: GuacClientObjectType = "c",
 ): string {
-  return `${stripTrailingSlashes(guacamoleUrl)}/#/client/${encodeURIComponent(identifier)}?token=${encodeURIComponent(authToken)}`;
+  const encoded = encodeClientIdentifier(identifier, dataSource, type);
+  return `${stripTrailingSlashes(guacamoleUrl)}/#/client/${encoded}?token=${encodeURIComponent(authToken)}`;
 }
 
 export function buildLoginUrl(guacamoleUrl: string): string {

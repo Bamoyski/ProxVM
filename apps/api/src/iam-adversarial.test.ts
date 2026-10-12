@@ -323,6 +323,48 @@ describe("IAM adversarial: privilege escalation resistance", () => {
     await ctx.db.query("DELETE FROM groups WHERE id = $1", [gid]);
   });
 
+  it("delegated managers cannot strip roles or members they could not confer", async () => {
+    // Mallory manages groups but holds no VM/credential permissions.
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/groups",
+      headers: auth(admin),
+      payload: { name: "power-group" },
+    });
+    expect(create.statusCode).toBe(200);
+    const groupId = (create.json() as { group: { id: string } }).group.id;
+    const role = await app.inject({
+      method: "POST",
+      url: "/api/roles",
+      headers: auth(admin),
+      payload: { name: "VmDeleter", permissions: ["vm.delete"] },
+    });
+    const roleId = (role.json() as { role: { id: string } }).role.id;
+    expect(
+      (await app.inject({ method: "POST", url: `/api/groups/${groupId}/roles`, headers: auth(admin), payload: { roleId } })).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "POST", url: `/api/groups/${groupId}/members`, headers: auth(admin), payload: { userId: aliceId } })).statusCode,
+    ).toBe(200);
+
+    // Unlinking the role would withdraw vm.delete from members: denied.
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/groups/${groupId}/roles/${roleId}`, headers: auth(mallory) })).statusCode,
+    ).toBe(403);
+    // Removing the member withdraws the same: denied.
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/groups/${groupId}/members/${aliceId}`, headers: auth(mallory) })).statusCode,
+    ).toBe(403);
+    // Admin can still do both.
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/groups/${groupId}/members/${aliceId}`, headers: auth(admin) })).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/groups/${groupId}/roles/${roleId}`, headers: auth(admin) })).statusCode,
+    ).toBe(200);
+    await app.inject({ method: "DELETE", url: `/api/groups/${groupId}`, headers: auth(admin) });
+  });
+
   it("group VM grant to nonexistent VM fails cleanly", async () => {
     const create = await app.inject({
       method: "POST",

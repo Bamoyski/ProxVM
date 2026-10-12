@@ -9,19 +9,12 @@ import {
   roleEffectivePermissions,
   toPublicUser,
 } from "@proxvm/core";
-import { createUserSchema } from "@proxvm/shared";
+import { createUserSchema, passwordComplexity } from "@proxvm/shared";
 
 const updateUserSchema = z.object({
   active: z.boolean().optional(),
   role: z.enum(["ADMIN", "OPERATOR", "USER"]).optional(),
-  password: z
-    .string()
-    .min(12)
-    .regex(/[a-z]/)
-    .regex(/[A-Z]/)
-    .regex(/[0-9]/)
-    .regex(/[^A-Za-z0-9]/)
-    .optional(),
+  password: passwordComplexity.optional(),
   email: z.string().email().optional(),
   givenName: z.string().max(128).optional(),
 });
@@ -85,7 +78,7 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
         "user created but Guacamole account provisioning deferred",
       );
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "USER_CREATED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -162,7 +155,7 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
         [target.id, body.email ?? null, body.givenName ?? null],
       );
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "PERMISSION_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -200,7 +193,7 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       const msg = err instanceof Error ? err.message : String(err);
       return reply.status(400).send({ code: "VALIDATION_ERROR", message: msg });
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "USER_DELETED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -225,7 +218,7 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
     try {
       const { userId } = await ctx.registration.approve(id, actor.id, [body.role]);
       const created = await ctx.users.findById(userId);
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "REGISTRATION_APPROVED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -253,7 +246,7 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       }
       throw err;
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "REGISTRATION_REJECTED",
       actorUserId: actor.id,
       actorUsername: actor.username,

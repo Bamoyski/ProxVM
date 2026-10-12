@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Empty } from "../components/ui.js";
 
 interface UsageRow {
   vmId: string;
@@ -30,60 +30,61 @@ export default function Usage() {
   });
 
   return (
-    <div className="max-w-4xl">
-      <PageTitle title="Usage metering" />
-      {error && <ErrorBox error={error} />}
-      <p className="text-xs text-slate-500 mb-4">
-        Powered-on hours per VM, reconciled from the live Proxmox power state every few minutes — including
-        machines switched on outside ProxVM. The basis for per-customer billing; export to CSV for invoicing.
-      </p>
-      <div className="flex flex-wrap gap-2 items-center mb-4">
+    <div className="pv-page pv-page-narrow">
+      <PageTitle
+        title="Usage metering"
+        description="Powered-on hours per VM, reconciled from the live Proxmox power state every few minutes — including machines switched on outside ProxVM. The basis for per-customer billing; export to CSV for invoicing."
+      >
         <input
           type="month"
-          className="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
+          className="pv-input pv-input-auto"
+          style={{ height: 32, fontSize: "0.8rem" }}
           value={month}
           onChange={(e) => {
             setMonth(e.target.value);
             setError(null);
           }}
+          aria-label="Month"
         />
         <a
-          className="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded"
+          className="pv-btn pv-btn-sm"
           href={`/api/usage/export?month=${encodeURIComponent(month)}`}
         >
           Export CSV
         </a>
-        {data && (
-          <span className="text-sm text-slate-300 ml-auto">
-            Total <span className="font-mono text-blue-300">{data.totalHours.toFixed(2)} h</span>
-          </span>
-        )}
-      </div>
-      <div className="bg-slate-900 border border-slate-800 rounded p-4">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
-              <th className="py-2">VM</th>
-              <th className="py-2 text-right">Powered-on hours</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.vms ?? []).map((r) => (
-              <tr key={r.vmId} className="border-b border-slate-800/50">
-                <td className="py-2">{r.vmName}</td>
-                <td className="py-2 text-right font-mono">{r.hours.toFixed(2)}</td>
-              </tr>
-            ))}
-            {data && data.vms.length === 0 && (
+      </PageTitle>
+      {error && <ErrorBox error={error} />}
+      {data && (
+        <dl style={{ display: "flex", gap: 28, margin: "0 0 20px" }}>
+          <div>
+            <dt style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)" }}>Total, {data.month}</dt>
+            <dd className="pv-mono" style={{ margin: 0, fontSize: "1.5rem", fontWeight: 650 }}>{data.totalHours.toFixed(2)} h</dd>
+          </div>
+        </dl>
+      )}
+      <Section title="Per VM">
+        <div className="pv-table-wrap">
+          <table className="pv-table">
+            <thead>
               <tr>
-                <td colSpan={2} className="py-4 text-center text-xs text-slate-500">
-                  No metered time this month yet.
-                </td>
+                <th>VM</th>
+                <th className="num">Powered-on hours</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {(data?.vms ?? []).map((r) => (
+                <tr key={r.vmId}>
+                  <td>{r.vmName}</td>
+                  <td className="num pv-mono">{r.hours.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {data && data.vms.length === 0 && (
+          <Empty title="No metered time this month yet" />
+        )}
+      </Section>
     </div>
   );
 }

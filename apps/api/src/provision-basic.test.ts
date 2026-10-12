@@ -5,6 +5,7 @@ import {
   createCore,
   makeLogger,
   hashPassword,
+  setUserQuota,
   type CoreContext,
   type LocalConfig,
 } from "@proxvm/core";
@@ -343,6 +344,70 @@ describe("Basic/Advanced provisioning requests", () => {
       payload: { name: "", templateId, password: "short" },
     });
     expect(invalid.statusCode).toBe(400);
+  });
+
+  it("quota counts owned VMs plus in-flight jobs; stale jobs do not wedge users", async () => {
+    const op2 = await ctx.users.create({
+      username: "op2",
+      passwordHash: await hashPassword("Operator2-Pass-1!"),
+      roles: ["OPERATOR"],
+    });
+    const s2 = await login(app, "op2", "Operator2-Pass-1!");
+    const auth = { cookie: s2.cookie, "x-csrf-token": s2.csrf };
+    const submit = (name: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/vms/provision",
+        headers: auth,
+        payload: { name, templateId, password: "Basic-Password-1!" },
+      });
+    await setUserQuota(ctx.db, op2.id, 1);
+
+    // One owned VM fills the quota.
+    await ctx.vms.create({ vmid: 9111, node: "node1", name: "op2-vm", status: "stopped", createdByUserId: op2.id });
+    const denied = await submit("quota-blocked");
+    expect(denied.statusCode).toBe(403);
+    const audit = await ctx.db.query<{ event: string }>(
+      "SELECT event FROM audit_logs WHERE event = 'QUOTA_DENIED' ORDER BY created_at DESC LIMIT 1",
+    );
+    expect(audit.rows[0]?.event).toBe("QUOTA_DENIED");
+
+    // Free the VM; one in-flight job still fills the quota.
+    await ctx.db.query("UPDATE vms SET deleted_at = NOW() WHERE created_by_user_id = $1", [op2.id]);
+    expect((await submit("quota-first")).statusCode).toBe(202);
+    expect((await submit("quota-second")).statusCode).toBe(403);
+
+    // A day-old stuck PENDING job does not count: the next submit passes the gate.
+    await ctx.db.query(
+      "UPDATE provisioning_jobs SET updated_at = NOW() - interval '25 hours' WHERE created_by_user_id = $1",
+      [op2.id],
+    );
+    expect((await submit("quota-after-stale")).statusCode).toBe(202);
+  });
+
+  it("resource ceilings and static-IP policy gate non-admin provisions", async () => {
+    const opAuth = { cookie: operator.cookie, "x-csrf-token": operator.csrf };
+    const submit = (payload: object) =>
+      app.inject({ method: "POST", url: "/api/vms/provision", headers: opAuth, payload: { name: `pol-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, templateId, password: "Basic-Password-1!", ...payload } });
+
+    await ctx.settings.set("provision.max_cpu", "2", { category: "system" });
+    expect((await submit({ cpu: 4 })).statusCode).toBe(400);
+    // Admins are exempt.
+    const adminRes = await app.inject({
+      method: "POST",
+      url: "/api/vms/provision",
+      headers: { cookie: admin.cookie, "x-csrf-token": admin.csrf },
+      payload: { name: "pol-admin-cpu", templateId, cpu: 4, password: "Basic-Password-1!" },
+    });
+    expect(adminRes.statusCode).toBe(202);
+    await ctx.db.query("DELETE FROM settings WHERE key = 'provision.max_cpu'");
+
+    // Static mode with no allowlist is rejected; a matching allowlist passes the gate.
+    const staticPayload = { network: { mode: "static", bridge: "vmbr0", ip: "192.168.1.50", cidr: 24, gateway: "192.168.1.1" } };
+    expect((await submit(staticPayload)).statusCode).toBe(400);
+    await ctx.settings.set("network.static_allowed_cidrs", "192.168.1.0/24", { category: "system" });
+    expect((await submit(staticPayload)).statusCode).toBe(202);
+    expect((await submit({ network: { mode: "static", bridge: "vmbr0", ip: "10.9.9.9", cidr: 24, gateway: "10.9.9.1" } })).statusCode).toBe(400);
   });
 
   it("defaults endpoint returns configured values without secrets (operator-safe)", async () => {

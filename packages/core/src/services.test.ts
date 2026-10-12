@@ -4,13 +4,19 @@ import RedisMock from "ioredis-mock";
 import { Pool } from "pg";
 import {
   createCore,
+  hashPassword,
   runProvisioningJob,
+  setUserQuota,
   type CoreContext,
   type LocalConfig,
 } from "./index.js";
 
 const masterKey = "a".repeat(64);
 let testCtx: CoreContext;
+// Worker re-authorization requires every executed job to have a creator that
+// still holds vm.create. Pipeline tests therefore run as this provisioner
+// instead of the legacy creator-less jobs (which now fail closed).
+let provisionerId = "";
 
 const localConfig: LocalConfig = {
   version: 1,
@@ -42,6 +48,12 @@ describe("services (pg-mem)", () => {
       logger: silentLogger(),
     });
     testCtx = ctx;
+    const provisioner = await ctx.users.create({
+      username: "pipe-provisioner",
+      passwordHash: await hashPassword("Pipe-Provisioner-1!"),
+      roles: ["OPERATOR"],
+    });
+    provisionerId = provisioner.id;
   });
 
   it("settings: encrypts secret values transparently", async () => {
@@ -49,6 +61,16 @@ describe("services (pg-mem)", () => {
     const raw = await ctx.db.query<{ value: string }>("SELECT value FROM settings WHERE key = 'proxmox.token_secret'");
     expect(raw.rows[0]?.value).not.toContain("super-secret-token");
     expect(await ctx.settings.getPlain("proxmox.token_secret")).toBe("super-secret-token");
+  });
+
+  it("pbs settings default to TLS verification until explicitly disabled", async () => {
+    expect(await ctx.settings.pbs()).toBeNull();
+    await ctx.settings.set("pbs.url", "https://pbs.example:8007", { category: "infrastructure" });
+    await ctx.settings.set("pbs.token_secret", "pbs-secret-value", { encrypted: true, category: "infrastructure" });
+    expect((await ctx.settings.pbs())?.verifySsl).toBe(true);
+    await ctx.settings.set("pbs.verify_ssl", "false", { category: "infrastructure" });
+    expect((await ctx.settings.pbs())?.verifySsl).toBe(false);
+    await ctx.db.query("DELETE FROM settings WHERE key LIKE 'pbs.%'");
   });
 
   it("credentials: store/rotate/verify lifecycle", async () => {
@@ -92,7 +114,7 @@ describe("services (pg-mem)", () => {
     const job = await ctx.jobs.create({
       vmId: vm.id,
       request: { name: "pipe-vm", templateId: "00000000-0000-0000-0000-0000000000ff" },
-      createdByUserId: null,
+      createdByUserId: provisionerId,
     });
     const outcome = await runProvisioningJob(ctx, job.id, 0);
     expect(outcome).toBe("FAILED");
@@ -105,7 +127,7 @@ describe("services (pg-mem)", () => {
 
   it("jobs: resetForRetry returns failed steps to PENDING", async () => {
     const vm = await ctx.vms.create({ vmid: 111, node: "pve1", name: "retry-vm" });
-    const job = await ctx.jobs.create({ vmId: vm.id, request: {}, createdByUserId: null });
+    const job = await ctx.jobs.create({ vmId: vm.id, request: {}, createdByUserId: provisionerId });
     await ctx.jobs.setStep(job.id, "VALIDATE_PROXMOX_RESOURCES", "SUCCEEDED", {}, null);
     await ctx.jobs.setStep(job.id, "CLONE_TEMPLATE", "FAILED", null, "boom");
     await ctx.jobs.resetForRetry(job.id);
@@ -163,7 +185,7 @@ describe("provisioning template resolution", () => {
     const job = await ctx.jobs.create({
       vmId: null,
       request: { name: "deb-01", templateId: (await ctx.templates.list()).find((t) => t.proxmoxVmid === 126)!.id, node: "pve-node-01", storage: "local-lvm", osType: "linux", network: { mode: "dhcp" } },
-      createdByUserId: null,
+      createdByUserId: provisionerId,
     });
     await ctx.jobs.setStep(job.id, "VALIDATE_PROXMOX_RESOURCES", "SUCCEEDED", {}, null);
     const outcome = await runProvisioningJob(depsWith(proxmoxMock(1)), job.id, 2);
@@ -182,7 +204,7 @@ describe("provisioning template resolution", () => {
     const job = await ctx.jobs.create({
       vmId: null,
       request: { name: "deb-02", templateId: "00000000-0000-0000-0000-0000000000fe", node: "pve-node-01", storage: "local-lvm", osType: "linux", network: { mode: "dhcp" } },
-      createdByUserId: null,
+      createdByUserId: provisionerId,
     });
     await ctx.jobs.setStep(job.id, "VALIDATE_PROXMOX_RESOURCES", "SUCCEEDED", {}, null);
     const outcome = await runProvisioningJob(depsWith(proxmoxMock(1)), job.id, 2);
@@ -196,7 +218,7 @@ describe("provisioning template resolution", () => {
     const job = await ctx.jobs.create({
       vmId: null,
       request: { name: "deb-03", templateId: template.id, node: "pve-node-01", storage: "local-lvm", osType: "linux", network: { mode: "dhcp", bridge: "vmbr0" } },
-      createdByUserId: null,
+      createdByUserId: provisionerId,
     });
     const outcome = await runProvisioningJob(depsWith(proxmoxMock(0)), job.id, 1);
     expect(outcome).toBe("FAILED");
@@ -208,14 +230,14 @@ describe("provisioning template resolution", () => {
     const template = (await ctx.templates.list()).find((t) => t.proxmoxVmid === 126)!;
     const base = { name: "deb-05", templateId: template.id, node: "pve-node-01", storage: "local-lvm", osType: "linux", network: { mode: "dhcp", bridge: "vmbr0" } };
 
-    const linkedJob = await ctx.jobs.create({ vmId: null, request: { ...base, linkedClone: true }, createdByUserId: null });
+    const linkedJob = await ctx.jobs.create({ vmId: null, request: { ...base, linkedClone: true }, createdByUserId: provisionerId });
     await runProvisioningJob(depsWith(proxmoxMock(1)), linkedJob.id, 1);
     const linked = cloneCalls[cloneCalls.length - 1] as Record<string, unknown>;
     expect(linked.full).toBe(false);
     expect("storage" in linked).toBe(false);
     expect("target" in linked).toBe(false);
 
-    const fullJob = await ctx.jobs.create({ vmId: null, request: { ...base, linkedClone: false }, createdByUserId: null });
+    const fullJob = await ctx.jobs.create({ vmId: null, request: { ...base, linkedClone: false }, createdByUserId: provisionerId });
     await runProvisioningJob(depsWith(proxmoxMock(1)), fullJob.id, 1);
     const full = cloneCalls[cloneCalls.length - 1] as Record<string, unknown>;
     expect(full.full).toBe(true);
@@ -228,7 +250,7 @@ describe("provisioning template resolution", () => {
     const job = await ctx.jobs.create({
       vmId: null,
       request: { name: "deb-04", templateId: template.id, node: "pve-node-01", storage: "local-lvm", osType: "linux", network: { mode: "dhcp", bridge: "vmbr0" } },
-      createdByUserId: null,
+      createdByUserId: provisionerId,
     });
     const outcome = await runProvisioningJob(depsWith(proxmoxMock(1)), job.id, 1);
     expect(outcome).toBe("FAILED");
@@ -250,6 +272,80 @@ function silentLogger() {
 function view2_status(_v1: unknown, v2: { status: string } | null): boolean {
   return v2?.status === "VERIFIED";
 }
+
+describe("provisioning worker authorization recheck", () => {
+  let ctx: CoreContext;
+  const cloneCalls: Array<Record<string, unknown>> = [];
+  const fakeProxmox = {
+    clone: async (args: Record<string, unknown>) => {
+      cloneCalls.push(args);
+      throw new Error("must not clone");
+    },
+  } as never;
+
+  beforeAll(async () => {
+    const mem = newDb();
+    const { Pool: MemPool } = mem.adapters.createPg();
+    const pool = new MemPool() as unknown as Pool;
+    ctx = await createCore(localConfig, { db: pool, redis: new RedisMock() as never, logger: silentLogger() });
+  });
+
+  function deps(): CoreContext {
+    return { ...ctx, getProxmoxClient: async () => fakeProxmox } as CoreContext;
+  }
+
+  it("rejects jobs that pushed the creator over quota after enqueue", async () => {
+    const creator = await ctx.users.create({
+      username: "quota-creator",
+      passwordHash: await hashPassword("Quota-Password-1!"),
+      roles: ["OPERATOR"],
+    });
+    await setUserQuota(ctx.db, creator.id, 0);
+    const job = await ctx.jobs.create({ vmId: null, request: { name: "q-1" }, createdByUserId: creator.id });
+    const outcome = await runProvisioningJob(deps(), job.id, 0);
+    expect(outcome).toBe("FAILED");
+    expect(cloneCalls).toHaveLength(0);
+    expect((await ctx.jobs.require(job.id)).error).toMatch(/quota exceeded/);
+    const audit = await ctx.db.query<{ event: string }>(
+      "SELECT event FROM audit_logs WHERE job_id = $1 AND event = 'PROVISIONING_FAILED'",
+      [job.id],
+    );
+    expect(audit.rows).toHaveLength(1);
+  });
+
+  it("rejects jobs violating resource ceilings at execution", async () => {
+    const creator = await ctx.users.create({
+      username: "ceiling-creator",
+      passwordHash: await hashPassword("Ceiling-Pass-1!"),
+      roles: ["OPERATOR"],
+    });
+    await ctx.settings.set("provision.max_cpu", "2", { category: "system" });
+    const job = await ctx.jobs.create({
+      vmId: null,
+      request: { name: "p-1", cpu: 8, ramMb: 2048, diskGb: 32 },
+      createdByUserId: creator.id,
+    });
+    const outcome = await runProvisioningJob(deps(), job.id, 0);
+    expect(outcome).toBe("FAILED");
+    expect(cloneCalls).toHaveLength(0);
+    expect((await ctx.jobs.require(job.id)).error).toMatch(/maximum/);
+    await ctx.db.query("DELETE FROM settings WHERE key = 'provision.max_cpu'");
+  });
+
+  it("rejects jobs from disabled or deleted creators without touching Proxmox", async () => {
+    const creator = await ctx.users.create({
+      username: "disabled-creator",
+      passwordHash: await hashPassword("Disabled-Pass-1!"),
+      roles: ["OPERATOR"],
+    });
+    const job = await ctx.jobs.create({ vmId: null, request: { name: "q-2" }, createdByUserId: creator.id });
+    await ctx.users.setActive(creator.id, false);
+    const outcome = await runProvisioningJob(deps(), job.id, 0);
+    expect(outcome).toBe("FAILED");
+    expect(cloneCalls).toHaveLength(0);
+    expect((await ctx.jobs.require(job.id)).error).toMatch(/no longer authorized/);
+  });
+});
 
 function t2_sameId(_t1: unknown, t2: unknown | null): unknown | null {
   return t2;

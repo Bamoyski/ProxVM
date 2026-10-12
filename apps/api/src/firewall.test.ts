@@ -125,11 +125,28 @@ describe("VM network isolation", () => {
     expect(on.statusCode).toBe(200);
     expect(on.json()).toMatchObject({ isolated: true });
     expect(calls).toContainEqual(expect.stringMatching(/"policy_in":"DROP"/));
-    expect(rules).toHaveLength(5);
+    // Default posture (allowInternet on): 3 inbound + 2 dns + 2 dhcp +
+    // 5 lan drops + 1 internet accept.
+    expect(rules).toHaveLength(13);
+    expect(rules.filter((r) => r.action === "DROP")).toHaveLength(5);
+    expect(rules.some((r) => String(r.comment ?? "").includes("internet (non-local)"))).toBe(true);
 
     const status = await app.inject({ method: "GET", url: `/api/vms/${vmId}/firewall`, headers: authA() });
     expect(status.statusCode).toBe(200);
     expect(status.json()).toMatchObject({ isolated: true, enabled: true, policyIn: "DROP" });
+
+    // Legacy posture (allowInternet:false): DNS-only egress. Re-applying
+    // replaces the default set: 5 rules, no LAN drops, no internet accept.
+    const legacy = await app.inject({
+      method: "POST",
+      url: `/api/vms/${vmId}/firewall`,
+      headers: authA(),
+      payload: { isolated: true, allowFrom: "192.168.1.22", allowDnsTo: "192.168.1.1", allowInternet: false },
+    });
+    expect(legacy.statusCode).toBe(200);
+    expect(rules).toHaveLength(5);
+    expect(rules.some((r) => String(r.comment ?? "").includes("no local network"))).toBe(false);
+    expect(rules.some((r) => String(r.comment ?? "").includes("internet"))).toBe(false);
 
     // Hand-made rule is listed but protected.
     rules.push({ pos: 99, action: "ACCEPT", type: "in", comment: "hand-made" });

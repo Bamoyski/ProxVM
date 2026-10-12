@@ -1,4 +1,5 @@
-import { PageTitle } from "../components/ui.js";
+import { Fragment } from "react";
+import { PageTitle, Section } from "../components/ui.js";
 import { useSiteContent } from "../content.js";
 
 export const DONATE_URL = "https://ko-fi.com/bamoyskistudios";
@@ -38,46 +39,42 @@ export default function Donate() {
   const funfact = get("donate.funfact");
   const tiers = parseTiers(get("donate.tiers"));
   return (
-    <div className="max-w-3xl">
+    <div className="pv-page pv-page-narrow">
       <PageTitle title="Donate" />
-      <div className="bg-slate-900 border border-slate-800 rounded p-5 text-sm text-slate-300 space-y-4">
-        <p>
+      <Section title="Support ProxVM">
+        <p style={{ fontSize: "0.88rem", color: "var(--pv-text-2)", margin: "0 0 12px" }}>
           {intro ?? (
             <>
               ProxVM is free and open-source (MIT), built and maintained by{" "}
-              <span className="font-medium text-slate-100">bamoyskistudios</span>. If it is useful to you,
+              bamoyskistudios. If it is useful to you,
               a coffee keeps development — and the homelab it runs on — going.
             </>
           )}
         </p>
-        <p className="text-slate-400">
+        <p style={{ fontSize: "0.86rem", color: "var(--pv-text-2)", margin: "0 0 16px" }}>
           {funfact ??
             "Fun fact: ProxVM is designed, built, and run by two 15-year-olds out of a home lab. Every donation goes directly to two teenagers buying server parts instead of video games (mostly)."}
         </p>
-        <a
-          className="inline-block px-5 py-2.5 text-sm font-medium bg-amber-500 hover:bg-amber-400 text-slate-950 rounded"
-          href={DONATE_URL}
-          target="_blank"
-          rel="noreferrer"
-        >
-          ☕ Donate on Ko-fi
-        </a>
-        <div>
-          <h2 className="text-base font-medium text-slate-100 mb-2">What your donation buys</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {tiers.map((t) => (
-              <div key={t.amount} className="bg-slate-800/60 border border-slate-700/60 rounded p-3">
-                <div className="font-mono text-amber-300 text-sm mb-1">{t.amount}</div>
-                <div className="text-xs text-slate-400">{t.blurb}</div>
-              </div>
-            ))}
-          </div>
+        <div style={{ marginBottom: 20 }}>
+          <a className="pv-btn pv-btn-primary" href={DONATE_URL} target="_blank" rel="noreferrer">
+            Donate on Ko-fi
+          </a>
         </div>
-        <p className="text-slate-500 text-xs">
+      </Section>
+      <Section title="What your donation buys">
+        <dl className="pv-kv">
+          {tiers.map((t) => (
+            <Fragment key={t.amount}>
+              <dt className="pv-mono">{t.amount}</dt>
+              <dd style={{ color: "var(--pv-text-2)" }}>{t.blurb}</dd>
+            </Fragment>
+          ))}
+        </dl>
+        <p className="pv-hint" style={{ marginTop: 12 }}>
           Donations go through Ko-fi; ProxVM itself never touches payment details. Donations are
           voluntary and do not buy features, support SLAs, or influence access decisions.
         </p>
-      </div>
+      </Section>
     </div>
   );
 }

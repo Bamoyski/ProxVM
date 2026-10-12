@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, useConfirm } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Empty, Btn, useConfirm } from "../components/ui.js";
 
 interface Group {
   id: string;
@@ -32,9 +32,8 @@ interface Role {
   name: string;
 }
 
-const input = "w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-const label = "block text-xs font-medium text-slate-400 mb-1";
-const btn = "px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 rounded disabled:opacity-40";
+const input = "pv-input";
+const label = "pv-label";
 
 function fmtExpiry(v: string | null): string {
   if (!v) return "never";
@@ -116,89 +115,85 @@ export default function Groups() {
   const detail = detailData;
 
   return (
-    <div>
-      <PageTitle title="Groups" />
+    <div className="pv-page">
+      <PageTitle title="Groups" description="Bundle users, roles, and VM access. Group-derived access is managed here, not per VM." />
       {dialog}
       {error && <ErrorBox error={error} />}
-      {status && <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-3 mb-4 text-sm">{status}</div>}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {status && <div className="pv-notice pv-notice-ok">{status}</div>}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-10">
         <div>
-          <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-4">
-            <h2 className="text-sm font-medium text-slate-300 mb-3">Create group</h2>
-            <div className="space-y-3">
-              <div>
-                <label className={label}>Name</label>
-                <input className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              </div>
-              <div>
-                <label className={label}>Description</label>
-                <input className={input} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-              </div>
-              <button onClick={create} disabled={!form.name.trim()} className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded">
-                Create group
-              </button>
+          <Section title="Create group">
+            <div className="pv-field">
+              <label className={label}>Name</label>
+              <input className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </div>
-          </div>
-          <div className="bg-slate-900 border border-slate-800 rounded p-4">
-            <h2 className="text-sm font-medium text-slate-300 mb-3">All groups</h2>
-            <div className="space-y-1">
-              {(groupsData?.groups ?? []).map((g) => (
-                <div key={g.id} className="flex items-center justify-between">
-                  <button
-                    className={`text-sm text-left hover:underline ${selectedId === g.id ? "text-blue-400" : "text-slate-200"}`}
-                    onClick={() => setSelectedId(g.id)}
-                  >
-                    {g.name}
-                    <span className="text-xs text-slate-500 ml-2">{g.memberCount} members · {g.vmCount} VMs</span>
-                  </button>
-                  <button className="text-xs text-red-300 underline" onClick={() => del(g)}>Delete</button>
-                </div>
-              ))}
-              {!groupsData?.groups.length && <div className="text-sm text-slate-500">No groups yet.</div>}
+            <div className="pv-field">
+              <label className={label}>Description</label>
+              <input className={input} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
             </div>
-          </div>
+            <Btn kind="primary" onClick={create} disabled={!form.name.trim()}>
+              Create group
+            </Btn>
+          </Section>
+          <Section title="All groups" hint={`${(groupsData?.groups ?? []).length} total`}>
+            {(groupsData?.groups ?? []).map((g) => (
+              <div key={g.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+                <button
+                  className="pv-btn pv-btn-link"
+                  style={{ fontSize: "0.85rem", color: selectedId === g.id ? "var(--pv-accent)" : "var(--pv-text)" }}
+                  onClick={() => setSelectedId(g.id)}
+                >
+                  {g.name}
+                  <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 8 }}>{g.memberCount} members · {g.vmCount} VMs</span>
+                </button>
+                <Btn size="sm" kind="link" onClick={() => del(g)}>Delete</Btn>
+              </div>
+            ))}
+            {!groupsData?.groups.length && <Empty title="No groups yet" />}
+          </Section>
         </div>
         <div className="lg:col-span-2">
           {!detail ? (
-            <div className="text-sm text-slate-500">Select a group to manage members, roles and VM access.</div>
+            <Empty title="No group selected" body="Select a group to manage members, roles and VM access." />
           ) : (
-            <div className="space-y-4">
-              <div className="bg-slate-900 border border-slate-800 rounded p-4">
-                <h2 className="text-sm font-medium text-slate-300 mb-1">{detail.group.name}</h2>
-                {detail.group.description && <div className="text-xs text-slate-500 mb-3">{detail.group.description}</div>}
-                <h3 className="text-xs font-medium text-slate-400 mb-2">Members</h3>
-                <div className="space-y-1 mb-3">
+            <div>
+              <Section title={detail.group.name} hint={detail.group.description || undefined}>
+                <div className="pv-label">Members</div>
+                <div style={{ marginBottom: 12 }}>
                   {detail.members.map((m) => (
-                    <div key={m.userId} className="flex justify-between text-sm py-0.5">
+                    <div key={m.userId} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
                       <span>
                         {m.username}
-                        <span className="text-xs text-slate-500 ml-2">expires {fmtExpiry(m.expiresAt)}</span>
+                        <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 8 }}>expires {fmtExpiry(m.expiresAt)}</span>
                       </span>
-                      <button
-                        className="text-xs text-red-300 underline"
+                      <Btn
+                        size="sm"
+                        kind="link"
                         onClick={() => void mutate(() => api(`/groups/${detail.group.id}/members/${m.userId}`, { method: "DELETE" }))}
                       >
                         Remove
-                      </button>
+                      </Btn>
                     </div>
                   ))}
-                  {!detail.members.length && <div className="text-xs text-slate-500">No members.</div>}
+                  {!detail.members.length && <Empty title="No members" />}
                 </div>
-                <div className="flex flex-wrap gap-2 items-center">
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                   <input
-                    className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm w-48"
+                    className="pv-input"
+                    style={{ width: 192 }}
                     placeholder="Username to add…"
                     value={memberInput}
                     onChange={(e) => setMemberInput(e.target.value)}
                   />
-                  <select className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs" value={memberExpiry} onChange={(e) => setMemberExpiry(e.target.value)}>
+                  <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} value={memberExpiry} onChange={(e) => setMemberExpiry(e.target.value)}>
                     <option value="">Never expires</option>
                     <option value="1h">1 hour</option>
                     <option value="1d">1 day</option>
                     <option value="1w">1 week</option>
                   </select>
-                  <button
-                    className={btn}
+                  <Btn
+                    size="sm"
+                    kind="primary"
                     disabled={!memberInput.trim()}
                     onClick={() =>
                       void mutate(
@@ -208,71 +203,70 @@ export default function Groups() {
                     }
                   >
                     Add member
-                  </button>
+                  </Btn>
                 </div>
-              </div>
-              <div className="bg-slate-900 border border-slate-800 rounded p-4">
-                <h3 className="text-xs font-medium text-slate-400 mb-2">Roles</h3>
-                <div className="space-y-1 mb-3">
+              </Section>
+              <Section title="Roles">
+                <div style={{ marginBottom: 12 }}>
                   {detail.roles.map((r) => (
-                    <div key={r.roleId} className="flex justify-between text-sm py-0.5">
+                    <div key={r.roleId} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
                       <span>
                         {r.roleName}
-                        <span className="text-xs text-slate-500 ml-2">expires {fmtExpiry(r.expiresAt)}</span>
+                        <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 8 }}>expires {fmtExpiry(r.expiresAt)}</span>
                       </span>
-                      <button
-                        className="text-xs text-red-300 underline"
+                      <Btn
+                        size="sm"
+                        kind="link"
                         onClick={() => void mutate(() => api(`/groups/${detail.group.id}/roles/${r.roleId}`, { method: "DELETE" }))}
                       >
                         Remove
-                      </button>
+                      </Btn>
                     </div>
                   ))}
-                  {!detail.roles.length && <div className="text-xs text-slate-500">No roles.</div>}
+                  {!detail.roles.length && <Empty title="No roles" />}
                 </div>
-                <div className="flex gap-2 items-center">
-                  <select className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm" value={rolePick} onChange={(e) => setRolePick(e.target.value)}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <select className="pv-select pv-input-auto" style={{ height: 32 }} value={rolePick} onChange={(e) => setRolePick(e.target.value)}>
                     <option value="">Select role…</option>
                     {(rolesData?.roles ?? []).map((r) => (
                       <option key={r.id} value={r.id}>{r.name}</option>
                     ))}
                   </select>
-                  <button
-                    className={btn}
+                  <Btn
+                    size="sm"
+                    kind="primary"
                     disabled={!rolePick}
                     onClick={() =>
                       void mutate(() => api(`/groups/${detail.group.id}/roles`, { method: "POST", body: { roleId: rolePick } })).then(() => setRolePick(""))
                     }
                   >
                     Assign role
-                  </button>
+                  </Btn>
                 </div>
-              </div>
-              <div className="bg-slate-900 border border-slate-800 rounded p-4">
-                <h3 className="text-xs font-medium text-slate-400 mb-2">Effective permissions</h3>
-                <div className="text-xs text-slate-500 mb-2">Union of permissions from the group's roles.</div>
+              </Section>
+              <Section title="Effective permissions" hint="Union of permissions from the group's roles.">
                 <GroupPermissions permissions={detailData.permissions ?? []} />
-              </div>
-              <div className="bg-slate-900 border border-slate-800 rounded p-4">
-                <h3 className="text-xs font-medium text-slate-400 mb-2">VM access</h3>
-                <div className="space-y-1 mb-3">
+              </Section>
+              <Section title="VM access">
+                <div style={{ marginBottom: 12 }}>
                   {detail.vms.map((v) => (
-                    <div key={v.vmId} className="flex justify-between text-sm py-0.5">
+                    <div key={v.vmId} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
                       <span>
-                        {v.vmName} <span className="text-xs text-slate-500 font-mono">({v.vmid}@{v.node})</span>
-                        <span className="text-xs text-slate-500 ml-2">
+                        {v.vmName} <span className="pv-mono" style={{ color: "var(--pv-text-3)" }}>({v.vmid}@{v.node})</span>
+                        <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 8 }}>
                           {v.protocols === null ? "all protocols" : v.protocols.join(", ").toUpperCase()} · expires {fmtExpiry(v.expiresAt)}
                         </span>
                       </span>
-                      <button
-                        className="text-xs text-red-300 underline"
+                      <Btn
+                        size="sm"
+                        kind="link"
                         onClick={() => void mutate(() => api(`/groups/${detail.group.id}/vms/${v.vmId}`, { method: "DELETE" }))}
                       >
                         Remove
-                      </button>
+                      </Btn>
                     </div>
                   ))}
-                  {!detail.vms.length && <div className="text-xs text-slate-500">No VMs.</div>}
+                  {!detail.vms.length && <Empty title="No VMs" />}
                 </div>
                 <GroupVmGrant
                   groupId={detail.group.id}
@@ -282,7 +276,7 @@ export default function Groups() {
                   onError={fail}
                   reload={reload}
                 />
-              </div>
+              </Section>
             </div>
           )}
         </div>
@@ -292,7 +286,7 @@ export default function Groups() {
 }
 
 function GroupPermissions({ permissions }: { permissions: GroupPermission[] }) {
-  if (!permissions.length) return <div className="text-xs text-slate-500">No permissions via roles.</div>;
+  if (!permissions.length) return <Empty title="No permissions via roles" />;
   const byCategory = new Map<string, GroupPermission[]>();
   for (const p of permissions) {
     const list = byCategory.get(p.category) ?? [];
@@ -300,19 +294,17 @@ function GroupPermissions({ permissions }: { permissions: GroupPermission[] }) {
     byCategory.set(p.category, list);
   }
   return (
-    <div className="space-y-3">
+    <div>
       {[...byCategory.entries()].map(([category, perms]) => (
-        <div key={category}>
-          <div className="text-xs font-medium text-slate-400 mb-1">{category}</div>
-          <div className="space-y-1">
-            {perms.map((p) => (
-              <div key={p.code} className="text-sm py-0.5" title={p.description}>
-                <span className="font-mono text-blue-300">{p.code}</span>
-                <span className="text-slate-400 ml-2">{p.description}</span>
-                <span className="text-xs text-slate-500 ml-2">via {p.roles.join(", ")}</span>
-              </div>
-            ))}
-          </div>
+        <div key={category} style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)", marginBottom: 4 }}>{category}</div>
+          {perms.map((p) => (
+            <div key={p.code} style={{ fontSize: "0.83rem", padding: "3px 0" }} title={p.description}>
+              <span className="pv-mono">{p.code}</span>
+              <span style={{ color: "var(--pv-text-2)", marginLeft: 8 }}>{p.description}</span>
+              <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 8 }}>via {p.roles.join(", ")}</span>
+            </div>
+          ))}
         </div>
       ))}
     </div>
@@ -328,14 +320,15 @@ function GroupVmGrant({ groupId, vmForm, setVmForm, onGrant, onError, reload }: 
   reload: () => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-2 items-center">
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
       <input
-        className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm w-64 font-mono"
+        className="pv-input pv-mono"
+        style={{ width: 256 }}
         placeholder="VM id (see URL on VM page)…"
         value={vmForm.vmId}
         onChange={(e) => setVmForm({ ...vmForm, vmId: e.target.value })}
       />
-      <label className="flex items-center gap-1 text-xs">
+      <label className="pv-checkrow">
         <input
           type="checkbox"
           checked={vmForm.protocols === null}
@@ -344,7 +337,7 @@ function GroupVmGrant({ groupId, vmForm, setVmForm, onGrant, onError, reload }: 
         All protocols
       </label>
       {["ssh", "rdp", "vnc"].map((p) => (
-        <label key={p} className="flex items-center gap-1 text-xs uppercase">
+        <label key={p} className="pv-checkrow" style={{ textTransform: "uppercase" }}>
           <input
             type="checkbox"
             checked={vmForm.protocols === null || vmForm.protocols.includes(p)}
@@ -362,7 +355,8 @@ function GroupVmGrant({ groupId, vmForm, setVmForm, onGrant, onError, reload }: 
         </label>
       ))}
       <select
-        className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs"
+        className="pv-select pv-input-auto"
+        style={{ height: 32, fontSize: "0.8rem" }}
         value={vmForm.expiry}
         onChange={(e) => setVmForm({ ...vmForm, expiry: e.target.value })}
       >
@@ -371,8 +365,9 @@ function GroupVmGrant({ groupId, vmForm, setVmForm, onGrant, onError, reload }: 
         <option value="1d">1 day</option>
         <option value="1w">1 week</option>
       </select>
-      <button
-        className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 rounded disabled:opacity-40"
+      <Btn
+        size="sm"
+        kind="primary"
         disabled={!vmForm.vmId.trim()}
         onClick={() => {
           const body: Record<string, unknown> = { vmId: vmForm.vmId.trim() };
@@ -391,7 +386,7 @@ function GroupVmGrant({ groupId, vmForm, setVmForm, onGrant, onError, reload }: 
         }}
       >
         Grant VM access
-      </button>
+      </Btn>
     </div>
   );
 }

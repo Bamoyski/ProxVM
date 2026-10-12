@@ -18,9 +18,14 @@ export const redact = (value: string): string =>
 export const userId = z.string().uuid();
 export const vmId = z.string().uuid();
 
-const passwordComplexity = z
+// Single authority for every password-SETTING path (registration, admin
+// creation, admin resets, self-service changes, guest passwords). The 128
+// cap bounds Argon2 work before hashing; login stays wider (512) so
+// previously-set longer passwords still verify (verify-only, throttled).
+export const passwordComplexity = z
   .string()
   .min(12, "Password must be at least 12 characters")
+  .max(128, "Password must be at most 128 characters")
   .regex(/[a-z]/, "Password must contain a lowercase letter")
   .regex(/[A-Z]/, "Password must contain an uppercase letter")
   .regex(/[0-9]/, "Password must contain a number")
@@ -59,12 +64,19 @@ export const registrationSchema = z.object({
 
 // Client-side checklist mirror of passwordComplexity (backend authoritative).
 // Kept as data so the signup form can render each rule with live feedback.
-export const PASSWORD_RULES: Array<{ id: string; label: string; test: RegExp | null; minLength: number | null }> = [
-  { id: "length", label: "At least 12 characters", test: null, minLength: 12 },
-  { id: "lower", label: "A lowercase letter (a–z)", test: /[a-z]/, minLength: null },
-  { id: "upper", label: "An uppercase letter (A–Z)", test: /[A-Z]/, minLength: null },
-  { id: "number", label: "A number (0–9)", test: /[0-9]/, minLength: null },
-  { id: "symbol", label: "A special character (!@#…)", test: /[^A-Za-z0-9]/, minLength: null },
+export const PASSWORD_RULES: Array<{
+  id: string;
+  label: string;
+  test: RegExp | null;
+  minLength: number | null;
+  maxLength: number | null;
+}> = [
+  { id: "length", label: "At least 12 characters", test: null, minLength: 12, maxLength: null },
+  { id: "maxlength", label: "At most 128 characters", test: null, minLength: null, maxLength: 128 },
+  { id: "lower", label: "A lowercase letter (a–z)", test: /[a-z]/, minLength: null, maxLength: null },
+  { id: "upper", label: "An uppercase letter (A–Z)", test: /[A-Z]/, minLength: null, maxLength: null },
+  { id: "number", label: "A number (0–9)", test: /[0-9]/, minLength: null, maxLength: null },
+  { id: "symbol", label: "A special character (!@#…)", test: /[^A-Za-z0-9]/, minLength: null, maxLength: null },
 ];
 
 export const setupAdminSchema = z.object({
@@ -267,6 +279,7 @@ export const credentialRotateSchema = z.object({
     .regex(/^[a-z_][a-z0-9_-]*$/i)
     .optional(),
   verify: z.boolean().default(true),
+  force: z.boolean().default(false),
 });
 
 export const auditQuerySchema = z.object({

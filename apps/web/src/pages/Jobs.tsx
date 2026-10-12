@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, jobEventSource } from "../api.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
-import { PageTitle, StatusBadge } from "../components/ui.js";
+import { PageTitle, StatusBadge, Empty, Btn } from "../components/ui.js";
 
 interface Job {
   id: string;
@@ -13,13 +13,6 @@ interface Job {
   createdByUserId: string | null;
   createdAt: string;
   finishedAt: string | null;
-}
-
-interface Step {
-  id: string;
-  step: string;
-  state: string;
-  error: string | null;
 }
 
 interface Me {
@@ -49,11 +42,9 @@ export default function Jobs({ me }: { me: Me }) {
     queryFn: () => api<{ jobs: Job[] }>(`/jobs?limit=100${jobId ? "" : ""}`),
     refetchInterval: 10000,
   });
-  const [live, setLive] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
 
   const watch = (id: string) => {
-    setLive(id);
     setProgress("Connecting…");
     jobEventSource(
       id,
@@ -94,59 +85,65 @@ export default function Jobs({ me }: { me: Me }) {
   };
 
   return (
-    <div>
-      <PageTitle title="Provisioning Jobs" />
-      {progress && <div className="bg-blue-950 border border-blue-800 text-blue-200 rounded p-3 mb-4 text-sm font-mono">{progress}</div>}
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
-            <th className="py-2">Job</th>
-            <th className="py-2">Status</th>
-            <th className="py-2">Created</th>
-            <th className="py-2">Finished</th>
-            <th className="py-2">Error</th>
-            <th className="py-2">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(jobs?.jobs ?? []).map((j) => (
-            <tr key={j.id} className="border-b border-slate-800/50 hover:bg-slate-900/50">
-              <td className="py-2 font-mono text-xs">{j.id.slice(0, 8)}…</td>
-              <td><StatusBadge status={j.status} /></td>
-              <td className="text-xs text-slate-400">{new Date(j.createdAt).toLocaleString()}</td>
-              <td className="text-xs text-slate-400">{j.finishedAt ? new Date(j.finishedAt).toLocaleString() : "—"}</td>
-              <td className="text-xs text-red-300 max-w-xs truncate">{j.error ?? "—"}</td>
-              <td>
-                <div className="flex gap-2">
-                  {!["READY", "FAILED", "CANCELLED"].includes(j.status) && (
-                    <>
-                      <button className="text-xs underline" onClick={() => watch(j.id)}>Watch</button>
-                      {canCancel && (
-                        <button className="text-xs text-amber-300 underline" onClick={() => void cancel(j.id)}>Cancel</button>
-                      )}
-                    </>
-                  )}
-                  {["FAILED", "CANCELLED"].includes(j.status) && (
-                    <>
-                      {canRetry && (
-                        <button className="text-xs text-blue-300 underline" onClick={() => void retry(j.id)}>RETRY</button>
-                      )}
-                      {canRollback && (
-                        <>
-                          <button className="text-xs underline" onClick={() => void rollback(j.id, "keep")}>KEEP FOR DEBUGGING</button>
-                          <button className="text-xs text-red-300 underline" onClick={() => void rollback(j.id, "delete")}>DELETE VM</button>
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-              </td>
+    <div className="pv-page">
+      <PageTitle
+        title="Provisioning jobs"
+        description="Each provisioning run is a tracked job. Watch live progress, retry failures, or roll back."
+      />
+      {progress && <div className="pv-notice pv-mono" style={{ fontSize: "0.8rem" }}>{progress}</div>}
+      <div className="pv-table-wrap">
+        <table className="pv-table">
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Finished</th>
+              <th>Error</th>
+              <th>Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {(jobs?.jobs ?? []).map((j) => (
+              <tr key={j.id}>
+                <td className="pv-mono">{j.id.slice(0, 8)}…</td>
+                <td><StatusBadge status={j.status} /></td>
+                <td style={{ color: "var(--pv-text-2)" }}>{new Date(j.createdAt).toLocaleString()}</td>
+                <td style={{ color: "var(--pv-text-2)" }}>{j.finishedAt ? new Date(j.finishedAt).toLocaleString() : "—"}</td>
+                <td style={{ color: "var(--pv-err)", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={j.error ?? undefined}>{j.error ?? "—"}</td>
+                <td>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {!["READY", "FAILED", "CANCELLED"].includes(j.status) && (
+                      <>
+                        <Btn size="sm" kind="link" onClick={() => watch(j.id)}>Watch</Btn>
+                        {canCancel && (
+                          <Btn size="sm" kind="link" onClick={() => void cancel(j.id)}>Cancel</Btn>
+                        )}
+                      </>
+                    )}
+                    {["FAILED", "CANCELLED"].includes(j.status) && (
+                      <>
+                        {canRetry && (
+                          <Btn size="sm" onClick={() => void retry(j.id)}>Retry</Btn>
+                        )}
+                        {canRollback && (
+                          <>
+                            <Btn size="sm" kind="link" onClick={() => void rollback(j.id, "keep")}>Keep for debugging</Btn>
+                            <Btn size="sm" kind="link" onClick={() => void rollback(j.id, "delete")}>Delete VM</Btn>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!jobs?.jobs.length && (
+        <Empty title="No jobs yet" body="Provisioning a VM from a template creates a tracked job here." />
+      )}
     </div>
   );
 }
-
-

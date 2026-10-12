@@ -23,7 +23,6 @@ export interface SessionRow {
   id: string;
   sid_hash: string;
   user_id: string;
-  csrf_token: string;
   expires_at: Date;
   last_active_at: Date;
   idle_timeout_minutes: number;
@@ -62,6 +61,8 @@ export interface VmRow {
   privacy_flag: boolean;
   firewall_isolated: boolean;
   vm_class: string;
+  start_on_boot: boolean;
+  ip_static: boolean;
 }
 
 export interface CredentialRow {

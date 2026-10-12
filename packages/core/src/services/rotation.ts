@@ -3,6 +3,7 @@ import { AppError } from "../util/errors.js";
 import { generatePassword } from "../crypto/password.js";
 import { probeSsh, runSshCommand } from "../ssh/client.js";
 import { probeTcp } from "../provisioning/pipeline.js";
+import type { HostKeyService, HostKeyPolicy } from "../ssh/host-keys.js";
 import type { CredentialsService } from "./credentials.js";
 import type { GuacamoleService } from "./guacamole.js";
 import type { VmsRepository } from "./vms.js";
@@ -21,6 +22,7 @@ export interface RotationDeps {
   guac: GuacamoleService;
   audit: AuditService;
   decrypt: (stored: string) => string;
+  hostKeys: HostKeyService;
   getProxmoxClient: () => Promise<ProxmoxClient>;
   getGuacDb: () => Promise<GuacamoleDbClient>;
 }
@@ -38,6 +40,12 @@ export interface RotationOptions {
   newPassword?: string;
   username?: string;
   verify?: boolean;
+  /**
+   * Recover a rotation stuck in ROTATING by a crashed process. Only set when
+   * an operator explicitly retries after confirming no rotation is running:
+   * concurrent rotations are otherwise rejected with 409.
+   */
+  force?: boolean;
 }
 
 export interface RotationActor {
@@ -66,22 +74,35 @@ export async function rotateVmCredential(
   const oldPassword = deps.decrypt(existing.password_ciphertext);
   const newPassword = opts.newPassword ?? generatePassword();
 
-  if (existing.status === "ROTATING") {
-    // A previous run never settled (process restart mid-rotation, or a
-    // failure before the restore paths below). The stored credential is
-    // untouched in that case, so a full re-rotation from it is safe and
-    // self-healing; record the observation and proceed.
-    deps.logger.warn({ vmId }, "stale ROTATING status from an unsettled previous rotation; re-running");
-    await deps.audit.record({
-      event: "PASSWORD_ROTATED",
-      actorUserId: actor.userId,
-      actorUsername: actor.username,
-      vmId,
-      detail: { result: "stale-retry" },
-    });
+  // Every SSH interaction for this VM shares one host-key pinning scope so a
+  // rebuild or host-key rotation blocks commands AND verification the same way.
+  const hostKey = () => deps.hostKeys.policy({ vmId, host: vm.ipAddress as string, port: 22 });
+
+  if (existing.status === "ROTATING" && !opts.force) {
+    // Compare-and-set claim below would also reject this, but fail fast
+    // with a clear 409 before doing any work: another rotation holds the
+    // claim (or a previous process crashed mid-rotation — retry with
+    // force:true after confirming nothing is running).
+    throw AppError.conflict("A credential rotation is already in progress for this VM");
   }
 
-  await deps.creds.setStatus(vmId, "ROTATING");
+  const claimed = await deps.creds.tryClaimRotation(vmId);
+  if (!claimed) {
+    if (opts.force) {
+      // Forced recovery from a crashed rotation: the CAS above refused
+      // because status is ROTATING; re-assert and proceed.
+      await deps.creds.setStatus(vmId, "ROTATING");
+      await deps.audit.record({
+        event: "PASSWORD_ROTATED",
+        actorUserId: actor.userId,
+        actorUsername: actor.username,
+        vmId,
+        detail: { result: "forced-retry-after-stuck-claim" },
+      });
+    } else {
+      throw AppError.conflict("A credential rotation is already in progress for this VM");
+    }
+  }
 
   let proxmox;
   try {
@@ -96,7 +117,7 @@ export async function rotateVmCredential(
           () => rotateViaGuestAgent(deps, proxmox, vm.node, vm.vmid, username, newPassword),
         ]
       : [
-          () => rotateViaSsh(vm.ipAddress as string, username, oldPassword, newPassword),
+          () => rotateViaSsh(vm.ipAddress as string, username, oldPassword, newPassword, hostKey()),
           () => rotateViaGuestAgent(deps, proxmox, vm.node, vm.vmid, username, newPassword),
         ];
 
@@ -142,6 +163,7 @@ export async function rotateVmCredential(
         port: 22,
         username,
         password: newPassword,
+        hostKey: hostKey(),
       });
       verified = result.status === "AUTHENTICATED";
       if (!verified) {
@@ -151,7 +173,7 @@ export async function rotateVmCredential(
         // recorded as working.
         let rollbackError: string | null = null;
         try {
-          const rolledBack = await rotateViaSsh(vm.ipAddress as string, username, newPassword, oldPassword);
+          const rolledBack = await rotateViaSsh(vm.ipAddress as string, username, newPassword, oldPassword, hostKey());
           if (!rolledBack.success) rollbackError = rolledBack.message;
         } catch (err) {
           rollbackError = err instanceof Error ? err.message : String(err);
@@ -161,7 +183,7 @@ export async function rotateVmCredential(
           restored = isWindows
             ? await probeTcp(vm.ipAddress, 3389, 8000)
             : (
-                await probeSsh({ host: vm.ipAddress, port: 22, username, password: oldPassword })
+                await probeSsh({ host: vm.ipAddress, port: 22, username, password: oldPassword, hostKey: hostKey() })
               ).status === "AUTHENTICATED";
         }
         if (restored) {
@@ -239,10 +261,11 @@ async function rotateViaSsh(
   username: string,
   oldPassword: string,
   newPassword: string,
+  hostKey: HostKeyPolicy,
 ): Promise<{ success: boolean; message: string }> {
   const encrypted = shellQuote(username) + ":" + shellQuote(newPassword);
   const command = `echo '${encrypted}' | sudo -n chpasswd 2>/dev/null || echo '${encrypted}' | chpasswd`;
-  const result = await runSshCommand({ host, username, password: oldPassword, command });
+  const result = await runSshCommand({ host, username, password: oldPassword, command, hostKey });
   if (result.status !== "AUTHENTICATED") {
     return { success: false, message: `ssh: ${result.detail}` };
   }
@@ -267,8 +290,10 @@ async function rotateViaGuestAgent(
     // Double-quoting is safe for direct execution and for cmd.exe except for
     // embedded quotes and %-wrapping (environment expansion), which are
     // rejected with a clear error instead of risking command injection.
-    const problem = windowsPasswordError(newPassword);
-    if (problem) return { success: false, message: `windows-password: ${problem}` };
+    // Usernames get the same gate: they are operator-controlled at creation,
+    // but defense-in-depth requires both interpolated args to be safe.
+    const problem = windowsPasswordError(newPassword) ?? windowsUsernameError(username);
+    if (problem) return { success: false, message: `windows-args: ${problem}` };
     command = `net user ${quoteWindowsArg(username)} ${quoteWindowsArg(newPassword)}`;
   } else {
     command = `echo '${shellQuote(username)}:${shellQuote(newPassword)}' | chpasswd`;
@@ -295,7 +320,16 @@ export function quoteWindowsArg(value: string): string {
   return `"${value}"`;
 }
 
-/** Non-null when a password cannot be passed to `net user` safely. Exported for tests. */
+/** Non-null when a username cannot be passed to `net user` safely. Exported for tests. */
+export function windowsUsernameError(username: string): string | null {
+  if (/["\r\n]/.test(username)) {
+    return 'username contains " or line breaks, which cannot be passed to net user safely';
+  }
+  if (/%[^%]*%/.test(username) || /[&|<>^]/.test(username)) {
+    return "username contains shell-significant characters that cmd.exe would interpret";
+  }
+  return null;
+}
 export function windowsPasswordError(password: string): string | null {
   if (/["\r\n]/.test(password)) {
     return 'password contains " or line breaks, which cannot be passed to net user safely; choose another password';

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, StatusBadge, ErrorBox } from "../components/ui.js";
+import { PageTitle, StatusBadge, ErrorBox, Empty, Section, Btn } from "../components/ui.js";
 
 const ROLES = ["ADMIN", "OPERATOR", "USER"] as const;
 
@@ -38,8 +38,8 @@ export default function Users() {
       }>("/iam/matrix"),
   });
   const matrixByUser = new Map((matrix?.users ?? []).map((m) => [m.user.id, m] as const));
-  const input = "w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-  const label = "block text-xs font-medium text-slate-400 mb-1";
+  const input = "pv-input";
+  const label = "pv-label";
 
   const create = async () => {
     setError(null);
@@ -154,75 +154,84 @@ export default function Users() {
   };
 
   return (
-    <div>
-      <PageTitle title="Users" />
+    <div className="pv-page">
+      <PageTitle title="Users" description="Accounts, roles, quotas, and pending registration requests." />
       {error && <ErrorBox error={error} />}
       {notice && (
-        <div className="bg-yellow-900/50 border border-yellow-700 text-yellow-200 rounded p-3 mb-4 text-sm">{notice}</div>
+        <div className="pv-notice pv-notice-ok">{notice}</div>
       )}
       {(requestsData?.requests ?? []).length > 0 && (
-        <div className="bg-slate-900 border border-amber-700/60 rounded p-4 mb-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-1">
-            Pending account requests ({requestsData?.requests.length})
-          </h2>
-          <div className="text-xs text-slate-500 mb-3">Approving creates the account immediately with the chosen role.</div>
-          <div className="space-y-2">
-            {(requestsData?.requests ?? []).map((r) => (
-              <div key={r.id} className="flex flex-wrap items-center gap-2 text-sm">
-                <span>
-                  {r.username}
-                  {r.email && <span className="text-xs text-slate-500 ml-1">{r.email}</span>}
-                </span>
-                <span className="text-xs text-slate-500">requested {new Date(r.createdAt).toLocaleString()}</span>
-                <select
-                  className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"
-                  value={approveRole[r.id] ?? "USER"}
-                  onChange={(e) => setApproveRole({ ...approveRole, [r.id]: e.target.value })}
-                >
-                  {ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
-                </select>
-                <button className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded" onClick={() => void decideRegistration(r.id, true)}>
-                  Approve
-                </button>
-                <button className="text-xs text-red-300 underline" onClick={() => void decideRegistration(r.id, false)}>
-                  Reject
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+        <Section
+          title={`Pending account requests (${requestsData?.requests.length})`}
+          hint="Approving creates the account immediately with the chosen role."
+        >
+          {(requestsData?.requests ?? []).map((r) => (
+            <div key={r.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+              <span>
+                {r.username}
+                {r.email && <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 4 }}>{r.email}</span>}
+              </span>
+              <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }}>requested {new Date(r.createdAt).toLocaleString()}</span>
+              <select
+                className="pv-select pv-input-auto"
+                style={{ height: 28, fontSize: "0.78rem" }}
+                value={approveRole[r.id] ?? "USER"}
+                onChange={(e) => setApproveRole({ ...approveRole, [r.id]: e.target.value })}
+              >
+                {ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+              <Btn size="sm" kind="primary" onClick={() => void decideRegistration(r.id, true)}>
+                Approve
+              </Btn>
+              <Btn size="sm" kind="link" onClick={() => void decideRegistration(r.id, false)}>
+                Reject
+              </Btn>
+            </div>
+          ))}
+        </Section>
       )}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">Create user</h2>
-          <div className="space-y-3">
-            <input className={input} placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-            <input className={input} placeholder="Email (optional)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-            <input type="password" className={input} placeholder="Password (min 12, mixed case, number, symbol)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-            <select className={input} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as (typeof ROLES)[number] })}>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-10">
+        <Section title="Create user">
+          <div className="pv-field">
+            <label className="pv-label">Username</label>
+            <input className={input} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          </div>
+          <div className="pv-field">
+            <label className="pv-label">Email (optional)</label>
+            <input className={input} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          </div>
+          <div className="pv-field">
+            <label className="pv-label">Password</label>
+            <input type="password" className={input} placeholder="Min 12, mixed case, number, symbol" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          </div>
+          <div className="pv-field">
+            <label className="pv-label">Role</label>
+            <select className="pv-select" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as (typeof ROLES)[number] })}>
               {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
-            <button onClick={create} disabled={!form.username || !form.password} className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded text-sm">
-              Create user
-            </button>
           </div>
-          <div className="mt-4 text-xs text-slate-500 space-y-1">
-            <div><b>ADMIN</b>: everything</div>
-            <div><b>OPERATOR</b>: create/manage VMs, rotate credentials, access assigned connections</div>
-            <div><b>USER</b>: access assigned VMs, launch Guacamole</div>
-          </div>
-        </div>
-        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded p-4">
-          <table className="w-full text-sm">
+          <Btn kind="primary" style={{ width: "100%" }} onClick={create} disabled={!form.username || !form.password}>
+            Create user
+          </Btn>
+          <dl className="pv-kv" style={{ marginTop: 16 }}>
+            <dt>ADMIN</dt><dd>everything</dd>
+            <dt>OPERATOR</dt><dd>create/manage VMs, rotate credentials, access assigned connections</dd>
+            <dt>USER</dt><dd>access assigned VMs, launch Guacamole</dd>
+          </dl>
+        </Section>
+        <div className="lg:col-span-2">
+          <Section title="Accounts" hint={`${(data?.users ?? []).length} total`}>
+          <div className="pv-table-wrap">
+          <table className="pv-table">
             <thead>
-              <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
-                <th className="py-2">User</th>
-                <th className="py-2">Role</th>
-                <th className="py-2">Groups</th>
-                <th className="py-2">VMs</th>
-                <th className="py-2">Status</th>
-                <th className="py-2">Last login</th>
-                <th className="py-2">Actions</th>
+              <tr>
+                <th>User</th>
+                <th>Role</th>
+                <th>Groups</th>
+                <th>VMs</th>
+                <th>Status</th>
+                <th>Last login</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -234,19 +243,20 @@ export default function Users() {
                 const roleLocked = u.isInitialAdmin;
                 const deleteBlocked = u.isInitialAdmin || onlyAdmin;
                 return (
-                <tr key={u.id} className="border-b border-slate-800/50">
-                  <td className="py-2">
+                <tr key={u.id}>
+                  <td>
                     {u.username}
-                    {u.email && <span className="text-xs text-slate-500 ml-1">{u.email}</span>}
+                    {u.email && <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 4 }}>{u.email}</span>}
                     {u.isInitialAdmin && (
-                      <span className="ml-2 text-[10px] uppercase tracking-wide bg-slate-800 text-slate-300 rounded px-1.5 py-0.5" title="The initial administrator created during setup. Its role cannot be changed and it cannot be deleted.">
+                      <span className="pv-mono" title="The initial administrator created during setup. Its role cannot be changed and it cannot be deleted." style={{ marginLeft: 6, color: "var(--pv-text-3)" }}>
                         initial admin
                       </span>
                     )}
                   </td>
                   <td>
                     <select
-                      className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs disabled:opacity-50"
+                      className="pv-select pv-input-auto"
+                      style={{ height: 28, fontSize: "0.78rem" }}
                       value={u.roles[0] ?? "USER"}
                       disabled={roleLocked}
                       title={roleLocked ? "The initial administrator's role cannot be changed." : undefined}
@@ -255,10 +265,10 @@ export default function Users() {
                       {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </td>
-                  <td className="text-xs text-slate-400">
+                  <td style={{ color: "var(--pv-text-2)" }}>
                     {(matrixByUser.get(u.id)?.groups ?? []).map((g) => g.name).join(", ") || "—"}
                   </td>
-                  <td className="text-xs text-slate-400">
+                  <td style={{ color: "var(--pv-text-2)" }}>
                     {(() => {
                       const info = matrixByUser.get(u.id);
                       if (!info) return "—";
@@ -267,27 +277,30 @@ export default function Users() {
                     })()}
                   </td>
                   <td><StatusBadge status={u.active ? "running" : "stopped"} /></td>
-                  <td className="text-xs text-slate-500">{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "never"}</td>
+                  <td style={{ color: "var(--pv-text-3)" }}>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "never"}</td>
                   <td>
-                    <div className="flex gap-2">
-                      <Link to={`/users/${u.id}/permissions`} className="text-xs text-blue-400 underline">Permissions</Link>
-                      <button
-                        className="text-xs text-blue-400 underline"
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <Link to={`/users/${u.id}/permissions`}>Permissions</Link>
+                      <Btn
+                        size="sm"
+                        kind="link"
                         onClick={() => {
                           setResetId(resetId === u.id ? null : u.id);
                           setResetPw({ a: "", b: "" });
                         }}
                       >
                         Reset password
-                      </button>
-                      <button
-                        className="text-xs text-blue-400 underline"
+                      </Btn>
+                      <Btn
+                        size="sm"
+                        kind="link"
                         onClick={() => void openQuota(u.id)}
                       >
                         Quota
-                      </button>
-                      <button
-                        className="text-xs underline disabled:opacity-40 disabled:no-underline"
+                      </Btn>
+                      <Btn
+                        size="sm"
+                        kind="link"
                         disabled={u.id === undefined || u.isInitialAdmin || (onlyAdmin && u.active)}
                         title={
                           u.isInitialAdmin
@@ -299,9 +312,10 @@ export default function Users() {
                         onClick={() => void toggleActive(u.id, !u.active)}
                       >
                         {u.active ? "Disable" : "Enable"}
-                      </button>
-                      <button
-                        className="text-xs text-red-300 underline disabled:opacity-40 disabled:no-underline"
+                      </Btn>
+                      <Btn
+                        size="sm"
+                        kind="link"
                         disabled={deleteBlocked}
                         title={
                           u.isInitialAdmin
@@ -313,57 +327,62 @@ export default function Users() {
                         onClick={() => void del(u.username, u.id)}
                       >
                         Delete
-                      </button>
+                      </Btn>
                     </div>
                     {resetId === u.id && (
-                      <div className="flex flex-wrap gap-2 items-center mt-2">
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 8 }}>
                         <input
                           type="password"
-                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-44"
-                          placeholder="New password (min 12, mixed case, number, symbol)"
+                          className="pv-input"
+                          style={{ width: 176 }}
+                          placeholder="New password"
                           value={resetPw.a}
                           onChange={(e) => setResetPw({ ...resetPw, a: e.target.value })}
                         />
                         <input
                           type="password"
-                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-44"
+                          className="pv-input"
+                          style={{ width: 176 }}
                           placeholder="Confirm new password"
                           value={resetPw.b}
                           onChange={(e) => setResetPw({ ...resetPw, b: e.target.value })}
                         />
-                        <button
-                          className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
+                        <Btn
+                          size="sm"
+                          kind="primary"
                           disabled={!resetPw.a || resetPw.a !== resetPw.b}
                           title={resetPw.a && resetPw.a !== resetPw.b ? "Passwords do not match" : undefined}
                           onClick={() => void resetPassword(u.id, u.username)}
                         >
                           Set password
-                        </button>
-                        <span className="text-[11px] text-slate-500">Resets immediately and revokes their sessions.</span>
+                        </Btn>
+                        <span className="pv-hint">Resets immediately and revokes their sessions.</span>
                       </div>
                     )}
                     {quotaId === u.id && (
-                      <div className="flex flex-wrap gap-2 items-center mt-2">
-                        <span className="text-[11px] text-slate-500">Current: {quotaCurrent ?? "…"}</span>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 8 }}>
+                        <span className="pv-hint">Current: {quotaCurrent ?? "…"}</span>
                         <input
-                          className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-28"
+                          className="pv-input"
+                          style={{ width: 112 }}
                           placeholder="Max VMs"
                           inputMode="numeric"
                           value={quotaVal}
                           onChange={(e) => setQuotaVal(e.target.value)}
                         />
-                        <button
-                          className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 rounded"
+                        <Btn
+                          size="sm"
+                          kind="primary"
                           onClick={() => void saveQuota(u.id, false)}
                         >
                           Set quota
-                        </button>
-                        <button
-                          className="text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded"
+                        </Btn>
+                        <Btn
+                          size="sm"
                           onClick={() => void saveQuota(u.id, true)}
                         >
                           Clear
-                        </button>
+                        </Btn>
                       </div>
                     )}
                   </td>
@@ -372,6 +391,8 @@ export default function Users() {
               })}
             </tbody>
           </table>
+          </div>
+          </Section>
         </div>
       </div>
     </div>

@@ -40,6 +40,8 @@ export class AuditService {
     event?: string;
     vmId?: string;
     actorUserId?: string | null;
+    actorUsername?: string;
+    ip?: string;
     since?: Date;
     until?: Date;
   }): Promise<AuditRecord[]> {
@@ -56,6 +58,17 @@ export class AuditService {
     if (opts.actorUserId !== undefined) {
       params.push(opts.actorUserId);
       conditions.push(`actor_user_id = $${params.length}`);
+    }
+    if (opts.actorUsername) {
+      // Backslash is the default LIKE escape in Postgres (no ESCAPE clause
+      // needed; pg-mem cannot parse the explicit clause), so escapeLike()
+      // output matches literally on both.
+      params.push(`%${escapeLike(opts.actorUsername)}%`);
+      conditions.push(`actor_username ILIKE $${params.length}`);
+    }
+    if (opts.ip) {
+      params.push(opts.ip);
+      conditions.push(`ip = $${params.length}`);
     }
     if (opts.since) {
       params.push(opts.since.toISOString());
@@ -107,6 +120,11 @@ export class AuditService {
   }
 }
 
+/** Escapes LIKE/ILIKE wildcards in user-supplied filter text. */
+export function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 const FORBIDDEN_DETAIL_KEYS = new Set([
   "password",
   "newPassword",
@@ -123,15 +141,46 @@ const FORBIDDEN_DETAIL_KEYS = new Set([
   "passthrough",
 ]);
 
-function sanitizeDetail(detail: Record<string, unknown>): Record<string, unknown> {
+const NORMALIZED_FORBIDDEN_KEYS = new Set(
+  [...FORBIDDEN_DETAIL_KEYS].map((k) => k.toLowerCase().replace(/[_-]/g, "")),
+);
+
+const FORBIDDEN_SUBSTRINGS = [
+  "password",
+  "passwd",
+  "token",
+  "secret",
+  "apikey",
+  "privatekey",
+  "passphrase",
+  "sshkey",
+  "credential",
+];
+
+function isSensitiveKey(key: string): boolean {
+  // Normalized (case/punctuation-insensitive): "newPassword", "api_key"
+  // and "apiKey" all reduce to a matchable form.
+  const normalized = key.toLowerCase().replace(/[_-]/g, "");
+  return NORMALIZED_FORBIDDEN_KEYS.has(normalized) || FORBIDDEN_SUBSTRINGS.some((s) => normalized.includes(s));
+}
+
+function sanitizeValue(value: unknown, depth: number): unknown {
+  if (depth > 5) return "[REDACTED]";
+  if (Array.isArray(value)) return value.map((v) => sanitizeValue(v, depth + 1));
+  if (value !== null && typeof value === "object") {
+    return sanitizeDetail(value as Record<string, unknown>, depth + 1);
+  }
+  return value;
+}
+
+function sanitizeDetail(detail: Record<string, unknown>, depth = 0): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(detail)) {
-    const lower = key.toLowerCase();
-    if (FORBIDDEN_DETAIL_KEYS.has(lower) || lower.includes("password") || lower.includes("token") || lower.includes("secret")) {
+    if (isSensitiveKey(key)) {
       out[key] = "[REDACTED]";
       continue;
     }
-    out[key] = value;
+    out[key] = sanitizeValue(value, depth);
   }
   return out;
 }

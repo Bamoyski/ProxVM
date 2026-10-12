@@ -1,5 +1,6 @@
 import { loadConfig, defaultConfigPath, createCore, createPgPool, makeLogger, createProvisioningQueue, type EnqueueJobData } from "@proxvm/core";
 import { buildApp } from "./app.js";
+import { initSetupToken } from "./routes/setup.js";
 import IORedis from "ioredis";
 import type { Queue } from "bullmq";
 
@@ -19,6 +20,9 @@ async function main(): Promise<void> {
     const app = await buildApp({ setupMode: true, webOrigin });
     await app.listen({ port, host });
     logger.info({ url: `http://localhost:${port}` }, "ProxVM setup wizard available");
+    // One-time setup token: every setup endpoint except status requires it
+    // as X-Setup-Token. Read this from the server console, not the network.
+    logger.info({ setupToken: initSetupToken() }, "Setup token (enter in the wizard; rotates on completion)");
     return;
   }
 
@@ -52,6 +56,11 @@ async function main(): Promise<void> {
   // origin silently downgrade session security. Warn loudly instead of
   // refusing to boot (local HTTP development still needs to work).
   if (!config.app.cookieSecure) {
+    const enforceSecure = process.env.PROXVM_ENFORCE_SECURE_COOKIES === "1";
+    if (enforceSecure) {
+      logger.error({}, "PROXVM_ENFORCE_SECURE_COOKIES=1 but cookieSecure is false. Refusing to start.");
+      process.exit(1);
+    }
     logger.warn({}, "Session cookies are NOT Secure-flagged. Enable cookieSecure (Settings) before exposing ProxVM to the open internet.");
   }
   if (/^http:\/\//i.test(webOrigin) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(webOrigin)) {

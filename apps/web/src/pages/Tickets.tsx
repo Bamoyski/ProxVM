@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
 
 interface Ticket {
   id: string;
@@ -12,10 +12,10 @@ interface Ticket {
   createdAt: string;
 }
 
-const STATUS_COLORS: Record<Ticket["status"], string> = {
-  open: "text-amber-300",
-  answered: "text-blue-300",
-  closed: "text-slate-500",
+const STATUS_TONE: Record<Ticket["status"], string> = {
+  open: "pv-status-warn",
+  answered: "pv-status-info",
+  closed: "",
 };
 
 export default function Tickets({ isAdmin }: { isAdmin: boolean }) {
@@ -58,80 +58,91 @@ export default function Tickets({ isAdmin }: { isAdmin: boolean }) {
   };
 
   return (
-    <div className="max-w-4xl">
-      <PageTitle title="Support tickets" />
+    <div className="pv-page pv-page-narrow">
+      <PageTitle
+        title="Support tickets"
+        description={isAdmin ? "The full queue. Mark answered once replied, close when resolved." : "File a ticket and track the response here."}
+      />
       {error && <ErrorBox error={error} />}
-      {notice && <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-3 mb-4 text-sm">{notice}</div>}
-      <div className="bg-slate-900 border border-slate-800 rounded p-5 mb-4">
-        <h2 className="text-sm font-medium text-slate-300 mb-3">File a ticket</h2>
-        <div className="space-y-2">
+      {notice && <div className="pv-notice pv-notice-ok">{notice}</div>}
+      <div className="pv-panel" style={{ marginBottom: 24 }}>
+        <div className="pv-label">File a ticket</div>
+        <div className="pv-field">
           <input
-            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
+            className="pv-input"
             placeholder="Short summary (max 120 chars)"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
+        </div>
+        <div className="pv-field">
           <textarea
-            className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm"
+            className="pv-textarea"
             placeholder="What happened, what you expected, VM name if relevant…"
             rows={4}
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
-          <button
-            onClick={() => void file()}
-            disabled={!title.trim() || !body.trim()}
-            className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
-          >
-            Submit ticket
-          </button>
         </div>
+        <Btn
+          kind="primary"
+          onClick={() => void file()}
+          disabled={!title.trim() || !body.trim()}
+        >
+          Submit ticket
+        </Btn>
       </div>
-      <div className="flex gap-2 mb-3 text-xs">
-        {(["", "open", "answered", "closed"] as const).map((s) => (
-          <button
-            key={s}
-            onClick={() => setFilter(s)}
-            className={`px-3 py-1 rounded ${filter === s ? "bg-blue-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`}
-          >
-            {s === "" ? "All" : s[0]!.toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
-      <div className="space-y-2">
+      <Section
+        title="Tickets"
+        hint={`${(data?.tickets ?? []).length} shown`}
+        actions={
+          <div style={{ display: "flex", gap: 4 }}>
+            {(["", "open", "answered", "closed"] as const).map((s) => (
+              <Btn
+                key={s}
+                size="sm"
+                kind={filter === s ? "primary" : undefined}
+                onClick={() => setFilter(s)}
+              >
+                {s === "" ? "All" : s[0]!.toUpperCase() + s.slice(1)}
+              </Btn>
+            ))}
+          </div>
+        }
+      >
         {(data?.tickets ?? []).map((t) => (
-          <div key={t.id} className="bg-slate-900 border border-slate-800 rounded p-4">
-            <div className="flex flex-wrap items-center gap-2 mb-1">
-              <span className={`text-xs font-medium uppercase ${STATUS_COLORS[t.status]}`}>{t.status}</span>
-              <span className="text-sm font-medium text-slate-100">{t.title}</span>
-              <span className="text-xs text-slate-500 ml-auto">
+          <div key={t.id} style={{ padding: "12px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+              <span className={`pv-status ${STATUS_TONE[t.status]}`}>{t.status}</span>
+              <span style={{ fontWeight: 600 }}>{t.title}</span>
+              <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: "auto" }}>
                 {t.username} · {new Date(t.createdAt).toLocaleString()}
               </span>
             </div>
-            <p className="text-sm text-slate-300 whitespace-pre-wrap">{t.body}</p>
+            <p style={{ fontSize: "0.85rem", color: "var(--pv-text-2)", margin: "0 0 6px", whiteSpace: "pre-wrap" }}>{t.body}</p>
             {isAdmin && t.status !== "closed" && (
-              <div className="flex gap-2 mt-2">
+              <div style={{ display: "flex", gap: 8 }}>
                 {t.status !== "answered" && (
-                  <button className="text-xs text-blue-400 underline" onClick={() => void setStatus(t.id, "answered")}>
+                  <Btn size="sm" kind="link" onClick={() => void setStatus(t.id, "answered")}>
                     Mark answered
-                  </button>
+                  </Btn>
                 )}
-                <button className="text-xs text-slate-400 underline" onClick={() => void setStatus(t.id, "closed")}>
+                <Btn size="sm" kind="link" onClick={() => void setStatus(t.id, "closed")}>
                   Close
-                </button>
+                </Btn>
               </div>
             )}
             {isAdmin && t.status === "closed" && (
-              <button className="text-xs text-slate-400 underline mt-2" onClick={() => void setStatus(t.id, "open")}>
+              <Btn size="sm" kind="link" onClick={() => void setStatus(t.id, "open")}>
                 Reopen
-              </button>
+              </Btn>
             )}
           </div>
         ))}
         {data && data.tickets.length === 0 && (
-          <div className="text-xs text-slate-500 text-center py-4">No tickets here.</div>
+          <Empty title="No tickets here" body={filter ? "Nothing with this status." : "Nothing filed yet."} />
         )}
-      </div>
+      </Section>
     </div>
   );
 }

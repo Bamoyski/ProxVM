@@ -96,6 +96,8 @@ export interface VmRecord {
   privacyFlag: boolean;
   firewallIsolated: boolean;
   vmClass: VmClass;
+  startOnBoot: boolean;
+  ipStatic: boolean;
 }
 
 export interface VmCredentialRecord {

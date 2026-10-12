@@ -60,7 +60,9 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
         continue;
       }
       const vm = await ctx.vms.findById(job.vmId);
-      if (vm?.privacyFlag && !(await ctx.vms.hasAccess(vm.id, user.id))) continue;
+      // Same ownership-aware gate as the detail endpoint: creators always
+      // see their own jobs.
+      if (vm?.privacyFlag && !(await ctx.vms.hasAccessOrOwns(job.vmId, user.id))) continue;
       visible.push(job);
     }
     return { jobs: visible.map((j) => ({ ...j, request: undefined })) };
@@ -100,7 +102,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       const message = err instanceof Error ? err.message : String(err);
       try {
         await ctx.jobs.updateStatus(id, "FAILED", message);
-        await ctx.audit.record({
+        await app.audit(request, {
           event: "PROVISIONING_FAILED",
           actorUserId: user.id,
           actorUsername: user.username,
@@ -113,7 +115,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       }
       throw err;
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "PROVISIONING_RETRIED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -136,7 +138,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       const queue = getQueue();
       await removeBullJob(queue, job.bullJobId);
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "PROVISIONING_CANCELLED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -152,7 +154,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const body = z.object({ action: z.enum(["delete", "keep"]) }).parse(request.body);
     const job = await ctx.jobs.require(id);
     await assertJobAccess(user, job);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "ROLLBACK",
       actorUserId: user.id,
       actorUsername: user.username,

@@ -103,6 +103,7 @@ describe("credential rotation atomicity", () => {
         guac,
         audit: ctx.audit,
         decrypt: ctx.decrypt,
+        hostKeys: ctx.hostKeys,
         getProxmoxClient: async () => ({}) as never,
         getGuacDb: () => ctx.getGuacDb(),
       } satisfies RotationDeps,

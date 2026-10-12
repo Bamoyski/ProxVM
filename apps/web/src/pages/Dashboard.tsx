@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
-import { StatusBadge, PageTitle, ErrorBox } from "../components/ui.js";
+import { StatusBadge, PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
 
 interface Me {
   id: string;
@@ -126,6 +126,8 @@ export default function Dashboard({ me }: { me: Me }) {
   const vmList = vmsData?.vms ?? [];
   const running = vmList.filter((v) => v.status === "running").length;
   const stopped = vmList.filter((v) => v.status === "stopped").length;
+  const failed = vmList.filter((v) => v.status === "failed").length;
+  const activeJobs = jobs?.jobs.filter((j) => !["READY", "FAILED", "CANCELLED"].includes(j.status)).length ?? 0;
   const nodes = pm?.nodes ?? [];
 
   const servicesByVm = useMemo(() => {
@@ -136,7 +138,7 @@ export default function Dashboard({ me }: { me: Me }) {
 
   const balanceTip = useMemo(() => {
     // Offline nodes report stale numbers — leave them out of the math
-    // entirely (they still render below with their status badge).
+    // entirely (they still render below with their status).
     const online = nodes.filter((n) => n.status === "online");
     if (online.length < 2) return null;
     const ranked = online
@@ -177,14 +179,6 @@ export default function Dashboard({ me }: { me: Me }) {
     }
   };
 
-  const card = "bg-slate-900 border border-slate-800 rounded-lg p-4";
-  const stat = (label: string, value: string | number, cls = "") => (
-    <div className={card} key={label}>
-      <div className="text-xs text-slate-400 mb-1">{label}</div>
-      <div className={`text-2xl font-semibold ${cls}`}>{value}</div>
-    </div>
-  );
-
   const moveWidget = (id: WidgetId, dir: -1 | 1): void => {
     const order = [...layout.order];
     const i = order.indexOf(id);
@@ -199,82 +193,84 @@ export default function Dashboard({ me }: { me: Me }) {
     saveLayout({ ...layout, hidden });
   };
 
+  const statItems: Array<{ label: string; value: string; tone?: string }> = [
+    { label: "Total VMs", value: String(vmList.length) },
+    { label: "Running", value: String(running), tone: "var(--pv-ok)" },
+    { label: "Stopped", value: String(stopped) },
+    ...(failed ? [{ label: "Failed", value: String(failed), tone: "var(--pv-err)" }] : []),
+    ...(activeJobs ? [{ label: "Active jobs", value: String(activeJobs), tone: "var(--pv-info)" }] : []),
+  ];
+
   const widgets: Record<WidgetId, { privilegedOnly: boolean; node: React.ReactNode }> = {
     stats: {
       privilegedOnly: false,
       node: (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-          {stat("Total VMs", String((vmList).length ?? "—"))}
-          {stat("Running", String(running), "text-green-400")}
-          {stat("Stopped", String(stopped))}
-          {stat("Failed", String((vmList).filter((v) => v.status === "failed").length ?? 0), "text-red-400")}
-          {stat("Active Jobs", String(jobs?.jobs.filter((j) => !["READY", "FAILED", "CANCELLED"].includes(j.status)).length ?? 0), "text-blue-400")}
-        </div>
+        <dl style={{ display: "flex", gap: 28, flexWrap: "wrap", margin: "0 0 26px" }}>
+          {statItems.map((s) => (
+            <div key={s.label}>
+              <dt style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)" }}>{s.label}</dt>
+              <dd style={{ margin: 0, fontSize: "1.5rem", fontWeight: 650, color: s.tone ?? "var(--pv-text)", fontVariantNumeric: "tabular-nums" }}>{s.value}</dd>
+            </div>
+          ))}
+        </dl>
       ),
     },
     proxmox: {
       privilegedOnly: true,
       node: (
-        <div className={`${card} mb-6`}>
-          <div className="text-xs text-slate-400 mb-2">
-            Proxmox {pm?.connected ? `v${pm.version}` : "— disconnected"}
-          </div>
-          {pmError && <div className="bg-red-900/50 border border-red-700 text-red-200 rounded p-3 mb-4">Failed to load Proxmox status: {String(pmError)}</div>}
+        <Section
+          title={`Cluster${pm?.connected && pm.version ? ` — Proxmox VE ${pm.version}` : ""}`}
+          hint={!pm?.connected ? "disconnected" : undefined}
+        >
+          {pmError && <ErrorBox error={`Failed to load Proxmox status: ${String(pmError)}`} />}
           {!pm?.connected && pm && (
-            <div className="bg-yellow-900/50 border border-yellow-700 text-yellow-200 rounded p-3 mb-4">
+            <div className="pv-notice pv-notice-warn">
               Proxmox is disconnected: {String((pm as { error?: string }).error ?? "unknown error")}
             </div>
           )}
-          {nodes.map((n) => (
-            <div key={n.node} className="mb-2">
-              <div className="flex justify-between text-sm mb-1">
-                <span>
-                  {n.node} <StatusBadge status={n.status === "online" ? "running" : "stopped"} />
-                </span>
-                <span className="text-slate-400 text-xs">
-                  {pct(n.cpu, n.maxcpu)?.toFixed(0)}% CPU · {bytes(n.mem)}/{bytes(n.maxmem)} RAM
-                </span>
+          {nodes.map((n) => {
+            const cpu = pct(n.cpu, n.maxcpu) ?? 0;
+            const mem = pct(n.mem, n.maxmem) ?? 0;
+            return (
+              <div key={n.node} style={{ padding: "10px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                  <span style={{ fontWeight: 600 }}>{n.node} <StatusBadge status={n.status === "online" ? "running" : "stopped"} /></span>
+                  <span style={{ color: "var(--pv-text-2)", fontSize: "0.8rem", fontVariantNumeric: "tabular-nums" }}>
+                    {cpu.toFixed(0)}% CPU · {bytes(n.mem)}/{bytes(n.maxmem)} RAM
+                  </span>
+                </div>
+                <div className={`pv-meter${mem >= 80 ? " pv-meter-hot" : ""}`} title={`${mem.toFixed(0)}% RAM used`}>
+                  <i style={{ width: `${cpu}%` }} />
+                </div>
               </div>
-              <div className="w-full bg-slate-800 rounded h-1.5">
-                <div className="bg-blue-500 h-1.5 rounded" style={{ width: `${pct(n.cpu, n.maxcpu) ?? 0}%` }} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {showTip && balanceTip && (
-            <div className="bg-yellow-900/40 border border-yellow-700/60 text-yellow-200 rounded p-3 mt-3 text-sm flex items-start gap-2">
-              <span className="flex-1">⚖ {balanceTip}</span>
-              <button
-                onClick={dismissTip}
-                className="text-xs text-yellow-200/70 hover:text-yellow-100 underline shrink-0"
-                title="Hide this suggestion (it returns if the situation changes)"
-              >
+            <div className="pv-notice pv-notice-warn" style={{ display: "flex", gap: 12, marginTop: 12 }}>
+              <span style={{ flex: 1 }}>{balanceTip}</span>
+              <button className="pv-btn pv-btn-link" style={{ fontSize: "0.78rem", flex: "none" }} onClick={dismissTip} title="Hide this suggestion (it returns if the situation changes)">
                 Dismiss
               </button>
             </div>
           )}
-        </div>
+        </Section>
       ),
     },
     discovery: {
       privilegedOnly: false,
       node: (
-        <div className={`${card} mb-6`}>
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-slate-400">Discovered services</div>
-            {privileged && (
-              <button onClick={() => void runDiscovery()} className="text-xs px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded">
-                Scan now
-              </button>
-            )}
-          </div>
+        <Section
+          title="Discovered services"
+          actions={privileged ? <Btn size="sm" onClick={() => void runDiscovery()}>Scan now</Btn> : undefined}
+        >
           {[...servicesByVm.entries()].map(([vmId, services]) => {
             const vm = vmList.find((v) => v.id === vmId);
             if (!vm) return null;
             return (
-              <div key={vmId} className="text-sm py-1 flex flex-wrap items-center gap-2">
-                <Link to={`/vms/${vmId}`} className="text-blue-400 hover:underline">{vm.name}</Link>
+              <div key={vmId} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+                <Link to={`/vms/${vmId}`}>{vm.name}</Link>
                 {services.map((s) => (
-                  <span key={s.port} className="text-xs bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5" title={`Port ${s.port}`}>
+                  <span key={s.port} className="pv-mono" title={`Port ${s.port}`} style={{ color: "var(--pv-text-2)" }}>
                     {s.service} · {s.port}
                   </span>
                 ))}
@@ -282,79 +278,77 @@ export default function Dashboard({ me }: { me: Me }) {
             );
           })}
           {!servicesByVm.size && (
-            <div className="text-sm text-slate-500">No scan results yet{privileged ? " — press Scan now." : "."}</div>
+            <Empty title="No scan results yet" body={privileged ? "Run a discovery scan to map open services to VMs." : undefined} />
           )}
-        </div>
+        </Section>
       ),
     },
     events: {
       privilegedOnly: true,
       node: (
-        <div className={`${card} mb-6`}>
-          <div className="text-xs text-slate-400 mb-2">Recent events</div>
+        <Section title="Recent events">
           {(audit?.entries ?? []).map((e) => (
-            <div key={e.id} className="text-sm py-0.5 flex justify-between text-slate-300">
-              <span>{e.event}</span>
-              <span className="text-slate-500">{e.actorUsername ?? "system"} · {new Date(e.createdAt).toLocaleString()}</span>
+            <div key={e.id} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+              <span className="pv-mono">{e.event}</span>
+              <span style={{ color: "var(--pv-text-3)", whiteSpace: "nowrap" }}>{e.actorUsername ?? "system"} · {new Date(e.createdAt).toLocaleString()}</span>
             </div>
           ))}
-          {!audit?.entries.length && <div className="text-sm text-slate-500">No events yet</div>}
-        </div>
+          {!audit?.entries.length && <Empty title="No events yet" body="Actions across the fleet will appear here." />}
+        </Section>
       ),
     },
     jobs: {
       privilegedOnly: false,
       node: (
-        <div className={card}>
-          <div className="text-xs text-slate-400 mb-2">Recent provisioning jobs</div>
+        <Section title="Recent provisioning jobs">
           {(jobs?.jobs ?? []).map((j) => (
-            <div key={j.id} className="flex justify-between text-sm py-0.5">
-              <span className="font-mono text-xs">{j.id.slice(0, 8)}</span>
+            <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+              <span className="pv-mono">{j.id.slice(0, 8)}</span>
               <StatusBadge status={j.status} />
-              <span className="text-slate-500">{new Date(j.createdAt).toLocaleString()}</span>
+              <span style={{ marginLeft: "auto", color: "var(--pv-text-3)" }}>{new Date(j.createdAt).toLocaleString()}</span>
             </div>
           ))}
-          {!jobs?.jobs.length && <div className="text-sm text-slate-500">No provisioning jobs yet</div>}
-        </div>
+          {!jobs?.jobs.length && <Empty title="No provisioning jobs yet" body="Provisioning a VM from a template creates a tracked job here." />}
+        </Section>
       ),
     },
   };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <button
-          onClick={() => setCustomizing((v) => !v)}
-          className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded"
-        >
-          {customizing ? "Done" : "Customize"}
-        </button>
-      </div>
+    <div className="pv-page">
+      <PageTitle
+        title="Dashboard"
+        description={privileged ? "Fleet state at a glance. Rearrange or hide sections with Customize." : "Your virtual machines and recent activity."}
+      >
+        <Btn size="sm" onClick={() => setCustomizing((v) => !v)}>{customizing ? "Done" : "Customize"}</Btn>
+      </PageTitle>
       {error && <ErrorBox error={error} />}
       {customizing && (
-        <div className={`${card} mb-6`}>
-          <div className="text-xs text-slate-400 mb-2">Arrange widgets (saved in this browser)</div>
-          <div className="space-y-1">
-            {layout.order.map((id) => (
-              <div key={id} className="flex items-center gap-2 text-sm">
-                <button
-                  onClick={() => toggleWidget(id)}
-                  className={`w-4 h-4 rounded border text-[10px] leading-none ${layout.hidden.includes(id) ? "border-slate-600 text-transparent" : "bg-blue-600 border-blue-500 text-white"}`}
-                  aria-label={`Toggle ${id}`}
-                >
-                  ✓
-                </button>
-                <span className={layout.hidden.includes(id) ? "text-slate-500" : "text-slate-200"}>
-                  {ALL_WIDGETS.find((w) => w.id === id)?.title}
-                </span>
-                <span className="ml-auto flex gap-1">
-                  <button className="text-xs text-slate-400 hover:text-slate-200" onClick={() => moveWidget(id, -1)}>↑</button>
-                  <button className="text-xs text-slate-400 hover:text-slate-200" onClick={() => moveWidget(id, 1)}>↓</button>
-                </span>
-              </div>
-            ))}
-          </div>
+        <div className="pv-panel" style={{ marginBottom: 20 }}>
+          <div className="pv-label" style={{ marginBottom: 8 }}>Arrange sections (saved in this browser)</div>
+          {layout.order.map((id) => (
+            <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", fontSize: "0.85rem" }}>
+              <button
+                onClick={() => toggleWidget(id)}
+                style={{
+                  width: 16, height: 16, borderRadius: 4, border: "1px solid var(--pv-border)",
+                  background: layout.hidden.includes(id) ? "transparent" : "var(--pv-accent)",
+                  borderColor: layout.hidden.includes(id) ? "var(--pv-border)" : "var(--pv-accent)",
+                  color: "#fff", fontSize: 10, lineHeight: 1, cursor: "pointer",
+                }}
+                aria-label={`Toggle ${id}`}
+              >
+                ✓
+              </button>
+              <span style={{ color: layout.hidden.includes(id) ? "var(--pv-text-3)" : "var(--pv-text)" }}>
+                {ALL_WIDGETS.find((w) => w.id === id)?.title}
+              </span>
+              <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+                <Btn size="sm" kind="link" onClick={() => moveWidget(id, -1)}>↑</Btn>
+                <Btn size="sm" kind="link" onClick={() => moveWidget(id, 1)}>↓</Btn>
+              </span>
+            </div>
+          ))}
         </div>
       )}
       {layout.order

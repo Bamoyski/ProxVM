@@ -16,12 +16,15 @@ import Groups from "./pages/Groups.js";
 import Matrix from "./pages/Matrix.js";
 import UserPermissions from "./pages/UserPermissions.js";
 import Audit from "./pages/Audit.js";
+import Threats from "./pages/Threats.js";
+import ThreatBell from "./components/ThreatBell.js";
 import Jobs from "./pages/Jobs.js";
 import Settings from "./pages/Settings.js";
 import Health from "./pages/Health.js";
 import Help from "./pages/Help.js";
 import Legal from "./pages/Legal.js";
 import Schedules from "./pages/Schedules.js";
+import Backups from "./pages/Backups.js";
 import Domains from "./pages/Domains.js";
 import Contact from "./pages/Contact.js";
 import Donate from "./pages/Donate.js";
@@ -63,11 +66,13 @@ const NAV = [
   { to: "/groups", label: "Groups" },
   { to: "/matrix", label: "Permission Matrix" },
   { to: "/audit", label: "Audit Log" },
+  { to: "/threats", label: "Threat Detection" },
   { to: "/jobs", label: "Jobs" },
   { to: "/settings", label: "Settings" },
   { to: "/domains", label: "Domains" },
   { to: "/health", label: "Health" },
   { to: "/schedules", label: "Schedules" },
+  { to: "/backups", label: "Backups" },
   { to: "/help", label: "Help" },
   { to: "/content", label: "Content" },
   { to: "/tickets", label: "Support" },
@@ -172,12 +177,12 @@ export default function App() {
 
   if (restartRequired) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="bg-slate-900 border border-slate-800 rounded-lg p-8 max-w-md text-center">
-          <h1 className="text-xl font-semibold text-blue-400 mb-2">Setup complete</h1>
-          <p className="text-sm text-slate-400">
+      <div className="pv-shell" style={{ alignItems: "center", justifyContent: "center" }}>
+        <div className="pv-panel pv-page-narrow" style={{ textAlign: "center" }}>
+          <h1 className="pv-title" style={{ marginBottom: 8 }}>Setup complete</h1>
+          <p className="pv-sub" style={{ margin: 0 }}>
             ProxVM was configured successfully. Restart the API process to finish first-run initialization
-            (<span className="font-mono">docker compose restart api worker</span> or restart your dev process), then reload this page.
+            (<span className="pv-mono">docker compose restart api worker</span> or restart your dev process), then reload this page.
           </p>
         </div>
       </div>
@@ -185,7 +190,7 @@ export default function App() {
   }
 
   if (setupMode === null || isLoading) {
-    return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading…</div>;
+    return <div className="pv-shell" style={{ alignItems: "center", justifyContent: "center", color: "var(--pv-text-3)" }}>Loading…</div>;
   }
 
   if (setupMode) {
@@ -240,57 +245,77 @@ export default function App() {
     if (n.to === "/jobs") return canNav("jobs.read", privileged);
     if (n.to === "/templates") return canNav("templates.manage", privileged);
     if (n.to === "/audit") return canNav("audit.read", hasAuditRead);
+    if (n.to === "/threats") return canNav("audit.read", hasAuditRead);
     if (n.to === "/schedules") return canNav("vm.manage", privileged);
+    if (n.to === "/backups") return canNav("vm.manage", privileged);
     return true;
   });
 
+  // Grouped by operator intent, not alphabet: infrastructure first,
+  // identity second, system last. Help-adjacent pages stay ungrouped.
+  const NAV_GROUPS: Array<{ label: string | null; paths: string[] }> = [
+    { label: "Infrastructure", paths: ["/", "/vms", "/templates", "/jobs", "/schedules", "/backups", "/guacamole"] },
+    { label: "Access", paths: ["/users", "/roles", "/groups", "/matrix", "/credentials"] },
+    { label: "System", paths: ["/settings", "/domains", "/content", "/health", "/audit", "/threats", "/usage"] },
+    { label: null, paths: ["/tickets", "/help", "/contact", "/donate", "/legal"] },
+  ];
+  const navByPath = new Map(visibleNav.map((n) => [n.to, n]));
+
   return (
-    <div className="min-h-screen flex">
-      <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between">
-        <span className="text-lg font-bold text-blue-400">ProxVM</span>
+    <div className="pv-shell">
+      <div className="pv-topbar">
+        <span className="pv-brand" style={{ padding: 0 }}>Prox<b>VM</b></span>
         <button
-          className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded"
+          className="pv-btn pv-btn-sm"
           onClick={() => setMenuOpen((v) => !v)}
           aria-label="Toggle navigation"
         >
-          ☰
+          Menu
         </button>
+        {canNav("audit.read", hasAuditRead) && <ThreatBell />}
       </div>
       {menuOpen && (
-        <div className="md:hidden fixed inset-0 z-20 bg-black/60" onClick={() => setMenuOpen(false)} />
+        <div className="pv-scrim" onClick={() => setMenuOpen(false)} />
       )}
-      <aside
-        className={`w-56 shrink-0 bg-slate-900 border-r border-slate-800 p-4 flex-col z-30 ${
-          menuOpen ? "flex fixed inset-y-0 left-0" : "hidden"
-        } md:flex md:static pt-16 md:pt-4`}
-      >
-        <div className="text-xl font-bold text-blue-400 mb-6 hidden md:block">ProxVM</div>
-        <nav className="flex flex-col gap-1">
-          {visibleNav.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.to === "/"}
-              onClick={() => setMenuOpen(false)}
-              className={({ isActive }) =>
-                `px-3 py-2 rounded text-sm ${location.pathname === n.to ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800"}`
-              }
-            >
-              {n.label}
-            </NavLink>
-          ))}
+      <aside className={`pv-sidebar ${menuOpen ? "pv-sidebar-open" : ""}`}>
+        <div className="pv-brand">Prox<b>VM</b></div>
+        <nav>
+          {NAV_GROUPS.map((g) => {
+            const items = g.paths
+              .map((p) => navByPath.get(p))
+              .filter((n): n is { to: string; label: string } => !!n);
+            if (!items.length) return null;
+            return (
+              <div key={g.label ?? "other"}>
+                {g.label ? <div className="pv-navgroup">{g.label}</div> : <div style={{ height: 14 }} />}
+                {items.map((n) => (
+                  <NavLink
+                    key={n.to}
+                    to={n.to}
+                    end={n.to === "/"}
+                    onClick={() => setMenuOpen(false)}
+                    className={({ isActive }) => `pv-navlink${isActive ? " pv-navlink-active" : ""}`}
+                  >
+                    {n.label}
+                  </NavLink>
+                ))}
+              </div>
+            );
+          })}
         </nav>
-        <div className="mt-auto pt-4 border-t border-slate-800 space-y-2">
-          <div className="flex gap-2">
+        <div className="pv-sidefoot">
+          <div style={{ display: "flex", gap: 8 }}>
             <button
-              className="flex-1 px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded"
+              className="pv-btn pv-btn-sm"
+              style={{ flex: 1 }}
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               title="Toggle dark / light theme"
             >
-              {theme === "dark" ? "☀ Light" : "☾ Dark"}
+              {theme === "dark" ? "Light" : "Dark"}
             </button>
             <button
-              className="flex-1 px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded"
+              className="pv-btn pv-btn-sm"
+              style={{ flex: 1 }}
               onClick={() => {
                 setMenuOpen(false);
                 setPaletteOpen(true);
@@ -300,22 +325,22 @@ export default function App() {
               ⌘K
             </button>
           </div>
-          <div className="text-sm text-slate-400">
-            {me.username} <span className="text-slate-500">({me.roles.join(", ")})</span>
+          <div className="pv-userline">
+            {me.username} <span>({me.roles.join(", ")})</span>
           </div>
           <button
             onClick={async () => {
               await logout();
               window.location.href = "/login";
             }}
-            className="w-full px-3 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded"
+            className="pv-btn pv-btn-sm"
           >
             Log out
           </button>
-          <div className="text-[11px] text-slate-600 text-center pt-1">
+          <div style={{ fontSize: 11, color: "var(--pv-text-3)", textAlign: "center" }}>
             by{" "}
             <a
-              className="hover:text-slate-400 underline"
+              style={{ color: "inherit" }}
               href="https://github.com/Bamoyski"
               target="_blank"
               rel="noreferrer"
@@ -336,20 +361,11 @@ export default function App() {
           navigate(to);
         }}
       />
-      <main className="flex-1 p-4 md:p-8 pt-16 md:pt-8 overflow-x-auto">
+      <main className="pv-main">
         {showAnnouncement && announcement?.text && (
-          <div
-            className={`rounded p-3 mb-4 text-sm flex items-start gap-3 ${
-              announcement.level === "warn"
-                ? "bg-amber-900/40 border border-amber-700/60 text-amber-100"
-                : "bg-blue-900/40 border border-blue-700/60 text-blue-100"
-            }`}
-          >
-            <span className="flex-1">{announcement.text}</span>
-            <button
-              className="text-xs opacity-70 hover:opacity-100 underline shrink-0"
-              onClick={dismissAnnouncement}
-            >
+          <div className={`pv-notice ${announcement.level === "warn" ? "pv-notice-warn" : ""}`} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+            <span style={{ flex: 1 }}>{announcement.text}</span>
+            <button className="pv-btn pv-btn-link" style={{ fontSize: "0.78rem", flex: "none" }} onClick={dismissAnnouncement}>
               Dismiss
             </button>
           </div>
@@ -367,11 +383,13 @@ export default function App() {
           <Route path="/groups" element={<Groups />} />
           <Route path="/matrix" element={<Matrix />} />
           <Route path="/audit" element={<Audit />} />
+          <Route path="/threats" element={<Threats />} />
           <Route path="/jobs" element={<Jobs me={me} />} />
           <Route path="/jobs/:jobId" element={<Jobs me={me} />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/health" element={<Health />} />
           <Route path="/schedules" element={<Schedules />} />
+          <Route path="/backups" element={<Backups />} />
           <Route path="/domains" element={<Domains />} />
           <Route path="/legal" element={<Legal />} />
           <Route path="/contact" element={<Contact />} />

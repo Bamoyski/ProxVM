@@ -708,7 +708,10 @@ export function createGuacamoleDbClient(settings: GuacamoleDbSettings): { client
       user: settings.dbUser,
       password: settings.dbPassword,
       database: settings.dbName,
-      ssl: settings.dbSsl ? { rejectUnauthorized: false } : undefined,
+      // Explicitly enabled SSL verifies the chain: fail closed rather than
+      // encrypting against whoever answers. Self-signed servers need their CA
+      // configured driver-side; until then leave db_ssl off on a private net.
+      ssl: settings.dbSsl ? { rejectUnauthorized: true } : undefined,
       connectionLimit: 5,
       connectTimeout: 8000,
       decimalNumbers: true,

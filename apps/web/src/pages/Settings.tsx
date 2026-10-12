@@ -1,16 +1,17 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Btn } from "../components/ui.js";
 
-const input = "w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-const label = "block text-xs font-medium text-slate-400 mb-1";
+const input = "pv-input";
+const label = "pv-label";
 
-function Field({ label: l, children }: { label: string; children: React.ReactNode }) {
+function Field({ label: l, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div>
+    <div className="pv-field">
       <label className={label}>{l}</label>
       {children}
+      {hint ? <div className="pv-hint">{hint}</div> : null}
     </div>
   );
 }
@@ -83,69 +84,62 @@ export default function Settings() {
   const g = guacamole?.settings ?? {};
 
   return (
-    <div>
-      <PageTitle title="Settings" />
+    <div className="pv-page">
+      <PageTitle title="Settings" description="Connection details and instance behavior. Secrets stay masked." />
       {error && <ErrorBox error={error} />}
-      {saved && <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-3 mb-4 text-sm">{saved}</div>}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">Proxmox</h2>
-          <div className="space-y-3">
-            <Field label="URL"><input className={input} value={pxField("url", s.url)} onChange={(e) => setPx({ ...px, url: e.target.value })} /></Field>
-            <Field label="Token ID"><input className={input} value={pxField("tokenId", s.tokenId)} onChange={(e) => setPx({ ...px, tokenId: e.target.value })} /></Field>
-            <Field label="Token secret (stored value shown masked)">
-              <input type="password" className={input} placeholder={String(s.tokenSecret ?? "")} value={pxField("tokenSecret", "")} onChange={(e) => setPx({ ...px, tokenSecret: e.target.value })} />
-            </Field>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={pxField("verifySsl", String(s.verifySsl ?? "false")) === "true"}
-                onChange={(e) => setPx({ ...px, verifySsl: String(e.target.checked) })}
-              />
-              Verify SSL
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              <Field label="Default node"><input className={input} value={pxField("defaultNode", s.defaultNode)} onChange={(e) => setPx({ ...px, defaultNode: e.target.value })} /></Field>
-              <Field label="Default storage"><input className={input} value={pxField("defaultStorage", s.defaultStorage)} onChange={(e) => setPx({ ...px, defaultStorage: e.target.value })} /></Field>
-              <Field label="Default bridge"><input className={input} value={pxField("defaultNetwork", s.defaultNetwork)} onChange={(e) => setPx({ ...px, defaultNetwork: e.target.value })} /></Field>
-            </div>
-            <button onClick={saveProxmox} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">Save</button>
+      {saved && <div className="pv-notice pv-notice-ok">{saved}</div>}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-10">
+        <Section title="Proxmox">
+          <Field label="URL"><input className={input} value={pxField("url", s.url)} onChange={(e) => setPx({ ...px, url: e.target.value })} /></Field>
+          <Field label="Token ID"><input className={input} value={pxField("tokenId", s.tokenId)} onChange={(e) => setPx({ ...px, tokenId: e.target.value })} /></Field>
+          <Field label="Token secret" hint="Stored value stays masked. Enter a new value only to replace it.">
+            <input type="password" className={input} placeholder={String(s.tokenSecret ?? "")} value={pxField("tokenSecret", "")} onChange={(e) => setPx({ ...px, tokenSecret: e.target.value })} />
+          </Field>
+          <label className="pv-checkrow" style={{ marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={pxField("verifySsl", String(s.verifySsl ?? "false")) === "true"}
+              onChange={(e) => setPx({ ...px, verifySsl: String(e.target.checked) })}
+            />
+            Verify SSL
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            <Field label="Default node"><input className={input} value={pxField("defaultNode", s.defaultNode)} onChange={(e) => setPx({ ...px, defaultNode: e.target.value })} /></Field>
+            <Field label="Default storage"><input className={input} value={pxField("defaultStorage", s.defaultStorage)} onChange={(e) => setPx({ ...px, defaultStorage: e.target.value })} /></Field>
+            <Field label="Default bridge"><input className={input} value={pxField("defaultNetwork", s.defaultNetwork)} onChange={(e) => setPx({ ...px, defaultNetwork: e.target.value })} /></Field>
           </div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">Guacamole</h2>
-          <div className="space-y-3">
-            <Field label="Database engine">
-              <select
-                className={input}
-                value={gacField("dbEngine", g.engine ?? "postgresql")}
-                onChange={(e) => setGac({ ...gac, dbEngine: e.target.value })}
-              >
-                <option value="mariadb">MariaDB</option>
-                <option value="mysql">MySQL</option>
-                <option value="postgresql">PostgreSQL</option>
-              </select>
-            </Field>
-            <Field label="URL"><input className={input} value={gacField("url", g.url)} onChange={(e) => setGac({ ...gac, url: e.target.value })} /></Field>
-            <Field label="Public URL (for browser, e.g. https://guacamole.example.com/)">
-              <input className={input} value={gacField("publicUrl", g.publicUrl ?? "")} onChange={(e) => setGac({ ...gac, publicUrl: e.target.value })} placeholder="Leave empty to use the URL above" />
-            </Field>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="DB host"><input className={input} value={gacField("dbHost", g.dbHost)} onChange={(e) => setGac({ ...gac, dbHost: e.target.value })} /></Field>
-              <Field label="DB port"><input type="number" className={input} value={gacField("dbPort", String(g.dbPort ?? ""))} onChange={(e) => setGac({ ...gac, dbPort: e.target.value })} /></Field>
-            </div>
-            <Field label="DB name"><input className={input} value={gacField("dbName", g.dbName)} onChange={(e) => setGac({ ...gac, dbName: e.target.value })} /></Field>
-            <Field label="DB user"><input className={input} value={gacField("dbUser", g.dbUser)} onChange={(e) => setGac({ ...gac, dbUser: e.target.value })} /></Field>
-            <Field label="DB password (stored value masked)">
-              <input type="password" className={input} placeholder={String(g.dbPassword ?? "")} value={gacField("dbPassword", "")} onChange={(e) => setGac({ ...gac, dbPassword: e.target.value })} />
-            </Field>
-            <button onClick={saveGuacamole} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">Save</button>
+          <Btn kind="primary" onClick={saveProxmox}>Save</Btn>
+        </Section>
+        <Section title="Guacamole">
+          <Field label="Database engine">
+            <select
+              className="pv-select"
+              value={gacField("dbEngine", g.engine ?? "postgresql")}
+              onChange={(e) => setGac({ ...gac, dbEngine: e.target.value })}
+            >
+              <option value="mariadb">MariaDB</option>
+              <option value="mysql">MySQL</option>
+              <option value="postgresql">PostgreSQL</option>
+            </select>
+          </Field>
+          <Field label="URL"><input className={input} value={gacField("url", g.url)} onChange={(e) => setGac({ ...gac, url: e.target.value })} /></Field>
+          <Field label="Public URL" hint="For the browser, e.g. https://guacamole.example.com/. Leave empty to use the URL above.">
+            <input className={input} value={gacField("publicUrl", g.publicUrl ?? "")} onChange={(e) => setGac({ ...gac, publicUrl: e.target.value })} placeholder="Leave empty to use the URL above" />
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="DB host"><input className={input} value={gacField("dbHost", g.dbHost)} onChange={(e) => setGac({ ...gac, dbHost: e.target.value })} /></Field>
+            <Field label="DB port"><input type="number" className={input} value={gacField("dbPort", String(g.dbPort ?? ""))} onChange={(e) => setGac({ ...gac, dbPort: e.target.value })} /></Field>
           </div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">Application</h2>
+          <Field label="DB name"><input className={input} value={gacField("dbName", g.dbName)} onChange={(e) => setGac({ ...gac, dbName: e.target.value })} /></Field>
+          <Field label="DB user"><input className={input} value={gacField("dbUser", g.dbUser)} onChange={(e) => setGac({ ...gac, dbUser: e.target.value })} /></Field>
+          <Field label="DB password" hint="Stored value stays masked. Enter a new value only to replace it.">
+            <input type="password" className={input} placeholder={String(g.dbPassword ?? "")} value={gacField("dbPassword", "")} onChange={(e) => setGac({ ...gac, dbPassword: e.target.value })} />
+          </Field>
+          <Btn kind="primary" onClick={saveGuacamole}>Save</Btn>
+        </Section>
+        <Section title="Application" hint="Retention, announcements, idle policy">
           <AppSettings />
-        </div>
+        </Section>
       </div>
     </div>
   );
@@ -166,6 +160,12 @@ function AppSettings() {
           announcementLevel: "info" | "warn";
           idleShutdownEnabled: boolean;
           idleMinutes: number;
+          threatWebhookUrl: string | null;
+          threatMinSeverity: string;
+          maxCpu: number | null;
+          maxRamMb: number | null;
+          maxDiskGb: number | null;
+          staticAllowedCidrs: string | null;
         };
       }>("/settings/app"),
   });
@@ -189,6 +189,24 @@ function AppSettings() {
   const currentIdleMinutes = data?.settings?.idleMinutes ?? 120;
   const shownIdleMinutes = idleTouched ? idleMinutes : String(currentIdleMinutes);
 
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookTouched, setWebhookTouched] = useState(false);
+  const [minSeverity, setMinSeverity] = useState<"high" | "medium" | "low">("high");
+  const [severityTouched, setSeverityTouched] = useState(false);
+  const currentWebhook = data?.settings?.threatWebhookUrl ?? null;
+  const shownWebhook = webhookTouched ? webhookUrl : (currentWebhook ?? "");
+  const shownSeverity = severityTouched ? minSeverity : ((data?.settings?.threatMinSeverity ?? "high") as "high" | "medium" | "low");
+
+  const [maxCpu, setMaxCpu] = useState("");
+  const [maxRamMb, setMaxRamMb] = useState("");
+  const [maxDiskGb, setMaxDiskGb] = useState("");
+  const [cidrs, setCidrs] = useState("");
+  const [policyTouched, setPolicyTouched] = useState(false);
+  const shownMaxCpu = policyTouched ? maxCpu : (data?.settings?.maxCpu ?? null)?.toString() ?? "";
+  const shownMaxRam = policyTouched ? maxRamMb : (data?.settings?.maxRamMb ?? null)?.toString() ?? "";
+  const shownMaxDisk = policyTouched ? maxDiskGb : (data?.settings?.maxDiskGb ?? null)?.toString() ?? "";
+  const shownCidrs = policyTouched ? cidrs : (data?.settings?.staticAllowedCidrs ?? "");
+
   const save = async () => {
     setError(null);
     setSaved(null);
@@ -203,9 +221,33 @@ function AppSettings() {
         announcementLevel?: "info" | "warn";
         idleShutdownEnabled?: boolean;
         idleMinutes?: number;
+        threatWebhookUrl?: string | null;
+        threatMinSeverity?: "high" | "medium" | "low";
+        maxCpu?: number | null;
+        maxRamMb?: number | null;
+        maxDiskGb?: number | null;
+        staticAllowedCidrs?: string | null;
       } = {
         retentionDays: value,
       };
+      if (policyTouched) {
+        const numOrNull = (raw: string, label: string, min: number, max: number): number | null => {
+          if (raw.trim() === "") return null;
+          const n = Number(raw);
+          if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${label} must be blank or ${min}–${max}`);
+          return n;
+        };
+        body.maxCpu = numOrNull(shownMaxCpu, "Max CPU", 1, 4096);
+        body.maxRamMb = numOrNull(shownMaxRam, "Max RAM", 256, 8388608);
+        body.maxDiskGb = numOrNull(shownMaxDisk, "Max disk", 1, 131072);
+        body.staticAllowedCidrs = shownCidrs.trim() === "" ? null : shownCidrs.trim();
+      }
+      if (webhookTouched || severityTouched) {
+        const trimmed = shownWebhook.trim();
+        if (trimmed !== "" && trimmed.length > 512) throw new Error("Webhook URL must be 512 characters or fewer");
+        body.threatWebhookUrl = trimmed === "" ? null : trimmed;
+        body.threatMinSeverity = shownSeverity;
+      }
       if (announcementTouched || announcementLevelTouched) {
         if (shownAnnouncement.trim() === "") {
           body.announcementText = null;
@@ -229,6 +271,9 @@ function AppSettings() {
       setAnnouncementTouched(false);
       setAnnouncementLevelTouched(false);
       setIdleTouched(false);
+      setWebhookTouched(false);
+      setSeverityTouched(false);
+      setPolicyTouched(false);
       void qc.invalidateQueries({ queryKey: ["settings-app"] });
       void qc.invalidateQueries({ queryKey: ["announcement"] });
     } catch (err) {
@@ -237,10 +282,10 @@ function AppSettings() {
   };
 
   return (
-    <div className="space-y-3">
+    <div>
       {error && <ErrorBox error={error} />}
-      {saved && <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-3 text-sm">{saved}</div>}
-      <Field label="Audit retention (days, blank = keep forever)">
+      {saved && <div className="pv-notice pv-notice-ok">{saved}</div>}
+      <Field label="Audit retention (days, blank = keep forever)" hint="Entries older than this are pruned hourly.">
         <input
           type="number"
           className={input}
@@ -252,10 +297,9 @@ function AppSettings() {
           }}
         />
       </Field>
-      <div className="text-xs text-slate-500">Entries older than this are pruned hourly.</div>
       <Field label="Instance announcement (blank = none; shown to every signed-in user)">
         <textarea
-          className={input}
+          className="pv-textarea"
           placeholder="e.g. Maintenance Sunday 2–4 AM — sessions may drop briefly."
           rows={2}
           value={shownAnnouncement}
@@ -267,7 +311,7 @@ function AppSettings() {
       </Field>
       <Field label="Announcement style">
         <select
-          className={input}
+          className="pv-select"
           value={shownLevel}
           onChange={(e) => {
             setAnnouncementLevel(e.target.value === "warn" ? "warn" : "info");
@@ -278,9 +322,9 @@ function AppSettings() {
           <option value="warn">Warning (amber)</option>
         </select>
       </Field>
-      <Field label="Idle auto-shutdown (user-class VMs only; server VMs never)">
-        <div className="flex flex-wrap gap-2 items-center">
-          <label className="text-xs text-slate-300 flex items-center gap-2">
+      <Field label="Idle auto-shutdown" hint="User-class VMs only; server VMs never shut down. A VM shuts down only with zero sessions, idle CPU, and no activity for the full window. Never-used VMs are skipped.">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <label className="pv-checkrow">
             <input
               type="checkbox"
               checked={shownIdleEnabled}
@@ -293,7 +337,8 @@ function AppSettings() {
           </label>
           <input
             type="number"
-            className={`${input} w-28`}
+            className="pv-input"
+            style={{ width: 112 }}
             title="Minutes of no sessions + idle CPU before shutdown"
             value={shownIdleMinutes}
             onChange={(e) => {
@@ -301,13 +346,53 @@ function AppSettings() {
               setIdleTouched(true);
             }}
           />
-          <span className="text-xs text-slate-500">min idle (5–10080)</span>
+          <span className="pv-hint">min idle (5–10080)</span>
         </div>
       </Field>
-      <div className="text-xs text-slate-500">
-        A VM shuts down only with zero sessions, idle CPU, and no activity for the full window. Never-used VMs are skipped.
-      </div>
-      <button onClick={save} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">Save</button>
+      <Field label="Threat webhook (blank = disabled)" hint="POSTs fresh threat findings as JSON every 5 minutes. Any http(s) URL works (Discord/Slack-compatible body); cloud metadata endpoints are refused.">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <input
+            className="pv-input"
+            style={{ minWidth: 280, flex: 1 }}
+            placeholder="e.g. https://hooks.slack.com/services/…"
+            value={shownWebhook}
+            onChange={(e) => {
+              setWebhookUrl(e.target.value);
+              setWebhookTouched(true);
+            }}
+          />
+          <select
+            className="pv-select"
+            value={shownSeverity}
+            title="Minimum severity that triggers a webhook post"
+            onChange={(e) => {
+              setMinSeverity(e.target.value === "low" ? "low" : e.target.value === "medium" ? "medium" : "high");
+              setSeverityTouched(true);
+            }}
+          >
+            <option value="high">High and up</option>
+            <option value="medium">Medium and up</option>
+            <option value="low">Everything</option>
+          </select>
+        </div>
+      </Field>
+      <Field label="Provisioning ceilings (blank = no ceiling; admins exempt)" hint="Non-admin requests above these are rejected. Applies at request time and again when the worker runs.">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <input type="number" className="pv-input" style={{ width: 110 }} placeholder="Max CPU" title="Max vCPU per VM" value={shownMaxCpu} onChange={(e) => { setMaxCpu(e.target.value); setPolicyTouched(true); }} />
+          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max RAM MB" title="Max RAM megabytes per VM" value={shownMaxRam} onChange={(e) => { setMaxRamMb(e.target.value); setPolicyTouched(true); }} />
+          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max disk GB" title="Max disk gigabytes per VM" value={shownMaxDisk} onChange={(e) => { setMaxDiskGb(e.target.value); setPolicyTouched(true); }} />
+        </div>
+      </Field>
+      <Field label="Static-IP subnets (blank = static assignment disabled for non-admins)" hint="Comma-separated IPv4 CIDRs, e.g. 192.168.1.0/24. Static requests outside these are rejected; addresses must also be unique across VMs.">
+        <input
+          className="pv-input"
+          style={{ minWidth: 280, flex: 1 }}
+          placeholder="e.g. 192.168.1.0/24, 10.0.5.0/24"
+          value={shownCidrs}
+          onChange={(e) => { setCidrs(e.target.value); setPolicyTouched(true); }}
+        />
+      </Field>
+      <Btn kind="primary" onClick={save}>Save</Btn>
     </div>
   );
 }

@@ -17,6 +17,7 @@ export interface StoredPbsSettings {
   url: string;
   tokenId: string;
   tokenSecret: string;
+  verifySsl: boolean;
   datastore: string | null;
 }
 
@@ -111,7 +112,7 @@ export class SettingsService {
     };
   }
 
-  /** PBS wiring. Null until configured — the integration is baseline-only (no live PBS yet). */
+  /** PBS wiring. Null until configured. verifySsl defaults to true. */
   async pbs(): Promise<StoredPbsSettings | null> {
     const url = await this.getPlain("pbs.url");
     if (!url) return null;
@@ -121,6 +122,7 @@ export class SettingsService {
       url,
       tokenId: (await this.getPlain("pbs.token_id")) ?? "",
       tokenSecret,
+      verifySsl: (await this.getPlain("pbs.verify_ssl")) !== "false",
       datastore: await this.getPlain("pbs.datastore"),
     };
   }

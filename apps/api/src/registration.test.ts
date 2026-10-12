@@ -110,6 +110,25 @@ describe("registration with admin approval", () => {
     expect(taken.statusCode).toBe(409);
   });
 
+  it("stale pending requests are pruned and decided hashes scrubbed", async () => {
+    await ctx.db.query(
+      "INSERT INTO registration_requests (id, username, email, password_hash, status, created_at) VALUES ($1, $2, $3, $4, 'pending', NOW() - interval '31 days')",
+      ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "stale-user", null, "hash-stale"],
+    );
+    await ctx.db.query(
+      "INSERT INTO registration_requests (id, username, email, password_hash, status, decided_at, created_at) VALUES ($1, $2, $3, $4, 'rejected', NOW() - interval '8 days', NOW() - interval '8 days')",
+      ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "old-reject", null, "hash-old"],
+    );
+    const result = await ctx.registration.pruneStaleRequests();
+    expect(result).toMatchObject({ pruned: 1, scrubbed: 1 });
+    const gone = await ctx.db.query("SELECT count(*)::text AS c FROM registration_requests WHERE username = 'stale-user'");
+    expect(gone.rows[0]!.c).toBe("0");
+    const scrubbed = await ctx.db.query<{ password_hash: string }>(
+      "SELECT password_hash FROM registration_requests WHERE username = 'old-reject'",
+    );
+    expect(scrubbed.rows[0]!.password_hash).toBe("");
+  });
+
   it("approval creates a loginable account; rejection blocks it", async () => {
     const queue = await app.inject({ method: "GET", url: "/api/registration-requests?status=pending", headers: authA() });
     expect(queue.statusCode).toBe(200);

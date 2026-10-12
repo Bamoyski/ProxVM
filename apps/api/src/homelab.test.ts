@@ -61,6 +61,7 @@ describe("homelab endpoints", () => {
   let vmId: string;
 
   const calls: string[] = [];
+  let taskStatusResult: { status: string; exitstatus?: string } = { status: "stopped", exitstatus: "OK" };
   const fakeProxmox = {
     nextId: async () => 501,
     clone: async () => {
@@ -100,6 +101,10 @@ describe("homelab endpoints", () => {
       return [{ time: 123, cpu: 0.1, mem: 100 }];
     },
     waitForTask: async () => undefined,
+    taskStatus: async (...args: unknown[]) => {
+      calls.push(`taskStatus:${JSON.stringify(args)}`);
+      return taskStatusResult;
+    },
   };
 
   beforeAll(async () => {
@@ -188,15 +193,32 @@ describe("homelab endpoints", () => {
     expect(calls).toContain("makeTemplate");
   });
 
-  it("migrates a VM and updates its tracked node", async () => {
+  it("accepts a migration async and finalizes on observed completion", async () => {
     const res = await app.inject({
       method: "POST",
       url: `/api/vms/${vmId}/migrate`,
       headers: authA(),
       payload: { target: "node2" },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(202);
+    const started = res.json() as { accepted: boolean; upid: string };
+    expect(started.accepted).toBe(true);
+    // Tracked node must NOT move until the Proxmox task completes.
+    expect((await ctx.vms.requireById(vmId)).node).toBe("node1");
+    const statusUrl = (extra: string) =>
+      `/api/vms/${vmId}/migration?upid=${encodeURIComponent(started.upid)}&target=node2${extra}`;
+    taskStatusResult = { status: "running" };
+    const running = await app.inject({ method: "GET", url: statusUrl(""), headers: authA() });
+    expect(running.json()).toMatchObject({ state: "running" });
+    expect((await ctx.vms.requireById(vmId)).node).toBe("node1");
+    taskStatusResult = { status: "stopped", exitstatus: "OK" };
+    const done = await app.inject({ method: "GET", url: statusUrl("&online=false"), headers: authA() });
+    expect(done.json()).toMatchObject({ state: "done", node: "node2" });
     expect((await ctx.vms.requireById(vmId)).node).toBe("node2");
+    // Re-polling after finalization short-circuits to done without Proxmox.
+    const again = await app.inject({ method: "GET", url: statusUrl(""), headers: authA() });
+    expect(again.json()).toMatchObject({ state: "done" });
+    // Same-target migration is rejected up front on POST.
     const same = await app.inject({
       method: "POST",
       url: `/api/vms/${vmId}/migrate`,
@@ -206,17 +228,27 @@ describe("homelab endpoints", () => {
     expect(same.statusCode).toBe(400);
   });
 
-  it("ejects locally-mounted ISOs and migrates with local disks", async () => {
+  it("ejects locally-mounted ISOs and reports migration failure without moving the node", async () => {
     const res = await app.inject({
       method: "POST",
       url: `/api/vms/${vmId}/migrate`,
       headers: authA(),
       payload: { target: "node3", online: true },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, node: "node3", detachedIso: ["ide2"] });
+    expect(res.statusCode).toBe(202);
+    const started = res.json() as { accepted: boolean; upid: string; detachedIso: string[] };
+    expect(started).toMatchObject({ accepted: true, detachedIso: ["ide2"] });
     expect(calls).toContain('updateConfig:{"ide2":"none,media=cdrom"}');
     expect(calls).toContain('migrate:["node3",true,true]');
+    taskStatusResult = { status: "stopped", exitstatus: "migration problems" };
+    const failed = await app.inject({
+      method: "GET",
+      url: `/api/vms/${vmId}/migration?upid=${encodeURIComponent(started.upid)}&target=node3&online=true`,
+      headers: authA(),
+    });
+    expect(failed.json()).toMatchObject({ state: "error", exitStatus: "migration problems" });
+    expect((await ctx.vms.requireById(vmId)).node).toBe("node2");
+    taskStatusResult = { status: "stopped", exitstatus: "OK" };
   });
 
   it("serves RRD stats with access control", async () => {

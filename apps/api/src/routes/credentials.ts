@@ -37,7 +37,7 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
     const row = await ctx.creds.findByVm(vm.id);
     if (!row) throw AppError.notFound("No credential stored for this VM");
     const password = ctx.decrypt(row.password_ciphertext);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "PASSWORD_REVEALED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -56,7 +56,7 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
     const row = await ctx.creds.findByVm(vm.id);
     if (!row) throw AppError.notFound("No credential stored for this VM");
     const password = ctx.decrypt(row.password_ciphertext);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "PASSWORD_COPIED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -75,7 +75,7 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
     const body = credentialRotateSchema.parse(request.body ?? {});
     const result = await ctx.rotateCredential(
       vm.id,
-      { newPassword: body.newPassword, username: body.username, verify: body.verify },
+      { newPassword: body.newPassword, username: body.username, verify: body.verify, force: body.force },
       { userId: user.id, username: user.username },
     );
     return result;
@@ -92,10 +92,13 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
   });
 
   app.get("/credentials", async (request) => {
-    await app.requirePermission("cred.reveal")(request);
+    const user = await app.requirePermission("cred.reveal")(request);
     const vms = await ctx.vms.list();
     const entries = [];
     for (const vm of vms) {
+      // Same per-VM gate as the reveal/copy endpoints: a global cred.reveal
+      // grant must not inventory privacy-flagged VMs the caller has no grant for.
+      if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) continue;
       const cred = await ctx.creds.view(vm.id);
       if (!cred) continue;
       entries.push({

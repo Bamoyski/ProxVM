@@ -60,7 +60,7 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     const actor = await guard(request);
     const body = z.object({ canonical: z.string().min(1).max(253) }).parse(request.body);
     const config = await setCanonicalDomain(ctx.settings, body.canonical);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -73,7 +73,7 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     const actor = await guard(request);
     const body = z.object({ host: z.string().min(1).max(253) }).parse(request.body);
     const config = await addDomainAlias(ctx.settings, body.host);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -86,7 +86,7 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     const actor = await guard(request);
     const { host } = request.params as { host: string };
     const config = await removeDomainAlias(ctx.settings, host);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -111,7 +111,7 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
       await ctx.settings.set("cloudflare.tunnel_id", body.tunnelId.trim(), { category: "infrastructure" });
     }
     ctx.invalidateCache();
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -211,7 +211,7 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     } else {
       await ctx.db.query("DELETE FROM settings WHERE key = 'securly.useremail'");
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -359,7 +359,7 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     // certificates are the proxy's job, not a veto).
     const verification = await ctx.verifyDomain(fqdn);
     if (!verification.dnsOk) {
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "SETTINGS_CHANGED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -370,7 +370,7 @@ export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContex
       );
     }
     const updated = await setCanonicalDomain(ctx.settings, fqdn);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,

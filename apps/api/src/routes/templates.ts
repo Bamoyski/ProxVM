@@ -42,7 +42,7 @@ export async function templateRoutes(app: FastifyInstance, opts: { ctx: CoreCont
       );
     }
     const template = await ctx.templates.register(body);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "TEMPLATE_CREATED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -60,7 +60,7 @@ export async function templateRoutes(app: FastifyInstance, opts: { ctx: CoreCont
       throw AppError.validation(`Confirmation text must be exactly: DELETE ${template.name}`);
     }
     await ctx.templates.delete(id);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "TEMPLATE_DELETED",
       actorUserId: actor.id,
       actorUsername: actor.username,

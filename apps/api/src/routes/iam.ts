@@ -140,7 +140,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     }
     await assertMayConfer(ctx.db, actor, body.permissions);
     const role = await createRole(ctx.db, body);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "ROLE_CREATED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -182,7 +182,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     if (body.permissions !== undefined) await assertMayConfer(ctx.db, actor, body.permissions);
     await updateRole(ctx.db, id, { name: body.name, description: body.description });
     if (body.permissions !== undefined) await setRolePermissions(ctx.db, id, body.permissions);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "ROLE_UPDATED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -198,7 +198,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     if (!role) return reply.status(404).send({ code: "NOT_FOUND", message: "Role not found" });
     requireSystemRoleProtection(role, "deletion");
     await deleteRole(ctx.db, id);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "ROLE_DELETED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -225,14 +225,14 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
         ON CONFLICT (user_id, role_id) DO UPDATE SET expires_at = EXCLUDED.expires_at, granted_by = EXCLUDED.granted_by`,
       [id, role.id, expiresAt, actor.id],
     );
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "ROLE_ASSIGNED",
       actorUserId: actor.id,
       actorUsername: actor.username,
       detail: { targetUserId: id, username: target.username, roleId: role.id, roleName: role.name, expiresAt: expiresAt?.toISOString() ?? null },
     });
     if (expiresAt) {
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "TEMPORARY_ACCESS_GRANTED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -259,7 +259,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       }
     }
     await ctx.db.query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2", [id, roleId]);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "ROLE_REMOVED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -315,14 +315,14 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
         ON CONFLICT (user_id, permission) DO UPDATE SET expires_at = EXCLUDED.expires_at, granted_by = EXCLUDED.granted_by`,
       [id, body.permission, expiresAt, actor.id],
     );
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "USER_PERMISSION_GRANTED",
       actorUserId: actor.id,
       actorUsername: actor.username,
       detail: { targetUserId: id, username: target.username, permission: body.permission, expiresAt: expiresAt?.toISOString() ?? null },
     });
     if (expiresAt) {
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "TEMPORARY_ACCESS_GRANTED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -339,7 +339,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     if (!target) return reply.status(404).send({ code: "NOT_FOUND", message: "User not found" });
     await assertCanAdministerTarget(ctx.db, actor, id);
     await ctx.db.query("DELETE FROM user_permissions WHERE user_id = $1 AND permission = $2", [id, permission]);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "USER_PERMISSION_REVOKED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -363,7 +363,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       return reply.status(409).send({ code: "CONFLICT", message: `Group "${body.name}" already exists` });
     }
     const group = await createGroup(ctx.db, { ...body, createdBy: actor.id });
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GROUP_CREATED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -401,7 +401,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       "UPDATE groups SET name = COALESCE($2, name), description = COALESCE($3, description) WHERE id = $1",
       [id, body.name ?? null, body.description ?? null],
     );
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GROUP_UPDATED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -421,7 +421,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     for (const userId of members) {
       for (const vmId of vmIds) await reconcileVm(userId, vmId);
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GROUP_DELETED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -464,14 +464,14 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       [id, target.id, expiresAt, actor.id],
     );
     for (const vmId of await groupVmIds(id)) await reconcileVm(target.id, vmId);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GROUP_MEMBER_ADDED",
       actorUserId: actor.id,
       actorUsername: actor.username,
       detail: { groupId: id, groupName: group.name, targetUserId: target.id, username: target.username, expiresAt: expiresAt?.toISOString() ?? null },
     });
     if (expiresAt) {
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "TEMPORARY_ACCESS_GRANTED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -488,9 +488,17 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     if (!group) return reply.status(404).send({ code: "NOT_FOUND", message: "Group not found" });
     const target = await ctx.users.findById(userId);
     await assertCanAdministerTarget(ctx.db, actor, userId);
+    // Mirror the POST path: removing a member withdraws everything the
+    // group's roles confer, so the actor must hold those permissions (else a
+    // delegated manager could silently de-provision admins).
+    await assertMayConfer(
+      ctx.db,
+      actor,
+      (await groupEffectivePermissions(ctx.db, id)).map((p) => p.code),
+    );
     await ctx.db.query("DELETE FROM group_members WHERE group_id = $1 AND user_id = $2", [id, userId]);
     for (const vmId of await groupVmIds(id)) await reconcileVm(userId, vmId);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GROUP_MEMBER_REMOVED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -520,7 +528,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     for (const userId of await groupMemberIds(id)) {
       for (const vmId of await groupVmIds(id)) await reconcileVm(userId, vmId);
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GROUP_ROLE_ASSIGNED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -535,11 +543,14 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const group = await getGroup(ctx.db, id);
     if (!group) return reply.status(404).send({ code: "NOT_FOUND", message: "Group not found" });
     const role = await getRole(ctx.db, roleId);
+    // Mirror the POST path: unlinking a role withdraws its permissions from
+    // every member, so the actor must hold them.
+    if (role) await assertMayConfer(ctx.db, actor, await roleEffectivePermissions(ctx.db, role.id));
     await ctx.db.query("DELETE FROM group_roles WHERE group_id = $1 AND role_id = $2", [id, roleId]);
     for (const userId of await groupMemberIds(id)) {
       for (const vmId of await groupVmIds(id)) await reconcileVm(userId, vmId);
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "GROUP_ROLE_REMOVED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -561,6 +572,9 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       .object({ vmId: z.string().uuid(), protocols: protocolsSchema, expiresAt: expiresAtSchema })
       .parse(request.body);
     const vm = await ctx.vms.requireById(body.vmId);
+    if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, actor.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
+    }
     const protocols = body.protocols !== undefined ? [...new Set(body.protocols)] : null;
     const expiresAt = parseExpiresAt(body.expiresAt);
     await ctx.db.query(
@@ -571,7 +585,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       [id, vm.id, protocols, expiresAt, actor.id],
     );
     for (const userId of await groupMemberIds(id)) await reconcileVm(userId, vm.id);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_ACCESS_GRANTED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -579,7 +593,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
       detail: { groupId: id, groupName: group.name, protocols, expiresAt: expiresAt?.toISOString() ?? null, guacSynced: true },
     });
     if (expiresAt) {
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "TEMPORARY_ACCESS_GRANTED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -592,12 +606,13 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
 
   app.delete("/groups/:id/vms/:vmId", async (request, reply) => {
     const actor = await groupsGuard(request);
+    await app.requirePermission("vm.edit")(request);
     const { id, vmId } = request.params as { id: string; vmId: string };
     const group = await getGroup(ctx.db, id);
     if (!group) return reply.status(404).send({ code: "NOT_FOUND", message: "Group not found" });
     await ctx.db.query("DELETE FROM group_vm_access WHERE group_id = $1 AND vm_id = $2", [id, vmId]);
     for (const userId of await groupMemberIds(id)) await reconcileVm(userId, vmId);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_ACCESS_REVOKED",
       actorUserId: actor.id,
       actorUsername: actor.username,

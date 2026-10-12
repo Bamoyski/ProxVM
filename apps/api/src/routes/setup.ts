@@ -11,17 +11,48 @@ import { createPgPool } from "@proxvm/core";
 import { createGuacamoleDbClient } from "@proxvm/core";
 import { hashPassword } from "@proxvm/core";
 import { AppError } from "@proxvm/core";
-import { parseDbHost, normalizeHttpBaseUrl } from "@proxvm/core";
+import { parseDbHost, normalizeHttpBaseUrl, assertSafeServerUrl, fetchWithSsrfGuard } from "@proxvm/core";
 
 interface SetupOpts {
   ctx?: import("@proxvm/core").CoreContext;
   setupMode: boolean;
 }
 
+import { randomBytes, timingSafeEqual } from "node:crypto";
 
+// One-time setup authorization. Generated fresh per process while
+// unconfigured; the operator reads it from the server log and pastes it
+// into the wizard. Without it the test-* endpoints are an unauthenticated
+// SSRF oracle and /setup/complete is first-writer-wins admin takeover.
+let setupToken: string | null = null;
+let setupInProgress = false;
+
+export function initSetupToken(): string {
+  if (!setupToken) setupToken = randomBytes(32).toString("hex");
+  return setupToken;
+}
+
+/** Test-only reset (fresh token per test file process is fine in prod). */
+export function resetSetupToken(): void {
+  setupToken = null;
+  setupInProgress = false;
+}
+
+function requireSetupToken(request: { headers: Record<string, unknown> }): void {
+  const provided = request.headers["x-setup-token"];
+  if (typeof provided !== "string" || !setupToken) {
+    throw AppError.unauthorized("Setup token required — see the server log");
+  }
+  const a = Buffer.from(provided);
+  const b = Buffer.from(setupToken);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    throw AppError.unauthorized("Invalid setup token");
+  }
+}
 
 export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promise<void> {
   const configured = opts.setupMode === false;
+  if (!configured) initSetupToken();
 
   app.get("/setup/status", { config: { csrf: "skip" } }, async () => {
     if (configured) {
@@ -41,10 +72,14 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
 
 
   // The test-* endpoints let callers make the server open connections to
-  // arbitrary hosts. In setup mode they must stay open (no users exist yet);
-  // once configured they require ADMIN (settings.manage).
+  // arbitrary hosts. In setup mode they require the one-time setup token
+  // (no users exist yet, so nothing else can gate them); once configured
+  // they require ADMIN (settings.manage).
   const requireSetupOrAdmin = async (request: Parameters<typeof app.requireAuth>[0]): Promise<void> => {
-    if (!configured) return;
+    if (!configured) {
+      requireSetupToken(request);
+      return;
+    }
     await app.requirePermission("settings.manage")(request);
   };
 
@@ -101,6 +136,7 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
   app.post("/setup/test-proxmox", { config: { csrf: "skip", rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
     await requireSetupOrAdmin(request);
     const body = proxmoxConfigSchema.parse(request.body);
+    await assertSafeServerUrl(body.url, "Proxmox URL");
     const client = new ProxmoxClient({
       url: body.url,
       tokenId: body.tokenId,
@@ -132,6 +168,7 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     const db = parseDbHost(body.dbHost);
     try {
       parsedUrl = normalizeHttpBaseUrl(body.url);
+      await assertSafeServerUrl(parsedUrl, "Guacamole URL");
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -149,7 +186,7 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
       let webReachable: boolean | null = null;
       let webDetail: string | null = null;
       try {
-        const response = await fetch(parsedUrl, { signal: AbortSignal.timeout(8000), redirect: "follow" });
+        const response = await fetchWithSsrfGuard(parsedUrl, { signal: AbortSignal.timeout(8000) }, 1);
         webReachable = response.status < 500;
         webDetail = `HTTP ${response.status} at ${parsedUrl}`;
       } catch (err) {
@@ -169,6 +206,14 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     if (configured) {
       throw AppError.forbidden("Setup is already complete");
     }
+    requireSetupToken(request);
+    // Single-flight: two concurrent completions must not both pass the
+    // configExists() check below and create competing initial admins.
+    if (setupInProgress) {
+      throw AppError.conflict("Setup is already in progress");
+    }
+    setupInProgress = true;
+    try {
     const body = request.body as Record<string, unknown>;
     if (!body || typeof body !== "object") {
       throw AppError.validation("Request body required");
@@ -267,10 +312,13 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     await ctx.settings.set("guacamole.db_user", guacamole.dbUser, { category: "infrastructure" });
     await ctx.settings.set("guacamole.db_password", guacamole.dbPassword, { encrypted: true, category: "infrastructure" });
     await ctx.settings.set("guacamole.db_ssl", String(guacamole.dbSsl), { category: "infrastructure" });
+    // Direct record (not app.audit): the auth plugin is not registered in
+    // setup mode, and this handler owns its CoreContext locally.
     await ctx.audit.record({
       event: "SETUP_COMPLETED",
       actorUserId: adminUser.id,
       actorUsername: adminUser.username,
+      ip: request.ip ?? null,
       detail: { proxmoxUrl: proxmox.url, guacamoleUrl: guacamole.url },
     });
 
@@ -293,12 +341,18 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
     checks.redis = { ok: true };
     checks.encryption = { ok: true, keyId: config.secrets.masterKeyId, cipher: "aes-256-gcm" };
 
+    // Rotate so a captured token dies with completion (the process restarts
+    // into configured mode anyway; this covers reused processes like tests).
+    setupToken = randomBytes(32).toString("hex");
     return {
       ok: true,
       configFile: defaultConfigPath(),
       checks,
       nextStep: "restart-api",
     };
+    } finally {
+      setupInProgress = false;
+    }
   });
 }
 

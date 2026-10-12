@@ -3,12 +3,13 @@ import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, checkVmHealth, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
 import { domainRoutes } from "./routes/domains.js";
 import { billingRoutes } from "./routes/billing.js";
+import { backupRoutes } from "./routes/backups.js";
 import { firewallRoutes } from "./routes/firewall.js";
 import { contentRoutes } from "./routes/content.js";
 import { pbsRoutes } from "./routes/pbs.js";
@@ -19,12 +20,30 @@ import { proxmoxRoutes } from "./routes/proxmox.js";
 import { vmRoutes } from "./routes/vms.js";
 import { templateRoutes } from "./routes/templates.js";
 import { credentialRoutes } from "./routes/credentials.js";
+import { hostKeyRoutes } from "./routes/hostkeys.js";
 import { guacamoleRoutes } from "./routes/guacamole.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { auditRoutes } from "./routes/audit.js";
+import { threatRoutes } from "./routes/threats.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { healthRoutes } from "./routes/health.js";
 import { iamRoutes } from "./routes/iam.js";
+
+/**
+ * Parses PROXVM_TRUST_PROXY into a Fastify trustProxy value. Empty/unset —
+ * trust nothing (socket IP only). "1"/"true" — trust every hop (legacy,
+ * only behind a fully controlled proxy). Anything else — a comma-separated
+ * list of CIDRs/hosts whose X-Forwarded-For chain is honored.
+ */
+export function parseTrustProxy(raw: string | undefined): boolean | string[] {
+  if (!raw || !raw.trim() || raw.trim() === "0" || raw.trim().toLowerCase() === "false") return false;
+  const v = raw.trim().toLowerCase();
+  if (v === "1" || v === "true") return true;
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
 
 export interface BuildAppOptions {
   ctx?: CoreContext;
@@ -36,13 +55,16 @@ export interface BuildAppOptions {
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false,
-    // Secure by default: derive the client IP from the socket, never from
-    // X-Forwarded-For (whose leftmost entries anyone can spoof). Rate limits
-    // and audit IPs keyed off request.ip are then spoof-proof. Set
-    // PROXVM_TRUST_PROXY=1 ONLY when a reverse proxy you control is
-    // guaranteed in front (it appends the real client IP last) and you need
-    // true client IPs in logs — and understand spoofed prefixes are trusted.
-    trustProxy: process.env.PROXVM_TRUST_PROXY === "1",
+    // Client-IP handling: derive request.ip from the socket by default and
+    // never from X-Forwarded-For (whose entries anyone can spoof). Set
+    // PROXVM_TRUST_PROXY to a comma-separated list of CIDRs you control
+    // (your reverse proxy / docker network, which appends the real client IP
+    // last) to log true client IPs in audit rows and key rate limits per
+    // client. PROXVM_TRUST_PROXY=1 trusts every hop (legacy; only behind a
+    // proxy you fully control). Direct connections from untrusted addresses
+    // always fall back to the socket IP, so exposing :4000 directly stays
+    // spoof-proof either way.
+    trustProxy: parseTrustProxy(process.env.PROXVM_TRUST_PROXY),
     bodyLimit: 1024 * 1024,
   });
 
@@ -129,7 +151,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
           detail: error.detail,
         }),
       );
-      void reply.status(502).send({ code: "PROXMOX_ERROR", message: error.message, detail: error.detail });
+      // Infrastructure detail (hostnames, ports, paths) goes only to infra
+      // operators; everyone else gets code + message. request.user is the
+      // already-loaded session user — no extra query on the error path.
+      const roles = request.user?.roles ?? [];
+      const infraViewer = roles.includes("ADMIN") || roles.includes("OPERATOR");
+      void reply.status(502).send({
+        code: "PROXMOX_ERROR",
+        message: error.message,
+        ...(infraViewer ? { detail: error.detail } : {}),
+      });
       return;
     }
     const err = error as { statusCode?: number; message?: string };
@@ -177,6 +208,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       return;
     });
     await app.register(buildAuthPlugin(ctx));
+    startScanDetection(app, ctx);
     await app.register(setupRoutes, { prefix: "/api", ctx, setupMode: false });
     await app.register(authRoutes, { prefix: "/api", ctx });
     await app.register(meRoutes, { prefix: "/api", ctx });
@@ -185,9 +217,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(vmRoutes, { prefix: "/api", ctx });
     await app.register(templateRoutes, { prefix: "/api", ctx });
     await app.register(credentialRoutes, { prefix: "/api", ctx });
+    await app.register(hostKeyRoutes, { prefix: "/api", ctx });
     await app.register(guacamoleRoutes, { prefix: "/api", ctx });
     await app.register(jobRoutes, { prefix: "/api", ctx });
     await app.register(auditRoutes, { prefix: "/api", ctx });
+    await app.register(threatRoutes, { prefix: "/api", ctx });
     await app.register(settingsRoutes, { prefix: "/api", ctx });
     await app.register(healthRoutes, { prefix: "/api", ctx });
     await app.register(iamRoutes, { prefix: "/api", ctx });
@@ -196,6 +230,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(firewallRoutes, { prefix: "/api", ctx });
     await app.register(contentRoutes, { prefix: "/api", ctx });
     await app.register(pbsRoutes, { prefix: "/api", ctx });
+    await app.register(backupRoutes, { prefix: "/api", ctx });
     startSessionCleanup(app, ctx);
     startIamSweep(app, ctx);
     startHomelabTickers(app, ctx);
@@ -219,6 +254,52 @@ const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
  */
 const SCHEDULE_TICK_MS = 60 * 1000;
 const HEALTH_TICK_MS = 5 * 60 * 1000;
+
+/**
+ * Reconnaissance detection: counts denied/error responses per client IP in
+ * Redis and writes a single SCAN_DETECTED audit row when an IP crosses the
+ * threshold inside the window (then stays quiet for a cooldown hour). Login
+ * attempts are excluded — each already gets its own LOGIN_FAILED row.
+ * Fail-open by design: telemetry must never break responses.
+ */
+const SCAN_WINDOW_S = 600;
+const SCAN_THRESHOLD = 20;
+const SCAN_COOLDOWN_S = 3600;
+
+export function startScanDetection(
+  app: FastifyInstance,
+  ctx: CoreContext,
+  threshold = SCAN_THRESHOLD,
+): void {
+  app.addHook("onResponse", async (request, reply) => {
+    const status = reply.statusCode;
+    if (status !== 401 && status !== 403 && status !== 404 && status !== 429) return;
+    if (request.url === "/api/auth/login" || request.url.startsWith("/api/auth/login?")) return;
+    const ip = request.ip;
+    if (!ip) return;
+    try {
+      const count = await ctx.redis.incr(`proxvm:scan:${ip}`);
+      if (count === 1) await ctx.redis.expire(`proxvm:scan:${ip}`, SCAN_WINDOW_S);
+      if (count < threshold) return;
+      const fired = await ctx.redis.set(`proxvm:scan:fired:${ip}`, "1", "EX", SCAN_COOLDOWN_S, "NX");
+      if (!fired) return;
+      await ctx.audit.record({
+        event: "SCAN_DETECTED",
+        actorUserId: request.user?.id ?? null,
+        actorUsername: request.user?.username ?? null,
+        ip,
+        detail: {
+          count,
+          method: request.method,
+          path: (request.url.split("?")[0] ?? "/").slice(0, 128),
+          status,
+        },
+      });
+    } catch {
+      // fail open
+    }
+  });
+}
 
 /**
  * Background homelab tickers: scheduled power actions every minute,
@@ -245,6 +326,30 @@ export function startHomelabTickers(
       ctx.logger.warn(
         { error: err instanceof Error ? err.message : String(err) },
         "scheduled power actions failed",
+      );
+    }
+    // PBS backups share the minute tick: queue due schedules, start pending
+    // runs (vzdump/prune task creation only), and finalize running ones by
+    // polling. All phases are non-blocking; failures are per-run audited.
+    try {
+      const backupDeps = {
+        db: ctx.db,
+        vms: ctx.vms,
+        users: ctx.users,
+        settings: ctx.settings,
+        getProxmoxClient: () => ctx.getProxmoxClient(),
+        getPbsClient: () => ctx.getPbsClient(),
+        audit: ctx.audit,
+        logger: ctx.logger,
+      };
+      const result = await runBackupPass(backupDeps);
+      if (result.queued > 0 || result.started > 0 || result.finished > 0) {
+        ctx.logger.info(result, "backup pass completed");
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "backup pass failed",
       );
     }
   };
@@ -340,9 +445,24 @@ export function startHomelabTickers(
       );
     }
   };
+  // Threat webhook alerts: evaluates recent audit events every tick and
+  // POSTs fresh findings at/above the configured severity. No URL
+  // configured means this is a cheap no-op.
+  const runThreats = async (): Promise<void> => {
+    try {
+      const result = await evaluateThreatAlerts({ settings: ctx.settings, audit: ctx.audit });
+      if (result.fired > 0) ctx.logger.info(result, "threat webhook alerts fired");
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "threat alert evaluation failed",
+      );
+    }
+  };
   void runSchedules();
   void runMetering();
   void runPower();
+  void runThreats();
   const scheduleTimer = setInterval(() => {
     void runSchedules();
   }, scheduleIntervalMs);
@@ -355,7 +475,10 @@ export function startHomelabTickers(
   const powerTimer = setInterval(() => {
     void runPower();
   }, healthIntervalMs);
-  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer]) {
+  const threatTimer = setInterval(() => {
+    void runThreats();
+  }, healthIntervalMs);
+  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer]) {
     (timer as unknown as { unref?: () => void }).unref?.();
   }
   app.addHook("onClose", async () => {
@@ -363,18 +486,24 @@ export function startHomelabTickers(
     clearInterval(healthTimer);
     clearInterval(meteringTimer);
     clearInterval(powerTimer);
+    clearInterval(threatTimer);
   });
 }
 
 export function startIamSweep(app: FastifyInstance, ctx: CoreContext, intervalMs = SESSION_CLEANUP_INTERVAL_MS): void {
   // Prunes expired IAM rows and revokes leftover Guacamole permissions.
   // Authorization never depends on this (resolution ignores expired rows);
-  // it only reclaims access that already stopped working.
+  // it only reclaims access that already stopped working. Also prunes stale
+  // registration password hashes so pending credentials do not accumulate.
   const run = async (): Promise<void> => {
     try {
       const result = await sweepExpiredVmAccess(ctx);
       if (result.revoked > 0 || result.errors > 0) {
         ctx.logger.info({ revoked: result.revoked, errors: result.errors }, "iam expiry sweep completed");
+      }
+      const pruned = await ctx.registration.pruneStaleRequests();
+      if (pruned.pruned > 0 || pruned.scrubbed > 0) {
+        ctx.logger.info(pruned, "registration hash retention sweep completed");
       }
     } catch (err) {
       ctx.logger.warn(

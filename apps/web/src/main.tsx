@@ -16,14 +16,22 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
   render(): ReactNode {
     if (this.state.error) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-8 max-w-md text-center">
-            <h1 className="text-xl font-semibold text-red-300 mb-2">Something broke rendering this page</h1>
-            <p className="text-sm text-slate-400 mb-4">
+        <div className="pv-shell" style={{ alignItems: "center", justifyContent: "center" }}>
+          <div className="pv-panel pv-page-narrow" style={{ textAlign: "center" }}>
+            <h1 className="pv-title" style={{ marginBottom: 8 }}>Something broke rendering this page</h1>
+            <p className="pv-sub">
               ProxVM hit an unexpected interface error. Your data is safe — this is display-only.
             </p>
+            {this.state.error?.message && (
+              <details style={{ textAlign: "left", fontSize: "0.76rem", color: "var(--pv-text-3)", marginBottom: 16 }}>
+                <summary style={{ cursor: "pointer" }}>Technical details (for the administrator)</summary>
+                <code className="pv-mono" style={{ display: "block", marginTop: 8, padding: 8, background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6, wordBreak: "break-all", userSelect: "all" }}>
+                  {this.state.error.message}
+                </code>
+              </details>
+            )}
             <button
-              className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 rounded"
+              className="pv-btn pv-btn-primary"
               onClick={() => window.location.reload()}
             >
               Reload the page

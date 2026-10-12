@@ -1,6 +1,42 @@
 import { promises as dns } from "node:dns";
+import net from "node:net";
 import { AppError } from "../util/errors.js";
 import type { SettingsService } from "./settings.js";
+import { fetchWithSsrfGuard } from "../util/ssrf.js";
+
+/** True for loopback, unspecified, link-local, and RFC 1918/unique-local ranges. */
+export function isNonPublicIp(ip: string): boolean {
+  if (!net.isIP(ip)) return false;
+  if (net.isIPv4(ip)) {
+    const n = ip.split(".").reduce((acc, p) => acc * 256 + Number(p), 0) >>> 0;
+    const inRange = (base: string, prefix: number): boolean => {
+      const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+      const b = base.split(".").reduce((acc, p) => acc * 256 + Number(p), 0) >>> 0;
+      return ((n & mask) >>> 0) === ((b & mask) >>> 0);
+    };
+    return (
+      inRange("127.0.0.0", 8) ||
+      inRange("0.0.0.0", 8) ||
+      inRange("10.0.0.0", 8) ||
+      inRange("172.16.0.0", 12) ||
+      inRange("192.168.0.0", 16) ||
+      inRange("169.254.0.0", 16) ||
+      inRange("192.0.2.0", 24) ||
+      inRange("198.51.100.0", 24) ||
+      inRange("203.0.113.0", 24)
+    );
+  }
+  // IPv6: loopback, unspecified, link-local, unique-local.
+  const l = ip.toLowerCase();
+  return (
+    l === "::1" ||
+    l === "::" ||
+    l.startsWith("fe80:") ||
+    l.startsWith("fe80::") ||
+    l.startsWith("fc") ||
+    l.startsWith("fd")
+  );
+}
 
 export const CANONICAL_KEY = "app.canonical_domain";
 export const ALIASES_KEY = "app.domain_aliases";
@@ -133,17 +169,26 @@ export async function verifyDomainReachability(
   opts?: { timeoutMs?: number },
 ): Promise<DomainVerification> {
   const timeoutMs = opts?.timeoutMs ?? 8000;
+  // Domain verification must never probe infrastructure addresses: reject IP
+  // literals and resolved private/loopback/link-local ranges up front. This
+  // endpoint is admin-gated, but a compromised admin session must not become
+  // an internal port-scan oracle.
+  if (net.isIP(fqdn)) {
+    return { dnsOk: false, httpsOk: false, detail: "dns: IP literals are not valid domain names" };
+  }
   let dnsOk = false;
   let dnsDetail = "";
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const addrs = await dns.resolve(fqdn);
-      if (addrs.length > 0) {
+      const publicAddrs = addrs.filter((a) => !isNonPublicIp(a));
+      if (publicAddrs.length > 0) {
         dnsOk = true;
-        dnsDetail = `${addrs.length} address(es) resolve`;
+        dnsDetail = `${publicAddrs.length} public address(es) resolve`;
         break;
       }
-      dnsDetail = "no addresses returned";
+      dnsDetail = addrs.length > 0 ? "only non-public addresses resolve" : "no addresses returned";
+      break;
     } catch (err) {
       dnsDetail = err instanceof Error ? err.message.split(",")[0] ?? "lookup failed" : "lookup failed";
     }
@@ -157,7 +202,9 @@ export async function verifyDomainReachability(
     for (let attempt = 0; attempt < 3 && !httpsOk; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 4000));
       try {
-        const res = await fetch(`https://${fqdn}/api/health/live`, { signal: AbortSignal.timeout(timeoutMs) });
+        const res = await fetchWithSsrfGuard(`https://${fqdn}/api/health/live`, {
+          signal: AbortSignal.timeout(timeoutMs),
+        });
         httpsOk = res.ok;
         httpsDetail = httpsOk ? "login API reachable over TLS" : `HTTP ${res.status} from health endpoint`;
       } catch (err) {

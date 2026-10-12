@@ -10,6 +10,18 @@ import type { ProxmoxClient } from "../proxmox/client.js";
  * return traffic always passes (conntrack), so Guacamole-initiated RDP/SSH
  * keeps working while the guest itself cannot open anything new.
  *
+ * Egress posture with allowInternet (the default): the guest may use DNS and
+ * DHCP and reach the public internet, but cannot initiate anything toward
+ * local/private ranges (RFC 1918, link-local, loopback-as-destination).
+ * Rule ORDER is load-bearing — Proxmox evaluates first match wins:
+ * DNS/DHCP ACCEPTs come before the LAN DROPs (both servers live on the
+ * LAN), and the final ACCEPT-all sits last. With allowInternet off the
+ * guest gets DNS only (legacy behavior).
+ *
+ * Known limits: IPv4 only (the builder validates IPv4/CIDR); DHCP client
+ * traffic is narrowly allowed (UDP 67 out / 68 in) so DHCP guests keep
+ * their leases; ARP is L2 and untouched by these L3 rules.
+ *
  * Safety rules (load-bearing, do not relax without review):
  * - Opt-in per VM only. Nothing here ever touches datacenter/node/host config.
  * - applyIsolation refuses when the cluster firewall is disabled, because VM
@@ -38,6 +50,9 @@ export interface IsolationOptions {
   inboundPorts?: string[];
   /** DNS resolver the guest may use (UDP+TCP 53). Empty = no DNS. */
   allowDnsTo?: string;
+  /** Guest may use DHCP + reach the public internet, but not local/private
+   * ranges. Default true. False = DNS-only egress (legacy). */
+  allowInternet?: boolean;
   /** Extra custom rules appended after the generated ones. */
   extraRules?: IsolationRule[];
 }
@@ -51,6 +66,15 @@ export interface IsolationStatus {
 }
 
 const DEFAULT_INBOUND_PORTS = ["22", "3389", "5900:5910"];
+
+/** Destinations a guest may never initiate toward when allowInternet is on. */
+export const PRIVATE_EGRESS_RANGES = [
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "169.254.0.0/16",
+  "127.0.0.0/8",
+];
 
 /** Pure rule builder — unit-tested, no I/O. */
 export function buildIsolationRules(opts: IsolationOptions): IsolationRule[] {
@@ -82,6 +106,38 @@ export function buildIsolationRules(opts: IsolationOptions): IsolationRule[] {
         comment: `${PROXVM_RULE_COMMENT}: dns to ${opts.allowDnsTo}`,
       });
     }
+  }
+  if (opts.allowInternet !== false) {
+    // DHCP first: the servers live on the LAN, so these must precede the
+    // DROPs below. Narrow ports only — nothing else rides 67/68.
+    rules.push({
+      action: "ACCEPT",
+      type: "out",
+      proto: "udp",
+      dport: "67",
+      comment: `${PROXVM_RULE_COMMENT}: dhcp client`,
+    });
+    rules.push({
+      action: "ACCEPT",
+      type: "in",
+      proto: "udp",
+      dport: "68",
+      comment: `${PROXVM_RULE_COMMENT}: dhcp replies`,
+    });
+    for (const dest of PRIVATE_EGRESS_RANGES) {
+      rules.push({
+        action: "DROP",
+        type: "out",
+        dest,
+        comment: `${PROXVM_RULE_COMMENT}: no local network ${dest}`,
+      });
+    }
+    // Last: everything not dropped above is the public internet.
+    rules.push({
+      action: "ACCEPT",
+      type: "out",
+      comment: `${PROXVM_RULE_COMMENT}: internet (non-local)`,
+    });
   }
   for (const extra of opts.extraRules ?? []) {
     rules.push({ ...extra, comment: extra.comment ?? PROXVM_RULE_COMMENT });
@@ -245,7 +301,15 @@ export async function applyIsolation(
   for (const pos of stale) {
     await proxmox.deleteGuestFirewallRule(node, vmid, pos);
   }
-  for (const rule of rules) {
+  // Proxmox inserts each new rule at the TOP of the chain: an out-of-range
+  // pos demonstrably lands at pos 0 (probed live: pos=99 on a 13-rule chain
+  // came back as pos 0), and a pos equal to the chain length prepends too.
+  // So create LAST-first with explicit pos 0: every insert lands on top and
+  // the finished chain reads in builder order. Builder order IS evaluation
+  // order (first match wins) — getting this wrong silently inverts the
+  // entire ruleset, as happened once before this pin existed.
+  const reversed = [...rules].reverse();
+  for (const rule of reversed) {
     await proxmox.createGuestFirewallRule(node, vmid, {
       action: rule.action,
       type: rule.type,
@@ -255,6 +319,7 @@ export async function applyIsolation(
       source: rule.source,
       dest: rule.dest,
       comment: rule.comment,
+      pos: 0,
     });
   }
   await db.query("UPDATE vms SET firewall_isolated = TRUE, updated_at = NOW() WHERE id = $1", [vmId]);

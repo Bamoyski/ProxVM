@@ -4,7 +4,7 @@ import type { CoreContext } from "@proxvm/core";
 import {
   AppError,
   closePowerPeriod,
-  countUserVms,
+  countProvisionLoad,
   getUserQuota,
   isAdmin,
   createSchedule,
@@ -18,11 +18,19 @@ import {
   redeemShareLink,
   revokeShareLink,
   reconcileUserVmGuacAccess,
+  resolveEffectiveAccess,
+  allowedProtocols,
+  getProvisionCeilings,
+  mergeGrantScope,
+  validateIpOverride,
+  validateProvisionPolicy,
   resolveProvisionDefaults,
   resolveProvisionRequest,
   scanVmServices,
   selectUsableIpv4,
+  applyStartOnBoot,
   setScheduleEnabled,
+  startVmForLaunchIfStopped,
   storeVmServices,
   toPublicUser,
   type EnqueueJobData,
@@ -53,14 +61,19 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     return { user, allowed };
   };
 
-  app.post("/vms/provision", async (request, reply) => {
+  // Per-IP provision throttle (queue flood): legitimate operators provision a
+  // handful of VMs per hour; bursts above this are abuse or runaway scripts.
+  app.post("/vms/provision", { config: { rateLimit: { max: 30, timeWindow: "1 hour" } } }, async (request, reply) => {
     const actor = await app.requirePermission("vm.create")(request);
     // Hosting quotas: unset (null) means unlimited and this check vanishes.
     // Administrators are exempt — they manage the infrastructure itself.
+    // Fast-path gate (checked before body parsing so over-quota callers get
+    // 403 without a valid payload). Best-effort only: the authoritative
+    // check runs inside the reservation transaction below.
     if (!actor.roles.includes("ADMIN")) {
       const quota = await getUserQuota(ctx.db, actor.id);
-      if (quota !== null && (await countUserVms(ctx.db, actor.id)) >= quota) {
-        await ctx.audit.record({
+      if (quota !== null && (await countProvisionLoad(ctx.db, actor.id)) >= quota) {
+        await app.audit(request, {
           event: "QUOTA_DENIED",
           actorUserId: actor.id,
           actorUsername: actor.username,
@@ -89,18 +102,64 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       await app.requirePermission("vm.edit")(request);
     }
     const template = await ctx.templates.requireById(body.templateId as string);
-    const duplicate = await ctx.jobs.activeJobWithName(actor.id, body.name);
-    if (duplicate) {
-      throw AppError.conflict(
-        `You already have an active provisioning job for "${body.name}" (job ${duplicate.id.slice(0, 8)}, status ${duplicate.status}). Wait for it to finish or cancel it before submitting again.`,
-      );
-    }
+    // Central policy (ceilings + static-IP rules), enforced identically by
+    // the worker at execution time. Administrators are exempt, like quotas.
+    await validateProvisionPolicy(
+      { db: ctx.db, settings: ctx.settings },
+      { cpu: body.cpu, ramMb: body.ramMb, diskGb: body.diskGb, network: body.network ?? null },
+      { isAdmin: actor.roles.includes("ADMIN") },
+    );
+    // Atomic reservation: lock the requester's user row, then re-check the
+    // quota (owned VMs + in-flight jobs) and the duplicate-name guard before
+    // inserting the job row. Concurrent submits from any number of API
+    // instances serialize on the row lock, so two racing requests cannot both
+    // pass the same check. The job row itself is the reservation: terminal
+    // states and day-old stuck rows stop counting automatically.
     const request2 = { ...body, password: ctx.encrypt(body.password) };
-    const job = await ctx.jobs.create({
-      vmId: null,
-      request: request2 as unknown as Record<string, unknown>,
-      createdByUserId: actor.id,
-    });
+    const client = await ctx.db.connect();
+    let job: Awaited<ReturnType<typeof ctx.jobs.create>>;
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [actor.id]);
+      if (!actor.roles.includes("ADMIN")) {
+        const quota = await getUserQuota(client, actor.id);
+        if (quota !== null && (await countProvisionLoad(client, actor.id)) >= quota) {
+          // Roll back before auditing: the denial row must survive, and the
+          // failed reservation must not.
+          await client.query("ROLLBACK");
+          await app.audit(request, {
+            event: "QUOTA_DENIED",
+            actorUserId: actor.id,
+            actorUsername: actor.username,
+            detail: { quota, action: "provision" },
+          });
+          throw AppError.forbidden(
+            `VM limit reached (${quota}). Contact your administrator to raise your quota.`,
+          );
+        }
+      }
+      const duplicate = await ctx.jobs.activeJobWithName(actor.id, body.name, client);
+      if (duplicate) {
+        await client.query("ROLLBACK");
+        throw AppError.conflict(
+          `You already have an active provisioning job for "${body.name}" (job ${duplicate.id.slice(0, 8)}, status ${duplicate.status}). Wait for it to finish or cancel it before submitting again.`,
+        );
+      }
+      job = await ctx.jobs.create(
+        {
+          vmId: null,
+          request: request2 as unknown as Record<string, unknown>,
+          createdByUserId: actor.id,
+        },
+        client,
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
     try {
       await enqueueProvisioningJob(getQueue(), ctx.jobs, job.id, { attempt: 0 });
     } catch (err) {
@@ -110,7 +169,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       const message = err instanceof Error ? err.message : String(err);
       try {
         await ctx.jobs.updateStatus(job.id, "FAILED", message);
-        await ctx.audit.record({
+        await app.audit(request, {
           event: "PROVISIONING_FAILED",
           actorUserId: actor.id,
           actorUsername: actor.username,
@@ -122,7 +181,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       }
       throw err;
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "PROVISIONING_STARTED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -150,7 +209,8 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
 
   app.get("/vms", async (request) => {
     const user = await app.requireAuth(request);
-    const privileged = user.roles.some((r) => r === "ADMIN" || r === "OPERATOR");
+    const isAdminUser = user.roles.includes("ADMIN");
+    const privileged = isAdminUser || user.roles.includes("OPERATOR");
     let dbVms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
     if (privileged) {
       // Privacy-flagged VMs are invisible without a concrete grant, even here.
@@ -204,7 +264,11 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       });
     }
 
-    if (privileged) {
+    // Untracked cluster inventory (VMs ProxVM does not manage) is
+    // ADMIN-only: OPERATORs see the tracked fleet (privacy-filtered above)
+    // but not raw cluster enumeration, which can expose other tenants'
+    // infrastructure footprint.
+    if (isAdminUser) {
       const dbKeys = new Set(dbVms.map((v) => `${v.vmid}@${v.node}`));
       for (const res of resources) {
         if (Number(res.template ?? 0) === 1) continue;
@@ -277,6 +341,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         createdAt: vm.createdAt,
         private: vm.privacyFlag,
         vmClass: vm.vmClass,
+        startOnBoot: vm.startOnBoot,
         viewerAccess,
       },
       proxmox,
@@ -328,7 +393,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const upid = await client.start(vm.node, vm.vmid);
     if (upid) await client.waitForTask(vm.node, upid, 120000);
     await ctx.vms.updateStatus(vm.id, "running");
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_STARTED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -351,7 +416,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         : await client.shutdown(vm.node, vm.vmid);
     if (upid) await client.waitForTask(vm.node, upid, 120000);
     await ctx.vms.updateStatus(vm.id, "stopped");
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_STOPPED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -370,7 +435,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const client = await ctx.getProxmoxClient();
     const upid = await client.reboot(vm.node, vm.vmid);
     if (upid) await client.waitForTask(vm.node, upid, 180000);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_RESTARTED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -380,11 +445,27 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   });
 
   // -- One-click clone ------------------------------------------------------
-  app.post("/vms/:id/clone", async (request) => {
+  // Synchronous clone bypassed the provisioning quota path entirely: route it
+  // through the same quota gate so clones cannot exceed tenant VM limits.
+  app.post("/vms/:id/clone", { config: { rateLimit: { max: 10, timeWindow: "1 hour" } } }, async (request) => {
     const { id } = request.params as { id: string };
     const access = await resolveVmAccess(request, id);
     if (!access.allowed) throw AppError.forbidden();
     const user = await app.requirePermission("vm.create")(request);
+    if (!user.roles.includes("ADMIN")) {
+      const quota = await getUserQuota(ctx.db, user.id);
+      if (quota !== null && (await countProvisionLoad(ctx.db, user.id)) >= quota) {
+        await app.audit(request, {
+          event: "QUOTA_DENIED",
+          actorUserId: user.id,
+          actorUsername: user.username,
+          detail: { quota, action: "clone" },
+        });
+        throw AppError.forbidden(
+          `VM limit reached (${quota}). Contact your administrator to raise your quota.`,
+        );
+      }
+    }
     const body = z
       .object({
         name: z.string().min(1).max(128),
@@ -419,7 +500,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       createdByUserId: user.id,
     });
     await ctx.vms.setAccess(record.id, user.id);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_CLONED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -457,7 +538,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       defaultDiskGb: 20,
       supportedProtocols: [osType === "windows" ? "rdp" : "ssh"] as ("ssh" | "rdp" | "vnc")[],
     });
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "TEMPLATE_CREATED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -467,11 +548,16 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   });
 
   // -- Live/offline migration --------------------------------------------------
-  app.post("/vms/:id/migrate", async (request) => {
+  // Async by design: POST only kicks the Proxmox task off and returns 202
+  // immediately. Migrations routinely exceed Cloudflare's 100s proxy timeout
+  // (524) and must never hold an HTTP request open — the UI polls
+  // GET /vms/:id/migration below, which finalizes tracking + audit on
+  // observed completion. Never await task completion here.
+  app.post("/vms/:id/migrate", async (request, reply) => {
     const { id } = request.params as { id: string };
     const access = await resolveVmAccess(request, id);
     if (!access.allowed) throw AppError.forbidden();
-    const user = await app.requirePermission("vm.manage")(request);
+    await app.requirePermission("vm.manage")(request);
     const body = z
       .object({ target: z.string().min(1).max(128), online: z.boolean().optional() })
       .parse(request.body);
@@ -498,16 +584,56 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       );
     }
     const upid = await client.migrate(vm.node, vm.vmid, body.target, online, true);
-    if (upid) await client.waitForTask(vm.node, upid, 1800000);
-    await ctx.vms.updateNode(vm.id, body.target);
-    await ctx.audit.record({
+    return reply
+      .status(202)
+      .send({ accepted: true, upid, node: body.target, online, detachedIso });
+  });
+
+  // -- Migration status (async completion for POST /migrate) -------------------
+  // Stateless: the Proxmox UPID + intended target ride along as query params,
+  // so polling survives API restarts. Finalization (tracked-node update +
+  // audit) runs exactly once — guarded by the tracked node already matching
+  // the target. Failures never move the tracked node.
+  app.get("/vms/:id/migration", async (request) => {
+    const { id } = request.params as { id: string };
+    const access = await resolveVmAccess(request, id);
+    if (!access.allowed) throw AppError.forbidden();
+    const user = await app.requirePermission("vm.manage")(request);
+    const query = z
+      .object({
+        upid: z.string().min(1).max(256),
+        target: z.string().min(1).max(128),
+        online: z.coerce.boolean().optional(),
+        detachedIso: z.string().max(512).optional(),
+      })
+      .parse(request.query);
+    const vm = await ctx.vms.requireById(id);
+    if (vm.node === query.target) return { state: "done", node: vm.node };
+    const client = await ctx.getProxmoxClient();
+    const status = await client.taskStatus(vm.node, query.upid);
+    if (status.status !== "stopped") return { state: "running", upid: query.upid };
+    const exit = status.exitstatus ?? "";
+    if (exit && exit !== "OK") {
+      return { state: "error", exitStatus: exit, upid: query.upid };
+    }
+    const from = vm.node;
+    const detachedIso = query.detachedIso ? query.detachedIso.split(",").filter(Boolean) : [];
+    await ctx.vms.updateNode(vm.id, query.target);
+    await app.audit(request, {
       event: "VM_MIGRATED",
       actorUserId: user.id,
       actorUsername: user.username,
       vmId: vm.id,
-      detail: { from: vm.node, to: body.target, online, withLocalDisks: true, detachedIso },
+      detail: {
+        from,
+        to: query.target,
+        online: query.online ?? vm.status === "running",
+        withLocalDisks: true,
+        detachedIso,
+        upid: query.upid,
+      },
     });
-    return { ok: true, node: body.target, detachedIso };
+    return { state: "done", node: query.target, detachedIso };
   });
 
   // -- Resource graphs ---------------------------------------------------------
@@ -548,16 +674,16 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
           upid = await client.start(vm.node, vm.vmid);
           if (upid) await client.waitForTask(vm.node, upid, 120000);
           await ctx.vms.updateStatus(vm.id, "running");
-          await ctx.audit.record({ event: "VM_STARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+          await app.audit(request, { event: "VM_STARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
         } else if (body.action === "stop") {
           upid = await client.shutdown(vm.node, vm.vmid);
           if (upid) await client.waitForTask(vm.node, upid, 120000);
           await ctx.vms.updateStatus(vm.id, "stopped");
-          await ctx.audit.record({ event: "VM_STOPPED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+          await app.audit(request, { event: "VM_STOPPED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
         } else {
           upid = await client.reboot(vm.node, vm.vmid);
           if (upid) await client.waitForTask(vm.node, upid, 180000);
-          await ctx.audit.record({ event: "VM_RESTARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+          await app.audit(request, { event: "VM_RESTARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
         }
         results.push({ vmId, ok: true });
       } catch (err) {
@@ -595,7 +721,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     if (!access.allowed) throw AppError.forbidden("No access to this VM");
     await ctx.vms.requireById(body.vmId);
     const schedule = await createSchedule(ctx.db, { ...body, createdBy: user.id });
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SCHEDULE_CREATED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -614,7 +740,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const access = await resolveVmAccess(request, schedule.vmId);
     if (!access.allowed) throw AppError.forbidden("No access to this VM");
     await deleteSchedule(ctx.db, id);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SCHEDULE_DELETED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -665,7 +791,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       maxUses: body.maxUses ?? null,
       createdBy: user.id,
     });
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SHARE_CREATED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -690,7 +816,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       throw AppError.forbidden("Only the creator or an administrator can revoke this link");
     }
     await revokeShareLink(ctx.db, id);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SHARE_REVOKED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -710,6 +836,17 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         return reply.status(410).send({ code: "GONE", message: "This share link is invalid, expired, revoked, or used up." });
       }
       const vm = await ctx.vms.requireById(link.vmId);
+      // A redemption is a launch attempt: a stopped VM is started first, on
+      // the same audit trail as the authenticated launch endpoint.
+      const autoStarted = await startVmForLaunchIfStopped(await ctx.getProxmoxClient(), vm);
+      if (autoStarted) {
+        await ctx.vms.updateStatus(vm.id, "running");
+        await app.audit(request, {
+          event: "VM_AUTO_STARTED",
+          vmId: vm.id,
+          detail: { reason: "share_redeem", protocol: link.protocol, shareId: link.id },
+        });
+      }
       // The link rides the creator's Guacamole identity: mint a fresh token
       // now so the shared URL itself never contains a Guacamole credential.
       // If the creator lost Guacamole access, shares die with it.
@@ -731,17 +868,20 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       if (result.mode !== "direct") {
         return reply.status(502).send({ code: "GUACAMOLE_ERROR", message: "Guacamole direct launch is unavailable right now." });
       }
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "SHARE_REDEEMED",
         vmId: vm.id,
-        detail: { shareId: link.id, protocol: link.protocol },
+        detail: { shareId: link.id, protocol: link.protocol, autoStarted },
       });
+      // The redirect target carries a reusable Guacamole session token.
+      reply.header("Cache-Control", "no-store");
       return reply.redirect(result.url);
     },
   );
 
   // -- Service discovery ---------------------------------------------------------------
-  app.post("/discovery/run", async (request) => {
+  // Synchronous full-subnet scan: expensive by design, tightly throttled.
+  app.post("/discovery/run", { config: { rateLimit: { max: 10, timeWindow: "1 hour" } } }, async (request) => {
     const user = await app.requirePermission("proxmox.read")(request);
     const body = z.object({ vmId: z.string().uuid().optional() }).parse(request.body ?? {});
     const privileged = user.roles.includes("ADMIN") || user.roles.includes("OPERATOR");
@@ -768,6 +908,9 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const vms = privileged ? await ctx.vms.list() : await ctx.vms.listAssignedToUser(user.id);
     const out: Array<{ vmId: string; services: Array<{ port: number; service: string }> }> = [];
     for (const vm of vms) {
+      // Privacy-flagged VMs stay invisible without a concrete grant, even to
+      // privileged list callers — same rule as GET /vms.
+      if (privileged && vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) continue;
       const services = await listVmServices(ctx.db, vm.id);
       if (services.length) out.push({ vmId: vm.id, services: services.map(({ port, service }) => ({ port, service })) });
     }
@@ -789,6 +932,18 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       .parse(request.body);
 
     if (body.cpu !== undefined || body.ramMb !== undefined) {
+      // Same ceilings as provisioning: non-admin resizes cannot exceed them.
+      if (!user.roles.includes("ADMIN")) {
+        const ceilings = await getProvisionCeilings({ db: ctx.db, settings: ctx.settings });
+        if (body.cpu !== undefined && ceilings.maxCpu !== null && body.cpu > ceilings.maxCpu) {
+          throw AppError.validation(`CPU request (${body.cpu}) exceeds the configured maximum (${ceilings.maxCpu})`);
+        }
+        if (body.ramMb !== undefined && ceilings.maxRamMb !== null && body.ramMb > ceilings.maxRamMb) {
+          throw AppError.validation(
+            `RAM request (${body.ramMb} MB) exceeds the configured maximum (${ceilings.maxRamMb} MB)`,
+          );
+        }
+      }
       const client = await ctx.getProxmoxClient();
       const updates: Record<string, unknown> = {};
       if (body.cpu !== undefined) updates.cores = body.cpu;
@@ -812,8 +967,16 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
           const target = await ctx.users.findById(userId);
           if (!target) continue;
           const protocols = await syncGrantProtocols(vm.id, target.id, target.username);
-          await ctx.vms.replaceAccess(vm.id, target.id, { protocols: null, expiresAt: null, createdBy: user.id });
-          await ctx.audit.record({
+          // Preserve an existing direct grant's scope: re-listing a user
+          // must not silently widen scoped protocols (or wipe an expiry)
+          // into a permanent all-protocol grant.
+          const existing = entries.find((e) => e.source === "direct" && e.userId === target.id);
+          const scope = mergeGrantScope(
+            existing ? { protocols: existing.protocols, expiresAt: existing.expiresAt } : null,
+            { protocols: null, expiresAt: null },
+          );
+          await ctx.vms.replaceAccess(vm.id, target.id, { ...scope, createdBy: user.id });
+          await app.audit(request, {
             event: "VM_ACCESS_GRANTED",
             actorUserId: user.id,
             actorUsername: user.username,
@@ -827,7 +990,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         if (!body.assignToUserIds.includes(entry.userId)) {
           await ctx.guac.revokeVmAccess(vm.id, entry.userId, guacDb);
           await ctx.vms.revokeAccess(vm.id, entry.userId);
-          await ctx.audit.record({
+          await app.audit(request, {
             event: "VM_ACCESS_REVOKED",
             actorUserId: user.id,
             actorUsername: user.username,
@@ -837,7 +1000,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         }
       }
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_EDITED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -939,7 +1102,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         { vmId: vm.id, targetUserId: target.id, error: message },
         "vm access grant failed during Guacamole sync; vm_access row rolled back",
       );
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "VM_ACCESS_GRANTED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -948,7 +1111,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       });
       throw err;
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_ACCESS_GRANTED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -963,7 +1126,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       },
     });
     if (expiresAt) {
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "TEMPORARY_ACCESS_GRANTED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -1013,14 +1176,46 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     if (await ctx.vms.hasAccess(vm.id, target.id)) {
       return reply.status(409).send({ code: "CONFLICT", message: "That user already has access; ask a manager to adjust it" });
     }
+    // Delegation policy: managers (effective vm.edit) and the VM's owner may
+    // grant anything, including permanent access. Anyone else holds only a
+    // delegated right: the invite must expire within 24 hours and may not
+    // exceed the inviter's own protocol reach on this VM. This keeps the
+    // owner-invite workflow (including on private VMs) while closing
+    // invite-chain persistence by mere grantees.
+    const MAX_DELEGATED_INVITE_MS = 24 * 3600 * 1000;
+    const inviterEffective = await resolveEffectiveAccess(ctx.db, inviter.id);
+    const canManage = inviterEffective.permissions.has("vm.edit");
+    const isOwner = vm.createdByUserId !== null && vm.createdByUserId === inviter.id;
     let expiresAt: Date | null = null;
-    if (body.expiresAt !== undefined) {
+    let protocols: string[] | null = body.protocols !== undefined ? [...new Set(body.protocols)] : null;
+    if (!canManage && !isOwner) {
+      if (body.expiresAt === undefined) {
+        throw AppError.forbidden("Delegated invites require an expiry within 24 hours; managers may grant permanent access");
+      }
+      expiresAt = new Date(body.expiresAt);
+      if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+        throw AppError.validation("expiresAt must be a future date-time");
+      }
+      if (expiresAt.getTime() - Date.now() > MAX_DELEGATED_INVITE_MS) {
+        throw AppError.forbidden("Delegated invites last at most 24 hours; managers may grant longer access");
+      }
+      const own = allowedProtocols(inviterEffective, vm.id);
+      if (own !== null) {
+        if (own.length === 0) {
+          throw AppError.forbidden("You have no protocol access on this VM to delegate");
+        }
+        if (protocols === null) protocols = [...own];
+        const outside = protocols.filter((p) => !own.includes(p));
+        if (outside.length > 0) {
+          throw AppError.forbidden(`You cannot delegate protocol(s) you do not hold: ${outside.join(", ")}`);
+        }
+      }
+    } else if (body.expiresAt !== undefined) {
       expiresAt = new Date(body.expiresAt);
       if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
         throw AppError.validation("expiresAt must be a future date-time");
       }
     }
-    const protocols = body.protocols !== undefined ? [...new Set(body.protocols)] : null;
     await ctx.vms.replaceAccess(vm.id, target.id, { protocols, expiresAt, createdBy: inviter.id });
     // Best-effort Guacamole sync (group-grant philosophy, NOT the managed
     // POST /access rollback): the grant row is the invite itself and must
@@ -1039,7 +1234,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         "vm invite Guacamole sync deferred; vm_access row kept",
       );
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_ACCESS_GRANTED",
       actorUserId: inviter.id,
       actorUsername: inviter.username,
@@ -1055,7 +1250,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       },
     });
     if (expiresAt) {
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "TEMPORARY_ACCESS_GRANTED",
         actorUserId: inviter.id,
         actorUsername: inviter.username,
@@ -1073,11 +1268,13 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     if (!z.string().uuid().safeParse(userId).success) {
       return reply.status(400).send({ code: "VALIDATION_ERROR", message: "userId must be a valid UUID" });
     }
-    // Inviters may withdraw their own invite without vm.edit; everything
-    // else goes through the managed path below.
+    // Inviters may withdraw their own invite without vm.edit — but only while
+    // they still hold access themselves. A revoked inviter keeps no lingering
+    // write primitive over the VM.
+    // Everything else goes through the managed path below.
     const entries = await ctx.vms.listAccessEntries(vm.id);
     const ownInvite = entries.find((e) => e.source === "direct" && e.userId === userId && e.createdBy === actor.id);
-    if (!ownInvite) {
+    if (!ownInvite || !(await ctx.vms.hasAccessOrOwns(vm.id, actor.id))) {
       await app.requirePermission("vm.edit")(request);
       if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, actor.id))) {
         throw AppError.forbidden("This VM is privacy-flagged: access management requires a direct grant");
@@ -1099,7 +1296,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
         { vmId: vm.id, targetUserId: userId, error: message },
         "vm access revoke failed during Guacamole sync; vm_access row KEPT for safe retry",
       );
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "VM_ACCESS_REVOKED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -1110,7 +1307,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     }
     await ctx.vms.revokeAccess(vm.id, userId);
     if (assigned) {
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "VM_ACCESS_REVOKED",
         actorUserId: actor.id,
         actorUsername: actor.username,
@@ -1136,8 +1333,21 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     if (!granted && !actor.roles.includes("ADMIN")) {
       throw AppError.forbidden("Toggling privacy requires a direct grant for this VM");
     }
+    if (!body.enabled) {
+      // De-privatizing exposes the VM to every ADMIN/OPERATOR via the list
+      // bypass, so clearing the flag is a management action: owner, ADMIN,
+      // or an effective vm.edit holder. Enabling stays visibility-based so
+      // regular users can protect their own VMs.
+      const isOwner = vm.createdByUserId !== null && vm.createdByUserId === actor.id;
+      if (!isOwner && !actor.roles.includes("ADMIN")) {
+        const effective = await resolveEffectiveAccess(ctx.db, actor.id);
+        if (!effective.permissions.has("vm.edit")) {
+          throw AppError.forbidden("Clearing the privacy flag requires vm.edit, ownership, or ADMIN");
+        }
+      }
+    }
     await ctx.vms.setPrivacyFlag(vm.id, body.enabled);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: body.enabled ? "PRIVACY_ENABLED" : "PRIVACY_DISABLED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -1160,7 +1370,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     }
     const body = z.object({ vmClass: z.enum(["server", "user"]) }).parse(request.body);
     await ctx.vms.setVmClass(vm.id, body.vmClass);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_EDITED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -1168,6 +1378,30 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       detail: { vmClass: body.vmClass },
     });
     return { ok: true, vmClass: body.vmClass };
+  });
+
+  // -- Start on host boot ------------------------------------------------------
+  // Manages Proxmox's native `onboot` guest flag: flagged guests start
+  // automatically when their node boots. Needs vm.edit (it alters power
+  // behavior); the Proxmox write happens first so a failed flag change
+  // never leaves the DB disagreeing with Proxmox.
+  app.patch("/vms/:id/start-on-boot", async (request) => {
+    const { id } = request.params as { id: string };
+    const user = await app.requirePermission("vm.edit")(request);
+    const vm = await ctx.vms.requireById(id);
+    if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) {
+      throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
+    }
+    const body = z.object({ enabled: z.boolean() }).parse(request.body);
+    await applyStartOnBoot(await ctx.getProxmoxClient(), ctx.vms, vm, body.enabled);
+    await app.audit(request, {
+      event: "VM_START_ON_BOOT_CHANGED",
+      actorUserId: user.id,
+      actorUsername: user.username,
+      vmId: vm.id,
+      detail: { enabled: body.enabled },
+    });
+    return { ok: true, startOnBoot: body.enabled };
   });
 
   app.put("/vms/:id/ip", async (request) => {
@@ -1178,8 +1412,23 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
     }
     const body = ipOverrideSchema.parse(request.body);
-    await ctx.vms.updateIp(vm.id, body.ip);
-    await ctx.audit.record({
+    // Same allowlist discipline as provisioning: tenants cannot point VMs at
+    // infrastructure or foreign-subnet addresses through the override form.
+    await validateIpOverride(
+      { db: ctx.db, settings: ctx.settings },
+      body.ip,
+      { isAdmin: user.roles.includes("ADMIN"), excludeVmId: vm.id },
+    );
+    try {
+      // Manual operator override counts as statically assigned.
+      await ctx.vms.updateIp(vm.id, body.ip, { static: true });
+    } catch (err) {
+      if (err && typeof err === "object" && (err as { code?: string }).code === "23505") {
+        throw AppError.conflict(`IP address ${body.ip} is already recorded on another VM`);
+      }
+      throw err;
+    }
+    await app.audit(request, {
       event: "VM_EDITED",
       actorUserId: user.id,
       actorUsername: user.username,
@@ -1214,7 +1463,14 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     if (!candidate) {
       return { detected: false, reason: "Guest agent reported no usable LAN IPv4 address", interfaces: agent.interfaces };
     }
-    await ctx.vms.updateIp(vm.id, candidate);
+    try {
+      await ctx.vms.updateIp(vm.id, candidate);
+    } catch (err) {
+      if (err && typeof err === "object" && (err as { code?: string }).code === "23505") {
+        return { detected: false, reason: `Guest reports ${candidate}, but that address is already recorded on another VM` };
+      }
+      throw err;
+    }
     if (!vm.osName) {
       const osinfo = await client.agentOsInfo(vm.node, vm.vmid);
       if (osinfo?.prettyName) await ctx.vms.updateOsInfo(vm.id, osinfo.prettyName);
@@ -1280,7 +1536,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     // so no dangling assignments survive the VM. Guacamole connections were
     // deleted above via deleteVmResources, which removes all per-user grants.
     const removedAccess = await ctx.vms.revokeAllAccess(vm.id);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "VM_DELETED",
       actorUserId: user.id,
       actorUsername: user.username,

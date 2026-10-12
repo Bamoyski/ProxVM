@@ -69,6 +69,7 @@ export class UsersService {
       `SELECT COUNT(DISTINCT u.id)::text AS c
        FROM users u
        INNER JOIN user_roles ur ON ur.user_id = u.id
+         AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
        INNER JOIN roles r ON r.id = ur.role_id
        WHERE r.name = 'ADMIN' AND u.active = true AND u.id <> $1`,
       [excludeUserId ?? "00000000-0000-0000-0000-000000000000"],
@@ -131,6 +132,7 @@ export class UsersService {
       `SELECT u.*, r.name AS role_name
        FROM users u
        LEFT JOIN user_roles ur ON ur.user_id = u.id
+         AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
        LEFT JOIN roles r ON r.id = ur.role_id
        WHERE u.id = $1`,
       [id],
@@ -145,6 +147,7 @@ export class UsersService {
       `SELECT u.*, r.name AS role_name
        FROM users u
        LEFT JOIN user_roles ur ON ur.user_id = u.id
+         AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
        LEFT JOIN roles r ON r.id = ur.role_id
        ${where}`,
       params,
@@ -156,6 +159,7 @@ export class UsersService {
       `SELECT u.*, r.name AS role_name
        FROM users u
        LEFT JOIN user_roles ur ON ur.user_id = u.id
+         AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
        LEFT JOIN roles r ON r.id = ur.role_id
        ORDER BY u.created_at ASC`,
     );
@@ -178,19 +182,26 @@ export class UsersService {
         remaining: Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000),
       };
     }
-    const attempts = user.failedAttempts + 1;
-    if (attempts >= maxAttempts) {
-      await this.db.query(
-        "UPDATE users SET failed_attempts = $2, locked_until = NOW() + ($3 || ' minutes')::interval, updated_at = NOW() WHERE id = $1",
-        [user.id, attempts, lockMinutes],
-      );
+    // Atomic increment: concurrent guesses serialize on the row instead of
+    // all reading the same counter and losing increments.
+    const updated = await this.db.query<{ failed_attempts: number; locked_until: Date | null }>(
+      `UPDATE users SET
+         failed_attempts = failed_attempts + 1,
+         locked_until = CASE WHEN failed_attempts + 1 >= $2 THEN NOW() + ($3 || ' minutes')::interval ELSE locked_until END,
+         updated_at = NOW()
+       WHERE id = $1
+       RETURNING failed_attempts, locked_until`,
+      [user.id, maxAttempts, lockMinutes],
+    );
+    const row = updated.rows[0]!;
+    const nowLocked = !!row.locked_until && row.locked_until.getTime() > Date.now();
+    if (nowLocked) {
+      // A lock that just engaged revokes live sessions: lockout as incident
+      // response must actually end access, not merely block new logins.
+      await this.db.query("UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL", [user.id]);
       return { locked: true, remaining: lockMinutes };
     }
-    await this.db.query(
-      "UPDATE users SET failed_attempts = $2, updated_at = NOW() WHERE id = $1",
-      [user.id, attempts],
-    );
-    return { locked: false, remaining: maxAttempts - attempts };
+    return { locked: false, remaining: Math.max(0, maxAttempts - row.failed_attempts) };
   }
 
   async clearFailedLogins(username: string): Promise<void> {
@@ -209,10 +220,12 @@ export class UsersService {
   }
 
   async changePassword(userId: string, passwordHash: string): Promise<void> {
-    await this.db.query("UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1", [
-      userId,
-      passwordHash,
-    ]);
+    // Proving knowledge of a new valid password clears any brute-force
+    // residue: staying locked after a successful change would be wrong.
+    await this.db.query(
+      "UPDATE users SET password_hash = $2, failed_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = $1",
+      [userId, passwordHash],
+    );
   }
 }
 

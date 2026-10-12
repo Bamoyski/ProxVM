@@ -107,7 +107,7 @@ export async function contentRoutes(app: FastifyInstance, opts: { ctx: CoreConte
         await ctx.settings.set(key, value, { category: "content" });
       }
     }
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,

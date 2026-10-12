@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, explainDenial } from "../api.js";
-import { PageTitle, StatusBadge } from "../components/ui.js";
+import { PageTitle, StatusBadge, Empty, Btn } from "../components/ui.js";
 
 interface GuacConnection {
   id: string;
@@ -34,43 +34,48 @@ export default function Guacamole() {
   };
 
   return (
-    <div>
-      <PageTitle title="Guacamole Connections" />
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+    <div className="pv-page">
+      <PageTitle
+        title="Guacamole connections"
+        description="Remote-access endpoints managed by ProxVM. Each opens an authenticated session without exposing guest ports."
+      />
+      <div className="pv-table-wrap">
+        <table className="pv-table">
           <thead>
-            <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
-              <th className="py-2">Status</th>
-              <th className="py-2">VM</th>
-              <th className="py-2">Protocol</th>
-              <th className="py-2">Endpoint</th>
-              <th className="py-2">Username</th>
-              <th className="py-2">Connection name</th>
-              <th className="py-2">Last verified</th>
-              <th className="py-2">Actions</th>
+            <tr>
+              <th>Status</th>
+              <th>VM</th>
+              <th>Protocol</th>
+              <th>Endpoint</th>
+              <th>Username</th>
+              <th>Connection name</th>
+              <th>Last verified</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {(data?.connections ?? []).map((c) => (
-              <tr key={c.id} className="border-b border-slate-800/50 hover:bg-slate-900/50">
-                <td className="py-2"><StatusBadge status={c.status} /></td>
-                <td>{c.vmName} <span className="text-xs text-slate-500 font-mono">({c.vmid}@{c.node})</span></td>
-                <td className="uppercase">{c.protocol}</td>
-                <td className="font-mono text-xs">{c.hostname}:{c.port}</td>
-                <td className="font-mono text-xs">{c.username}</td>
-                <td className="font-mono text-xs text-slate-400">{c.guacConnectionName}</td>
-                <td className="text-xs text-slate-500">{c.lastVerifiedAt ? new Date(c.lastVerifiedAt).toLocaleString() : "never"}</td>
+              <tr key={c.id}>
+                <td><StatusBadge status={c.status} /></td>
+                <td>{c.vmName} <span className="pv-mono" style={{ color: "var(--pv-text-3)" }}>({c.vmid}@{c.node})</span></td>
+                <td className="pv-mono" style={{ textTransform: "uppercase" }}>{c.protocol}</td>
+                <td className="pv-mono">{c.hostname}:{c.port}</td>
+                <td className="pv-mono">{c.username}</td>
+                <td className="pv-mono" style={{ color: "var(--pv-text-2)" }}>{c.guacConnectionName}</td>
+                <td style={{ color: "var(--pv-text-2)" }}>{c.lastVerifiedAt ? new Date(c.lastVerifiedAt).toLocaleString() : "never"}</td>
                 <td>
-                  <button onClick={() => void launch(c.vmId, c.protocol)} className="px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500">
-                    OPEN
-                  </button>
+                  <Btn size="sm" kind="primary" onClick={() => void launch(c.vmId, c.protocol)}>
+                    Open
+                  </Btn>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {!data?.connections.length && <div className="text-sm text-slate-500 py-4">No Guacamole connections. They are created automatically when a VM is provisioned.</div>}
       </div>
+      {!data?.connections.length && (
+        <Empty title="No Guacamole connections" body="They are created automatically when a VM is provisioned." />
+      )}
     </div>
   );
 }

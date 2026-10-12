@@ -217,7 +217,9 @@ describe("api foundation", () => {
       url: "/api/auth/login",
       payload: { username: "lockme", password: "nope" },
     });
-    expect(locked.statusCode).toBe(423);
+    // Enumeration-hardened: locked accounts get the same generic 401 as bad passwords.
+    expect(locked.statusCode).toBe(401);
+    expect(locked.json()).toMatchObject({ code: "UNAUTHORIZED", message: "Invalid username or password" });
     await app.close();
   });
 

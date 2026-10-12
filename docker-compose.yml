@@ -3,8 +3,21 @@ services:
     build:
       context: .
       dockerfile: docker/web.Dockerfile
+    # NOTE: the official nginx image cannot run read-only / cap-dropped: its
+    # entrypoint chowns cache dirs at boot (needs CHOWN) and rewrites
+    # /etc/nginx templates (needs a writable rootfs). Hardening here means
+    # rebuilding on the unprivileged nginxinc/nginx-unprivileged image
+    # instead — tracked as follow-up, not attempted blind.
+    mem_limit: 128m
+    pids_limit: 64
     ports:
       - "8080:80"
+    environment:
+      # HSTS is opt-in. Leave empty for HTTP-only installs (browsers ignore
+      # HSTS over plain HTTP). Once a valid certificate fronts this service,
+      # set the whole add_header line, e.g.
+      #   PROXVM_HSTS_HEADER=add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+      PROXVM_HSTS_HEADER: "${PROXVM_HSTS_HEADER:-}"
     depends_on:
       - api
     restart: unless-stopped
@@ -13,10 +26,29 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+    # Non-root is intentionally NOT set: the config volume is root-owned on
+    # fresh installs and the API must write it during setup. Instead: no new
+    # privileges, no caps, read-only rootfs, bounded memory/processes. To go
+    # non-root, chown the volume to 1000:1000 once, then add `user: "1000:1000"`.
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 1g
+    pids_limit: 256
     environment:
       PROXVM_CONFIG_DIR: /data/.proxvm
       PROXVM_PORT: "4000"
       PROXVM_WEB_ORIGIN: ""
+      # The API sits behind this compose file's nginx, which appends the real
+      # client IP to X-Forwarded-For. Only docker-assigned ranges plus
+      # loopback are trusted: in this topology the only XFF-supplying peer is
+      # the nginx container itself. LAN (192.168.x) clients reach the API
+      # exclusively through nginx, so they are NOT trusted to supply their
+      # own X-Forwarded-For — spoofed headers from the LAN are ignored.
+      # Override in .env only if your topology differs.
+      PROXVM_TRUST_PROXY: "${PROXVM_TRUST_PROXY:-172.16.0.0/12,10.0.0.0/8,127.0.0.1/32,::1/128}"
       NODE_ENV: production
       # Cloudflare domain automation. Values come from the local .env file
       # (gitignored, never committed); empty means "use the UI settings".
@@ -27,7 +59,11 @@ services:
     volumes:
       - proxvm-config:/data/.proxvm
     ports:
-      - "4000:4000"
+      # Loopback-only: the API is reached through nginx (:8080), never
+      # directly. Publishing 0.0.0.0:4000 would bypass the proxy (and its
+      # JSON error pages) and expose session cookies over plaintext HTTP to
+      # the whole network. For direct LAN access, front with TLS instead.
+      - "127.0.0.1:4000:4000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,42 +76,18 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     command: ["node", "apps/worker/dist/index.js"]
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 1g
+    pids_limit: 256
     environment:
       PROXVM_CONFIG_DIR: /data/.proxvm
       NODE_ENV: production
     volumes:
       - proxvm-config:/data/.proxvm
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-
-  overwatch:
-    build:
-      context: .
-      dockerfile: docker/overwatch.Dockerfile
-    environment:
-      PROXVM_CONFIG_DIR: /data/.proxvm
-      NODE_ENV: production
-      # NOTE: the process must listen on 0.0.0.0 *inside* the container or
-      # published-port traffic never reaches it (accept-then-drop). Setting
-      # this to 127.0.0.1 breaks the service — host restriction lives in the
-      # ports mapping below, not here.
-      PROXVM_OVERWATCH_HOST: "0.0.0.0"
-      PROXVM_OVERWATCH_PORT: "4001"
-      # Required: god-mode bearer token. Generate with
-      # `openssl rand -hex 32` and keep it in the local .env (gitignored).
-      # The service refuses every request while this is empty.
-      PROXVM_OVERWATCH_TOKEN: "${PROXVM_OVERWATCH_TOKEN:-}"
-      # Optional: mount the Docker socket read-only to enable /docker/logs.
-      # DOCKER_SOCK: /var/run/docker.sock
-    volumes:
-      - proxvm-config:/data/.proxvm
-      # - /var/run/docker.sock:/var/run/docker.sock:ro
-    ports:
-      - "127.0.0.1:4001:4001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,7 +100,10 @@ services:
     environment:
       POSTGRES_DB: proxvm
       POSTGRES_USER: proxvm
-      POSTGRES_PASSWORD: changeme-postgres
+      # Fail fast instead of booting with a public default. Existing installs:
+      # set this to the CURRENT password first (no outage — same value), then
+      # rotate with ALTER USER (see SECURITY.md) and update .env.
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env — see .env.example}"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

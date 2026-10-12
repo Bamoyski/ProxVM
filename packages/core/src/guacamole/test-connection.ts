@@ -1,5 +1,6 @@
 import net from "node:net";
 import { probeSsh } from "../ssh/client.js";
+import type { HostKeyPolicy } from "../ssh/host-keys.js";
 
 export interface ConnectionTestResult {
   /** TCP session to hostname:port established. */
@@ -81,6 +82,9 @@ export async function testConnection(opts: {
   username?: string;
   password?: string;
   timeoutMs?: number;
+  /** TOFU host-key pinning policy for SSH targets (built by the caller, which
+   *  knows the VM identity). Omitted for VM-less probes and unit tests. */
+  hostKey?: HostKeyPolicy;
 }): Promise<ConnectionTestResult> {
   const timeoutMs = opts.timeoutMs ?? 8000;
   const open = await testTcp(opts.hostname, opts.port, timeoutMs);
@@ -98,6 +102,7 @@ export async function testConnection(opts: {
       username: opts.username,
       password: opts.password,
       timeoutMs: 10000,
+      hostKey: opts.hostKey,
     });
     if (result.status === "AUTHENTICATED") {
       return { reachable: true, authenticated: true, detail: "SSH authentication succeeded with the stored credential." };

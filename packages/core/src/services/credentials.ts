@@ -68,6 +68,20 @@ export class CredentialsService {
     await this.db.query("UPDATE vm_credentials SET status = $2 WHERE vm_id = $1", [vmId, status]);
   }
 
+  /**
+   * Atomic rotation claim: exactly one concurrent rotation may proceed.
+   * Returns true when this caller won the claim. Uses a compare-and-set on
+   * status so two racing rotations cannot both read the same old password
+   * and interleave guest updates (last-writer-wins with a stale password).
+   */
+  async tryClaimRotation(vmId: string): Promise<boolean> {
+    const result = await this.db.query(
+      "UPDATE vm_credentials SET status = 'ROTATING' WHERE vm_id = $1 AND status <> 'ROTATING'",
+      [vmId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async markVerified(vmId: string): Promise<void> {
     await this.db.query(
       "UPDATE vm_credentials SET status = 'VERIFIED', last_verified_at = NOW() WHERE vm_id = $1",

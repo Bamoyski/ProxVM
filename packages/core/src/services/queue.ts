@@ -1,5 +1,6 @@
 import type IORedis from "ioredis";
 import { Queue } from "bullmq";
+import { isUuid } from "../util/misc.js";
 import type { JobsRepository } from "./jobs.js";
 
 export const PROVISIONING_QUEUE = "proxvm-provisioning";
@@ -7,6 +8,19 @@ export const PROVISIONING_QUEUE = "proxvm-provisioning";
 export interface EnqueueJobData {
   jobDbId: string;
   attempt: number;
+}
+
+/**
+ * The queue is not a trust boundary (shared Redis): the worker validates
+ * every payload with this before touching Proxmox. Returns null for anything
+ * malformed so the worker can fail the DB row instead of crashing on it.
+ */
+export function validateQueuePayload(data: unknown): { jobDbId: string; attempt: number } | null {
+  if (!data || typeof data !== "object") return null;
+  const { jobDbId, attempt } = data as Partial<EnqueueJobData>;
+  if (typeof jobDbId !== "string" || !isUuid(jobDbId)) return null;
+  if (!Number.isInteger(attempt) || (attempt as number) < 0) return null;
+  return { jobDbId, attempt: attempt as number };
 }
 
 export function createProvisioningQueue(redis: IORedis): Queue<EnqueueJobData> {

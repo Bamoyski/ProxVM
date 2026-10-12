@@ -17,6 +17,7 @@ import { JobsRepository } from "./services/jobs.js";
 import { GuacamoleService } from "./services/guacamole.js";
 import { runHealthChecks } from "./services/health.js";
 import { rotateVmCredential, type RotationOptions, type RotationActor, type RotationResult } from "./services/rotation.js";
+import { HostKeyService } from "./ssh/host-keys.js";
 import { ProxmoxClient } from "./proxmox/client.js";
 import { createGuacamoleDbClient, type GuacamoleDbClient } from "./guacamole/db.js";
 import { GuacamoleApiClient } from "./guacamole/api.js";
@@ -49,6 +50,7 @@ export interface CoreContext {
   templates: TemplatesService;
   jobs: JobsRepository;
   guac: GuacamoleService;
+  hostKeys: HostKeyService;
   encrypt: (plaintext: string) => string;
   decrypt: (stored: string) => string;
   getProxmoxClient: () => Promise<ProxmoxClient>;
@@ -92,27 +94,37 @@ export async function createCore(
     guacDbAt: 0,
     guacApi: null,
   };
+  // Disabling TLS verification exposes the API token and all traffic to any
+  // on-path attacker. It stays permitted for self-signed homelab certs, but
+  // each affected integration warns exactly once per process so the insecure
+  // posture is visible instead of silent.
+  let warnedProxmoxTls = false;
+  let warnedPbsTls = false;
 
   const settings = new SettingsService(db, encrypt, decrypt);
+  const audit = new AuditService(db);
+  const hostKeys = new HostKeyService({ db, audit, logger });
   const ctx: CoreContext = {
     localConfig,
     db,
     redis,
     logger,
     settings,
-    audit: new AuditService(db),
+    audit,
     users: usersService,
     registration: new RegistrationService(db, usersService),
     sessions: new SessionsService(
       db,
       localConfig.app.sessionDurationHours,
       localConfig.app.sessionIdleTimeoutMinutes,
+      localConfig.secrets.sessionSigningKey,
     ),
     vms: new VmsRepository(db),
     creds: new CredentialsService(db, encrypt),
     templates: new TemplatesService(db),
     jobs: new JobsRepository(db),
-    guac: new GuacamoleService({ db, encrypt, decrypt }),
+    hostKeys,
+    guac: new GuacamoleService({ db, encrypt, decrypt, hostKeys }),
     encrypt,
     decrypt,
     cache,
@@ -136,6 +148,10 @@ export async function createCore(
           "Proxmox is not configured. Complete setup in Settings.",
           400,
         );
+      }
+      if (!s.verifySsl && !warnedProxmoxTls) {
+        warnedProxmoxTls = true;
+        logger.warn({}, "Proxmox TLS certificate verification is DISABLED (verifySsl=false): the API token and all traffic are exposed to network attackers. Install a trusted certificate or enable verifySsl.");
       }
       cache.proxmoxClient = new ProxmoxClient({
         url: s.url,
@@ -198,10 +214,15 @@ export async function createCore(
     getPbsClient: async () => {
       const s = await settings.pbs();
       if (!s) return null;
+      if (!s.verifySsl && !warnedPbsTls) {
+        warnedPbsTls = true;
+        logger.warn({}, "Proxmox Backup Server TLS certificate verification is DISABLED (verifySsl=false): credentials and traffic are exposed to network attackers. Install a trusted certificate or enable verifySsl.");
+      }
       return new ProxmoxBackupClient({
         url: s.url,
         tokenId: s.tokenId,
         tokenSecret: s.tokenSecret,
+        verifySsl: s.verifySsl,
       });
     },
     verifyDomain: async (fqdn: string): Promise<DomainVerification> => verifyDomainReachability(fqdn),
@@ -226,6 +247,7 @@ export async function createCore(
           guac: ctx.guac,
           audit: ctx.audit,
           decrypt,
+          hostKeys: ctx.hostKeys,
           getProxmoxClient: ctx.getProxmoxClient,
           getGuacDb: ctx.getGuacDb,
         },

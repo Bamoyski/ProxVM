@@ -35,6 +35,10 @@ period on the next reconcile pass automatically.
   (templates hosts, monitoring, tunnels, Guacamole box) as **Server**.
 - Tune minutes (5–10080) and CPU threshold in Settings → Application.
 - Watch `VM_AUTO_SHUTDOWN` in the audit log for exactly what happened and why.
+- Launching a Guacamole connection automatically starts a stopped VM through
+  Proxmox, waits for its start task, and then opens the session. The guest's
+  remote-service startup still follows its normal boot timing. Each automatic
+  start is logged as `VM_AUTO_STARTED`.
 - Edge case: already-established *guest-side* flows (an outbound SSH the
   guest opened itself) are not force-killed by ACPI shutdown semantics any
   differently than a manual Stop — same button, same behavior.
@@ -43,5 +47,3 @@ period on the next reconcile pass automatically.
 
 - Per-VM custom idle minutes (global only for now).
 - Provision-time class selection (set it on the VM page after provisioning).
-- Wake-on-LAN / auto-start on launch attempt (a stopped VM still launches
-  fine on demand — sessions just need the VM running first).

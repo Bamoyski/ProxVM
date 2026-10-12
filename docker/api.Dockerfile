@@ -12,6 +12,9 @@ COPY packages/core packages/core
 COPY apps/api apps/api
 COPY apps/worker apps/worker
 RUN npm run build -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker
+# Drop dev-only dependencies (typescript, vitest, etc.) so the runtime image
+# does not ship build tooling. Safe: build output is already emitted to dist/.
+RUN npm prune --omit=dev
 
 FROM node:22-bookworm-slim
 WORKDIR /app

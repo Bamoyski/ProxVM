@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
 
 interface CatalogEntry {
   code: string;
@@ -23,10 +23,6 @@ interface Role {
   id: string;
   name: string;
 }
-
-const input = "bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-sm";
-const label = "block text-xs font-medium text-slate-400 mb-1";
-const btn = "px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 rounded disabled:opacity-40";
 
 export default function UserPermissions() {
   const { id = "" } = useParams();
@@ -82,64 +78,64 @@ export default function UserPermissions() {
   }
 
   return (
-    <div>
-      <div className="mb-4">
-        <Link to="/users" className="text-blue-400 text-sm hover:underline">← Users</Link>
+    <div className="pv-page">
+      <div style={{ marginBottom: 4 }}>
+        <Link to="/users" style={{ fontSize: "0.8rem" }}>← Users</Link>
       </div>
-      <PageTitle title={`Permissions — ${data?.user.username ?? "…"}`} />
+      <PageTitle title={`Permissions — ${data?.user.username ?? "…"}`} description="Direct assignments plus everything inherited from groups. The right column is the computed result." />
       {error && <ErrorBox error={error} />}
-      {status && <div className="bg-green-900/50 border border-green-700 text-green-200 rounded p-3 mb-4 text-sm">{status}</div>}
+      {status && <div className="pv-notice pv-notice-ok">{status}</div>}
       {!data ? (
-        <div className="text-slate-400">Loading…</div>
+        <div style={{ color: "var(--pv-text-3)" }}>Loading…</div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="space-y-4">
-            <div className="bg-slate-900 border border-slate-800 rounded p-4">
-              <h2 className="text-sm font-medium text-slate-300 mb-1">Roles</h2>
-              <div className="text-xs text-slate-500 mb-2">Direct assignments with expiry and removal; group roles appear below.</div>
-              <div className="space-y-1 mb-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-10">
+          <div>
+            <Section title="Roles" hint="Direct assignments with expiry and removal; group roles appear below.">
+              <div style={{ marginBottom: 12 }}>
                 {(data.roleAssignments ?? []).map((a) => (
-                  <div key={a.roleId} className="flex justify-between text-sm py-0.5">
+                  <div key={a.roleId} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
                     <span>
                       {a.roleName}
-                      <span className="text-xs text-slate-500 ml-2">
+                      <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 8 }}>
                         direct · {a.expiresAt ? `expires ${new Date(a.expiresAt).toLocaleString()}` : "never expires"}
                       </span>
                     </span>
-                    <button
-                      className="text-xs text-red-300 underline"
+                    <Btn
+                      size="sm"
+                      kind="link"
                       onClick={() => void mutate(() => api(`/users/${id}/roles/${a.roleId}`, { method: "DELETE" }), `Removed ${a.roleName}.`)}
                     >
                       Remove
-                    </button>
+                    </Btn>
                   </div>
                 ))}
-                {!(data.roleAssignments ?? []).length && <div className="text-xs text-slate-500">No direct role assignments.</div>}
+                {!(data.roleAssignments ?? []).length && <Empty title="No direct role assignments" />}
               </div>
-              <div className="space-y-1 mb-3">
+              <div style={{ marginBottom: 12 }}>
                 {data.roles
                   .filter((r) => !(data.roleAssignments ?? []).some((a) => a.roleName === r))
                   .map((r) => (
-                    <div key={r} className="text-sm text-slate-200">
-                      • {r} <span className="text-xs text-slate-500">via group</span>
+                    <div key={r} style={{ fontSize: "0.85rem", padding: "2px 0" }}>
+                      • {r} <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }}>via group</span>
                     </div>
                   ))}
               </div>
-              <div className="flex flex-wrap gap-2 items-center">
-                <select className={input} value={rolePick} onChange={(e) => setRolePick(e.target.value)}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                <select className="pv-select pv-input-auto" style={{ height: 32 }} value={rolePick} onChange={(e) => setRolePick(e.target.value)}>
                   <option value="">Select role…</option>
                   {(rolesData?.roles ?? []).map((r) => (
                     <option key={r.id} value={r.id}>{r.name}</option>
                   ))}
                 </select>
-                <select className={input} value={roleExpiry} onChange={(e) => setRoleExpiry(e.target.value)}>
+                <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} value={roleExpiry} onChange={(e) => setRoleExpiry(e.target.value)}>
                   <option value="">Never expires</option>
                   <option value="1h">1 hour</option>
                   <option value="1d">1 day</option>
                   <option value="1w">1 week</option>
                 </select>
-                <button
-                  className={btn}
+                <Btn
+                  size="sm"
+                  kind="primary"
                   disabled={!rolePick}
                   onClick={() =>
                     void mutate(
@@ -152,14 +148,12 @@ export default function UserPermissions() {
                   }
                 >
                   Assign role
-                </button>
+                </Btn>
               </div>
-            </div>
-            <div className="bg-slate-900 border border-slate-800 rounded p-4">
-              <h2 className="text-sm font-medium text-slate-300 mb-1">Direct permission grants</h2>
-              <div className="text-xs text-slate-500 mb-2">Only for permissions outside the user's roles. Admins cannot grant what they lack.</div>
-              <div className="flex flex-wrap gap-2 items-center">
-                <select className={input} value={permPick} onChange={(e) => setPermPick(e.target.value)}>
+            </Section>
+            <Section title="Direct permission grants" hint="Only for permissions outside the user's roles. Admins cannot grant what they lack.">
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 12 }}>
+                <select className="pv-select pv-input-auto" style={{ height: 32 }} value={permPick} onChange={(e) => setPermPick(e.target.value)}>
                   <option value="">Select permission…</option>
                   {(catalogData?.permissions ?? [])
                     .filter((p) => !held.has(p.code))
@@ -167,14 +161,15 @@ export default function UserPermissions() {
                       <option key={p.code} value={p.code}>{p.code}</option>
                     ))}
                 </select>
-                <select className={input} value={permExpiry} onChange={(e) => setPermExpiry(e.target.value)}>
+                <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} value={permExpiry} onChange={(e) => setPermExpiry(e.target.value)}>
                   <option value="">Never expires</option>
                   <option value="1h">1 hour</option>
                   <option value="1d">1 day</option>
                   <option value="1w">1 week</option>
                 </select>
-                <button
-                  className={btn}
+                <Btn
+                  size="sm"
+                  kind="primary"
                   disabled={!permPick}
                   onClick={() =>
                     void mutate(
@@ -187,64 +182,60 @@ export default function UserPermissions() {
                   }
                 >
                   Grant
-                </button>
+                </Btn>
               </div>
-              <div className="mt-3 space-y-1">
-                {(data.permissions ?? [])
-                  .filter((p) => p.sources.includes("direct grant"))
-                  .map((p) => (
-                    <div key={p.permission} className="flex justify-between text-sm">
-                      <span className="font-mono text-xs">{p.permission}</span>
-                      <button
-                        className="text-xs text-red-300 underline"
-                        onClick={() => void mutate(() => api(`/users/${id}/permissions/${p.permission}`, { method: "DELETE" }), `Revoked ${p.permission}.`)}
-                      >
-                        Revoke
-                      </button>
-                    </div>
-                  ))}
-              </div>
-            </div>
-            <div className="bg-slate-900 border border-slate-800 rounded p-4">
-              <h2 className="text-sm font-medium text-slate-300 mb-2">Groups</h2>
+              {(data.permissions ?? [])
+                .filter((p) => p.sources.includes("direct grant"))
+                .map((p) => (
+                  <div key={p.permission} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+                    <span className="pv-mono">{p.permission}</span>
+                    <Btn
+                      size="sm"
+                      kind="link"
+                      onClick={() => void mutate(() => api(`/users/${id}/permissions/${p.permission}`, { method: "DELETE" }), `Revoked ${p.permission}.`)}
+                    >
+                      Revoke
+                    </Btn>
+                  </div>
+                ))}
+            </Section>
+            <Section title="Groups">
               {(data.groups ?? []).map((g) => (
-                <div key={g.id} className="text-sm text-slate-200">• {g.name}</div>
+                <div key={g.id} style={{ fontSize: "0.85rem", padding: "2px 0" }}>• {g.name}</div>
               ))}
-              {!data.groups.length && <div className="text-xs text-slate-500">No group memberships. Manage them on the Groups page.</div>}
-            </div>
+              {!data.groups.length && <Empty title="No group memberships" body="Manage them on the Groups page." />}
+            </Section>
           </div>
-          <div className="bg-slate-900 border border-slate-800 rounded p-4 h-fit">
-            <h2 className="text-sm font-medium text-slate-300 mb-2">Effective permissions</h2>
-            <div className="text-xs text-slate-500 mb-3">✓ granted (hover for source) · — denied. Inherited grants look the same as explicit ones here by design; the tooltip names the source.</div>
-            <div className="space-y-3 max-h-[32rem] overflow-y-auto">
+          <Section title="Effective permissions" hint="✓ granted (hover for source) · — denied. Inherited grants look the same as explicit ones by design; the tooltip names the source.">
+            <div style={{ maxHeight: "32rem", overflowY: "auto" }}>
               {[...byCategory.entries()].map(([category, entries]) => (
-                <div key={category}>
-                  <div className="text-xs text-slate-500 mb-1">{category}</div>
+                <div key={category} style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)", marginBottom: 4 }}>{category}</div>
                   {entries.map((p) => {
                     const hit = data.permissions.find((x) => x.permission === p.code);
                     return (
-                      <div key={p.code} className="flex justify-between text-sm py-0.5" title={hit ? hit.sources.join("; ") : p.description}>
-                        <span className="font-mono text-xs">{p.code}</span>
-                        {hit ? <span className="text-green-400">✓</span> : <span className="text-slate-700">—</span>}
+                      <div key={p.code} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: "0.85rem" }} title={hit ? hit.sources.join("; ") : p.description}>
+                        <span className="pv-mono">{p.code}</span>
+                        {hit ? <span style={{ color: "var(--pv-ok)" }}>✓</span> : <span style={{ color: "var(--pv-text-3)" }}>—</span>}
                       </div>
                     );
                   })}
                 </div>
               ))}
             </div>
-            <h2 className="text-sm font-medium text-slate-300 mt-4 mb-2">VM access</h2>
+            <div className="pv-label" style={{ marginTop: 16, marginBottom: 6 }}>VM access</div>
             {(data.vmAccess ?? []).map((v) => (
-              <div key={v.vmId} className="text-sm py-0.5">
-                <span className="font-mono text-xs">{v.vmId.slice(0, 8)}</span>
-                <span className="text-xs text-slate-400 ml-2">
+              <div key={v.vmId} style={{ fontSize: "0.85rem", padding: "4px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+                <span className="pv-mono">{v.vmId.slice(0, 8)}</span>
+                <span style={{ fontSize: "0.76rem", color: "var(--pv-text-2)", marginLeft: 8 }}>
                   {v.protocols === null ? "all protocols" : v.protocols.join(", ").toUpperCase()}
                   {v.expiresAt ? ` · expires ${new Date(v.expiresAt).toLocaleString()}` : ""}
                 </span>
-                <div className="text-xs text-slate-500">{v.sources.join("; ")}</div>
+                <div style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }}>{v.sources.join("; ")}</div>
               </div>
             ))}
-            {!data.vmAccess.length && <div className="text-xs text-slate-500">No VM access.</div>}
-          </div>
+            {!data.vmAccess.length && <Empty title="No VM access" />}
+          </Section>
         </div>
       )}
     </div>

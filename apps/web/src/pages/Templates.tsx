@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, useConfirm } from "../components/ui.js";
+import { PageTitle, ErrorBox, Section, Empty, Btn, useConfirm } from "../components/ui.js";
 import { OS_TYPES, PROVISIONING_METHODS, PROTOCOLS } from "@proxvm/shared";
 
 export default function Templates() {
@@ -28,8 +28,6 @@ export default function Templates() {
     supportedProtocols: ["ssh"] as string[],
   });
   const [error, setError] = useState<string | null>(null);
-  const input = "w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-  const label = "block text-xs font-medium text-slate-400 mb-1";
 
   const sel = proxmoxTemplates?.templates.find((t) => `${t.node}/${t.vmid}` === selected);
 
@@ -60,60 +58,61 @@ export default function Templates() {
   };
 
   return (
-    <div>
-      <PageTitle title="Templates" />
+    <div className="pv-page">
+      <PageTitle title="Templates" description="Register Proxmox templates as provisioning sources." />
       {dialog}
       {error && <ErrorBox error={error} />}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">Register a template from Proxmox</h2>
-          <p className="text-xs text-slate-500 mb-3">Discovered from the live Proxmox cluster:</p>
-          <select className={input} value={selected} onChange={(e) => { setSelected(e.target.value); const t = proxmoxTemplates?.templates.find((x) => `${x.node}/${x.vmid}` === e.target.value); if (t) setForm((f) => ({ ...f, name: t.name || f.name })); }}>
-            <option value="">Select a Proxmox template…</option>
-            {(proxmoxTemplates?.templates ?? []).map((t) => (
-              <option key={`${t.node}/${t.vmid}`} value={`${t.node}/${t.vmid}`}>{t.name} (vmid {t.vmid}, node {t.node})</option>
-            ))}
-          </select>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-10">
+        <Section title="Register from Proxmox" hint="Discovered from the live cluster">
+          <div className="pv-field">
+            <label className="pv-label">Proxmox template</label>
+            <select className="pv-select" value={selected} onChange={(e) => { setSelected(e.target.value); const t = proxmoxTemplates?.templates.find((x) => `${x.node}/${x.vmid}` === e.target.value); if (t) setForm((f) => ({ ...f, name: t.name || f.name })); }}>
+              <option value="">Select a Proxmox template…</option>
+              {(proxmoxTemplates?.templates ?? []).map((t) => (
+                <option key={`${t.node}/${t.vmid}`} value={`${t.node}/${t.vmid}`}>{t.name} (vmid {t.vmid}, node {t.node})</option>
+              ))}
+            </select>
+          </div>
           {sel && (
-            <div className="mt-3 space-y-3">
-              <div>
-                <label className={label}>Display name</label>
-                <input className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <div>
+              <div className="pv-field">
+                <label className="pv-label">Display name</label>
+                <input className="pv-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={label}>OS type</label>
-                  <select className={input} value={form.osType} onChange={(e) => setForm({ ...form, osType: e.target.value as (typeof OS_TYPES)[number] })}>
+                <div className="pv-field">
+                  <label className="pv-label">OS type</label>
+                  <select className="pv-select" value={form.osType} onChange={(e) => setForm({ ...form, osType: e.target.value as (typeof OS_TYPES)[number] })}>
                     {OS_TYPES.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className={label}>Provisioning method</label>
-                  <select className={input} value={form.provisioningMethod} onChange={(e) => setForm({ ...form, provisioningMethod: e.target.value as (typeof PROVISIONING_METHODS)[number] })}>
+                <div className="pv-field">
+                  <label className="pv-label">Provisioning method</label>
+                  <select className="pv-select" value={form.provisioningMethod} onChange={(e) => setForm({ ...form, provisioningMethod: e.target.value as (typeof PROVISIONING_METHODS)[number] })}>
                     {PROVISIONING_METHODS.map((m) => (
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
                 </div>
               </div>
-              <label className="flex items-center gap-2 text-sm">
+              <label className="pv-checkrow" style={{ marginBottom: 8 }}>
                 <input type="checkbox" checked={form.cloudInitSupport} onChange={(e) => setForm({ ...form, cloudInitSupport: e.target.checked })} />
                 Cloud-init / Cloudbase-Init supported
               </label>
-              <label className="flex items-center gap-2 text-sm">
+              <label className="pv-checkrow" style={{ marginBottom: 12 }}>
                 <input type="checkbox" checked={form.guestAgentRequired} onChange={(e) => setForm({ ...form, guestAgentRequired: e.target.checked })} />
                 QEMU guest agent required
               </label>
               <div className="grid grid-cols-3 gap-3">
-                <div><label className={label}>CPU</label><input type="number" className={input} value={form.defaultCpu} onChange={(e) => setForm({ ...form, defaultCpu: Number(e.target.value) })} /></div>
-                <div><label className={label}>RAM (MB)</label><input type="number" className={input} value={form.defaultRamMb} onChange={(e) => setForm({ ...form, defaultRamMb: Number(e.target.value) })} /></div>
-                <div><label className={label}>Disk (GB)</label><input type="number" className={input} value={form.defaultDiskGb} onChange={(e) => setForm({ ...form, defaultDiskGb: Number(e.target.value) })} /></div>
+                <div className="pv-field"><label className="pv-label">CPU</label><input type="number" className="pv-input" value={form.defaultCpu} onChange={(e) => setForm({ ...form, defaultCpu: Number(e.target.value) })} /></div>
+                <div className="pv-field"><label className="pv-label">RAM (MB)</label><input type="number" className="pv-input" value={form.defaultRamMb} onChange={(e) => setForm({ ...form, defaultRamMb: Number(e.target.value) })} /></div>
+                <div className="pv-field"><label className="pv-label">Disk (GB)</label><input type="number" className="pv-input" value={form.defaultDiskGb} onChange={(e) => setForm({ ...form, defaultDiskGb: Number(e.target.value) })} /></div>
               </div>
-              <div>
-                <label className={label}>Supported protocols</label>
-                <div className="flex gap-3 text-sm">
+              <div className="pv-field">
+                <label className="pv-label">Supported protocols</label>
+                <div style={{ display: "flex", gap: 16 }}>
                   {PROTOCOLS.map((p) => (
-                    <label key={p} className="flex items-center gap-1">
+                    <label key={p} className="pv-checkrow">
                       <input
                         type="checkbox"
                         checked={form.supportedProtocols.includes(p)}
@@ -124,52 +123,54 @@ export default function Templates() {
                   ))}
                 </div>
               </div>
-              <button onClick={register} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">Register template</button>
+              <Btn kind="primary" onClick={register}>Register template</Btn>
             </div>
           )}
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">Registered templates</h2>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
-                <th className="py-2">Name</th>
-                <th className="py-2">Proxmox ID</th>
-                <th className="py-2">Node</th>
-                <th className="py-2">OS</th>
-                <th className="py-2">Provisioning</th>
-                <th className="py-2">Defaults</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(templates?.templates ?? []).map((t) => (
-                <tr key={String(t.id)} className="border-b border-slate-800/50">
-                  <td className="py-2">{String(t.name)}</td>
-                  <td className="font-mono">{String(t.proxmoxVmid)}</td>
-                  <td>{String(t.node)}</td>
-                  <td>{String(t.osType)}</td>
-                  <td className="text-xs">{String(t.provisioningMethod)}</td>
-                  <td className="text-xs text-slate-400">{String(t.defaultCpu)}c / {String(t.defaultRamMb)}MB / {String(t.defaultDiskGb)}G</td>
-                  <td>
-                    <button
-                      className="text-xs text-red-300 underline"
-                      onClick={() =>
-                        confirm(`Delete template ${String(t.name)}?`, `DELETE ${String(t.name)}`, async () => {
-                          await api(`/templates/${String(t.id)}`, { method: "DELETE", body: { confirmText: `DELETE ${String(t.name)}` } });
-                          void qc.invalidateQueries({ queryKey: ["templates"] });
-                        })
-                      }
-                    >
-                      DELETE
-                    </button>
-                  </td>
+        </Section>
+        <Section title="Registered" hint={`${(templates?.templates ?? []).length} total`}>
+          <div className="pv-table-wrap">
+            <table className="pv-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Proxmox ID</th>
+                  <th>Node</th>
+                  <th>OS</th>
+                  <th>Provisioning</th>
+                  <th>Defaults</th>
+                  <th></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {!templates?.templates.length && <div className="text-sm text-slate-500 py-2">No templates registered yet.</div>}
-        </div>
+              </thead>
+              <tbody>
+                {(templates?.templates ?? []).map((t) => (
+                  <tr key={String(t.id)}>
+                    <td>{String(t.name)}</td>
+                    <td className="pv-mono">{String(t.proxmoxVmid)}</td>
+                    <td>{String(t.node)}</td>
+                    <td>{String(t.osType)}</td>
+                    <td style={{ color: "var(--pv-text-2)" }}>{String(t.provisioningMethod)}</td>
+                    <td style={{ color: "var(--pv-text-2)" }}>{String(t.defaultCpu)}c / {String(t.defaultRamMb)}MB / {String(t.defaultDiskGb)}G</td>
+                    <td>
+                      <Btn
+                        size="sm"
+                        kind="link"
+                        onClick={() =>
+                          confirm(`Delete template ${String(t.name)}?`, `DELETE ${String(t.name)}`, async () => {
+                            await api(`/templates/${String(t.id)}`, { method: "DELETE", body: { confirmText: `DELETE ${String(t.name)}` } });
+                            void qc.invalidateQueries({ queryKey: ["templates"] });
+                          })
+                        }
+                      >
+                        Delete
+                      </Btn>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!templates?.templates.length && <Empty title="No templates registered yet" body="Register one from the Proxmox cluster to enable provisioning." />}
+        </Section>
       </div>
     </div>
   );

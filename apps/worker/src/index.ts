@@ -6,6 +6,8 @@ import {
   createPgPool,
   makeLogger,
   createProvisioningQueue,
+  isUuid,
+  validateQueuePayload,
   PROVISIONING_QUEUE,
   runProvisioningJob,
   handleProvisioningOutcome,
@@ -45,10 +47,26 @@ async function main(): Promise<void> {
   const worker = new Worker<EnqueueJobData>(
     PROVISIONING_QUEUE,
     async (job: Job<EnqueueJobData>) => {
-      const { jobDbId, attempt } = job.data;
-      ctx.logger.info({ jobDbId, attempt }, "processing provisioning job");
-      const outcome = await runProvisioningJob(ctx, jobDbId, attempt);
-      const finalOutcome = await handleProvisioningOutcome(ctx, queue, jobDbId, attempt, outcome);
+      // The queue is not a trust boundary (shared Redis): validate the
+      // payload before touching Proxmox, and never leave a malformed job's
+      // DB row stuck PENDING.
+      const parsed = validateQueuePayload(job.data);
+      if (!parsed) {
+        ctx.logger.error({ data: job.data }, "refusing malformed provisioning job payload");
+        try {
+          const rawId = (job.data as Partial<EnqueueJobData> | null)?.jobDbId;
+          if (typeof rawId === "string" && isUuid(rawId)) {
+            await ctx.jobs.updateStatus(rawId, "FAILED", "malformed queue payload");
+          }
+        } catch {
+          // best-effort; the bull job still fails below
+        }
+        return { outcome: "FAILED" as const };
+      }
+      const { jobDbId, attempt: cleanAttempt } = parsed;
+      ctx.logger.info({ jobDbId, attempt: cleanAttempt }, "processing provisioning job");
+      const outcome = await runProvisioningJob(ctx, jobDbId, cleanAttempt);
+      const finalOutcome = await handleProvisioningOutcome(ctx, queue, jobDbId, cleanAttempt, outcome);
       return { outcome: finalOutcome };
     },
     {

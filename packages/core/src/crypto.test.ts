@@ -8,6 +8,7 @@ import {
   rotateSecretKey,
   timingSafeEqualStr,
 } from "../src/index.js";
+import { passwordComplexity } from "@proxvm/shared";
 
 describe("password hashing", () => {
   it("hashes and verifies", async () => {
@@ -19,12 +20,18 @@ describe("password hashing", () => {
 });
 
 describe("password generation", () => {
-  it("generates exactly two capitalized words joined by a hyphen", () => {
-    for (let i = 0; i < 20; i++) {
+  it("generates two capitalized words plus digits, satisfying the user-facing complexity policy", () => {
+    for (let i = 0; i < 50; i++) {
       const pw = generatePassword();
-      expect(pw).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+$/);
+      expect(pw).toMatch(/^[A-Z][a-z]+-[A-Z][a-z]+-\d{2}$/);
       expect(pw).not.toMatch(/[\r\n:]/);
-      expect(pw.split("-")).toHaveLength(2);
+      // Mirrors passwordComplexity in @proxvm/shared schemas: the generator
+      // must never mint a password the signup/reset forms would reject.
+      expect(pw.length).toBeGreaterThanOrEqual(12);
+      expect(pw).toMatch(/[a-z]/);
+      expect(pw).toMatch(/[A-Z]/);
+      expect(pw).toMatch(/[0-9]/);
+      expect(pw).toMatch(/[^A-Za-z0-9]/);
     }
   });
   it("generates unique passwords", () => {
@@ -67,6 +74,15 @@ describe("AES-256-GCM secret encryption", () => {
   });
 });
 
+
+describe("generated passwords satisfy the shared complexity policy", () => {
+  it("every minted password passes passwordComplexity (dashes count as symbols)", () => {
+    for (let i = 0; i < 100; i++) {
+      const pw = generatePassword();
+      expect(passwordComplexity.safeParse(pw).success).toBe(true);
+    }
+  });
+});
 
 describe("generated password embeds no dictionary of the word password", () => {
   it("never equals a constant", () => {

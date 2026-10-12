@@ -38,7 +38,7 @@ describe("ProxmoxBackupClient baseline", () => {
     await expect(client.version()).resolves.toMatchObject({ version: "3.2.0" });
     const stores = await client.listDatastores();
     expect(stores).toEqual([{ name: "backup-pool", path: "/mnt/backups" }]);
-    expect(seen[0]!.auth).toMatch(/^PBSAPIToken=admin@pbs!test=secret$/);
+    expect(seen[0]!.auth).toMatch(/^PBSAPIToken=admin@pbs!test:secret$/);
     expect(seen[0]!.url).toContain("https://192.0.2.10:8007/api2/json/version");
   });
 
@@ -53,6 +53,19 @@ describe("ProxmoxBackupClient baseline", () => {
     await expect(client.listBackupGroups("backup-pool")).resolves.toEqual([]);
     const filtered = await client.listBackupGroups("backup-pool", { type: "vm", backupId: "vm/100" });
     expect(filtered).toHaveLength(1);
+  });
+
+  it("uses the PBS colon separator (PVE-style = yields 'invalid token name')", async () => {
+    const seen: string[] = [];
+    const client = clientWith(
+      mockFetch((url, init) => {
+        seen.push((init?.headers as Record<string, string>)?.Authorization ?? "");
+        return { data: {} };
+      }),
+    );
+    await client.version().catch(() => undefined);
+    expect(seen[0]).toMatch(/^PBSAPIToken=[^=]+:[^=]+$/);
+    expect(seen[0]).not.toContain("!test=");
   });
 
   it("Backup execution is explicitly unwired (501, no live calls)", async () => {

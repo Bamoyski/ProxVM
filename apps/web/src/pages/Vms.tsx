@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
-import { StatusBadge, PageTitle, ErrorBox, useConfirm } from "../components/ui.js";
+import { StatusBadge, PageTitle, ErrorBox, Empty, Section, Btn, useConfirm } from "../components/ui.js";
 
 interface VmRow {
   id: string | null;
@@ -319,13 +319,16 @@ export default function Vms({ me }: { me: Me }) {
   }
 
   const healthDot = (vmId: string | null): ReactNode => {
-    if (!vmId) return <span className="text-slate-700">—</span>;
+    const dot = (color: string, title?: string) => (
+      <span style={{ color, fontSize: "0.7rem", lineHeight: 1 }} title={title}>●</span>
+    );
+    if (!vmId) return <span style={{ color: "var(--pv-text-3)" }}>—</span>;
     const entries = healthByVm.get(vmId);
-    if (!entries?.length) return <span className="text-slate-700" title="No health data yet">—</span>;
+    if (!entries?.length) return <span style={{ color: "var(--pv-text-3)" }} title="No health data yet">—</span>;
     const bad = entries.filter((e) => !e.reachable || e.authenticated === false);
     const title = entries.map((e) => `${e.protocol.toUpperCase()}: ${e.detail}`).join("\n");
-    if (!bad.length) return <span className="text-green-400" title={title}>●</span>;
-    return <span className="text-red-400" title={title}>●</span>;
+    if (!bad.length) return dot("var(--pv-ok)", title);
+    return dot("var(--pv-err)", title);
   };
 
   const toggleSelect = (id: string): void => {
@@ -359,50 +362,50 @@ export default function Vms({ me }: { me: Me }) {
     });
   };
 
-  const btn = "px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40";
-  const input = "w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-  const label = "block text-xs font-medium text-slate-400 mb-1";
-
   return (
-    <div>
-      <PageTitle title="Virtual Machines">
+    <div className="pv-page">
+      <PageTitle title="Virtual Machines" description="Every VM in the cluster. Select rows for bulk power actions.">
         {canCreate && (
-          <button onClick={() => setProvisionOpen(true)} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">
+          <Btn kind="primary" onClick={() => setProvisionOpen(true)}>
             Provision VM
-          </button>
+          </Btn>
         )}
       </PageTitle>
       {dialog}
       {data && !data.proxmoxConnected && (
-        <div className="bg-yellow-900/50 border border-yellow-700 text-yellow-200 rounded p-3 mb-4 text-sm">
+        <div className="pv-notice pv-notice-warn">
           Proxmox API unreachable — showing stored data only. Error: {data.proxmoxError}
         </div>
       )}
 
       {canManage && selected.length > 0 && (
-        <div className="bg-slate-900 border border-slate-700 rounded p-3 mb-4 text-sm flex flex-wrap items-center gap-2">
-          <span className="text-slate-300">{selected.length} selected</span>
+        <div className="pv-notice" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+          <span>{selected.length} selected</span>
           {(["start", "stop", "restart"] as const).map((a) => (
-            <button key={a} className={btn} onClick={() => void doBulk(a)}>
-              {a.toUpperCase()} ALL
-            </button>
+            <Btn key={a} size="sm" onClick={() => void doBulk(a)}>
+              {a[0]!.toUpperCase() + a.slice(1)} all
+            </Btn>
           ))}
-          <button className="text-xs text-slate-400 underline" onClick={() => setSelected([])}>Clear</button>
+          <Btn size="sm" kind="link" onClick={() => setSelected([])}>Clear</Btn>
         </div>
       )}
-      {bulkResult && <div className="bg-slate-900 border border-slate-700 rounded p-3 mb-4 text-sm">{bulkResult}</div>}
+      {bulkResult && <div className="pv-notice">{bulkResult}</div>}
 
       {provisionOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-40 p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-[40rem] max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Create Virtual Machine</h2>
-              <div className="flex rounded overflow-hidden border border-slate-700 text-sm">
+          <div className="pv-panel" style={{ width: "40rem", maxWidth: "100%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+              <h2 className="pv-title" style={{ fontSize: "1.05rem" }}>Provision virtual machine</h2>
+              <div style={{ display: "flex", border: "1px solid var(--pv-border)", borderRadius: 6, overflow: "hidden", fontSize: "0.8rem" }}>
                 {(["basic", "advanced"] as const).map((m) => (
                   <button
                     key={m}
                     onClick={() => setProvisionMode(m)}
-                    className={`px-4 py-1.5 capitalize ${provisionMode === m ? "bg-blue-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`}
+                    style={{
+                      padding: "6px 14px", textTransform: "capitalize", cursor: "pointer", border: "none",
+                      background: provisionMode === m ? "var(--pv-accent)" : "transparent",
+                      color: provisionMode === m ? "var(--pv-accent-ink)" : "var(--pv-text-2)",
+                    }}
                   >
                     {m}
                   </button>
@@ -410,8 +413,8 @@ export default function Vms({ me }: { me: Me }) {
               </div>
             </div>
             {!templates?.templates.length ? (
-              <div className="text-sm text-amber-300 mb-4">
-                No templates registered. Register one on the <Link to="/templates" className="underline">Templates</Link> page first.
+              <div className="pv-notice pv-notice-warn">
+                No templates registered. Register one on the <Link to="/templates">Templates</Link> page first.
               </div>
             ) : provisionMode === "basic" ? (
               <BasicProvisionForm
@@ -430,11 +433,11 @@ export default function Vms({ me }: { me: Me }) {
                 onCancel={() => setProvisionOpen(false)}
               />
             ) : (
-              <div className="space-y-3">
+              <div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={label}>Template</label>
-                    <select className={input} value={form.templateId} onChange={(e) => applyTemplate(e.target.value)}>
+                  <div className="pv-field">
+                    <label className="pv-label">Template</label>
+                    <select className="pv-select" value={form.templateId} onChange={(e) => applyTemplate(e.target.value)}>
                       <option value="">Select template…</option>
                       {templates.templates.map((t) => (
                         <option key={t.id} value={t.id}>
@@ -443,52 +446,52 @@ export default function Vms({ me }: { me: Me }) {
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label className={label}>VM name</label>
-                    <input className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                  <div className="pv-field">
+                    <label className="pv-label">VM name</label>
+                    <input className="pv-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className={label}>Node</label>
-                    <select className={input} value={selNode} onChange={(e) => setForm({ ...form, node: e.target.value })}>
+                  <div className="pv-field">
+                    <label className="pv-label">Node</label>
+                    <select className="pv-select" value={selNode} onChange={(e) => setForm({ ...form, node: e.target.value })}>
                       {(nodes?.nodes ?? []).map((n) => (
                         <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label className={label}>VM ID (blank = auto)</label>
-                    <input className={input} value={form.vmid} onChange={(e) => setForm({ ...form, vmid: e.target.value })} />
+                  <div className="pv-field">
+                    <label className="pv-label">VM ID (blank = auto)</label>
+                    <input className="pv-input" value={form.vmid} onChange={(e) => setForm({ ...form, vmid: e.target.value })} />
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className={label}>CPU cores</label>
-                    <input type="number" className={input} value={form.cpu} onChange={(e) => setForm({ ...form, cpu: Number(e.target.value) })} />
+                  <div className="pv-field">
+                    <label className="pv-label">CPU cores</label>
+                    <input type="number" className="pv-input" value={form.cpu} onChange={(e) => setForm({ ...form, cpu: Number(e.target.value) })} />
                   </div>
-                  <div>
-                    <label className={label}>RAM (MB)</label>
-                    <input type="number" className={input} value={form.ramMb} onChange={(e) => setForm({ ...form, ramMb: Number(e.target.value) })} />
+                  <div className="pv-field">
+                    <label className="pv-label">RAM (MB)</label>
+                    <input type="number" className="pv-input" value={form.ramMb} onChange={(e) => setForm({ ...form, ramMb: Number(e.target.value) })} />
                   </div>
-                  <div>
-                    <label className={label}>Disk (GB)</label>
-                    <input type="number" className={input} value={form.diskGb} onChange={(e) => setForm({ ...form, diskGb: Number(e.target.value) })} />
+                  <div className="pv-field">
+                    <label className="pv-label">Disk (GB)</label>
+                    <input type="number" className="pv-input" value={form.diskGb} onChange={(e) => setForm({ ...form, diskGb: Number(e.target.value) })} />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={label}>Storage</label>
-                    <select className={input} value={form.storage} onChange={(e) => setForm({ ...form, storage: e.target.value })}>
+                  <div className="pv-field">
+                    <label className="pv-label">Storage</label>
+                    <select className="pv-select" value={form.storage} onChange={(e) => setForm({ ...form, storage: e.target.value })}>
                       <option value="">Select storage…</option>
                       {(storage?.storage ?? []).filter((s) => s.content.includes("images")).map((s) => (
                         <option key={s.node + s.storage} value={s.storage}>{s.storage} ({s.type}, node {s.node})</option>
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label className={label}>Network bridge</label>
-                    <select className={input} value={form.bridge} onChange={(e) => setForm({ ...form, bridge: e.target.value })}>
+                  <div className="pv-field">
+                    <label className="pv-label">Network bridge</label>
+                    <select className="pv-select" value={form.bridge} onChange={(e) => setForm({ ...form, bridge: e.target.value })}>
                       <option value="">Select bridge…</option>
                       {(networks?.networks ?? []).map((n) => (
                         <option key={n.iface} value={n.iface}>{n.iface} ({n.type})</option>
@@ -497,54 +500,47 @@ export default function Vms({ me }: { me: Me }) {
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className={label}>VLAN tag (0 = none)</label>
-                    <input type="number" className={input} value={form.vlan} onChange={(e) => setForm({ ...form, vlan: e.target.value })} />
+                  <div className="pv-field">
+                    <label className="pv-label">VLAN tag (0 = none)</label>
+                    <input type="number" className="pv-input" value={form.vlan} onChange={(e) => setForm({ ...form, vlan: e.target.value })} />
                   </div>
-                  <div>
-                    <label className={label}>Network mode</label>
-                    <select className={input} value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value as "dhcp" | "static" })}>
+                  <div className="pv-field">
+                    <label className="pv-label">Network mode</label>
+                    <select className="pv-select" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value as "dhcp" | "static" })}>
                       <option value="dhcp">DHCP</option>
                       <option value="static">Static</option>
                     </select>
                   </div>
                   {form.mode === "static" && (
-                    <div>
-                      <label className={label}>IP / gateway</label>
+                    <div className="pv-field">
+                      <label className="pv-label">IP / gateway</label>
                       <div className="flex gap-1">
-                        <input className={input} placeholder="10.0.0.5" value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })} />
-                        <input className={input} placeholder="24" value={form.cidr} onChange={(e) => setForm({ ...form, cidr: e.target.value })} />
+                        <input className="pv-input" placeholder="10.0.0.5" value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })} />
+                        <input className="pv-input" placeholder="24" value={form.cidr} onChange={(e) => setForm({ ...form, cidr: e.target.value })} />
                       </div>
-                      <input className={`${input} mt-1`} placeholder="Gateway" value={form.gateway} onChange={(e) => setForm({ ...form, gateway: e.target.value })} />
+                      <input className="pv-input" style={{ marginTop: 4 }} placeholder="Gateway" value={form.gateway} onChange={(e) => setForm({ ...form, gateway: e.target.value })} />
                     </div>
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={label}>Guest username</label>
-                    <input className={input} value={form.guestUser} onChange={(e) => setForm({ ...form, guestUser: e.target.value })} />
+                  <div className="pv-field">
+                    <label className="pv-label">Guest username</label>
+                    <input className="pv-input" value={form.guestUser} onChange={(e) => setForm({ ...form, guestUser: e.target.value })} />
                   </div>
-                  <div>
-                    <label className={label}>
-                      Guest password (generated & encrypted; never blank)
-                      <button type="button" onClick={() => void 0} className="ml-2 underline text-blue-400 text-xs" onClickCapture={() => void 0}>
-                        shown below
-                      </button>
-                    </label>
-                    <div className="flex gap-2 items-center">
-                      <code className="bg-slate-800 px-2 py-1.5 rounded text-xs flex-1 select-all">{generated?.password ?? "…"}</code>
-                    </div>
+                  <div className="pv-field">
+                    <label className="pv-label">Guest password (generated, encrypted)</label>
+                    <code className="pv-mono" style={{ display: "block", background: "var(--pv-inset)", border: "1px solid var(--pv-border)", borderRadius: 6, padding: "8px 10px", userSelect: "all" }}>{generated?.password ?? "…"}</code>
                   </div>
                 </div>
-                <label className="flex items-center gap-2 text-sm text-slate-300">
+                <label className="pv-checkrow" style={{ marginBottom: 12 }}>
                   <input type="checkbox" checked={form.linkedClone} onChange={(e) => setForm({ ...form, linkedClone: e.target.checked })} />
                   Linked clone (faster; requires base image on same storage)
                 </label>
-                <div>
-                  <label className={label}>Access protocols (Guacamole)</label>
-                  <div className="flex gap-4 text-sm text-slate-300">
+                <div className="pv-field">
+                  <label className="pv-label">Access protocols (Guacamole)</label>
+                  <div style={{ display: "flex", gap: 16 }}>
                     {["ssh", "rdp", "vnc"].map((p) => (
-                      <label key={p} className="flex items-center gap-1 uppercase">
+                      <label key={p} className="pv-checkrow" style={{ textTransform: "uppercase" }}>
                         <input
                           type="checkbox"
                           checked={form.protocols.includes(p)}
@@ -561,17 +557,15 @@ export default function Vms({ me }: { me: Me }) {
                   </div>
                 </div>
                 <AssignUsersPicker users={allUsers?.users ?? null} assignIds={assignIds} toggleAssign={toggleAssign} />
-                <div className="flex justify-end gap-2 mt-4">
-                  <button onClick={() => setProvisionOpen(false)} className="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">
-                    Cancel
-                  </button>
-                  <button
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+                  <Btn onClick={() => setProvisionOpen(false)}>Cancel</Btn>
+                  <Btn
+                    kind="primary"
                     onClick={() => void submitGuarded(provision)()}
                     disabled={!form.name || !form.templateId || !form.storage || !form.bridge || submitting}
-                    className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
                   >
                     {submitting ? "Submitting…" : "Start provisioning"}
-                  </button>
+                  </Btn>
                 </div>
               </div>
             )}
@@ -579,112 +573,109 @@ export default function Vms({ me }: { me: Me }) {
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="pv-table-wrap">
+        <table className="pv-table">
           <thead>
-            <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
-              {canManage && <th className="py-2 pr-2">✓</th>}
-              <th className="py-2">Status</th>
-              <th className="py-2">Name</th>
-              <th className="py-2">VM ID</th>
-              <th className="py-2">OS</th>
-              <th className="py-2">Node</th>
-              <th className="py-2">IP</th>
-              <th className="py-2">CPU</th>
-              <th className="py-2">RAM</th>
-              <th className="py-2">Disk</th>
-              <th className="py-2">Guacamole</th>
-              <th className="py-2" title="Last connection health check">Health</th>
-              <th className="py-2">Actions</th>
+            <tr>
+              {canManage && <th><span className="pv-mono">✓</span></th>}
+              <th>Status</th>
+              <th>Name</th>
+              <th>VM ID</th>
+              <th>OS</th>
+              <th>Node</th>
+              <th>IP</th>
+              <th className="num">CPU</th>
+              <th className="num">RAM</th>
+              <th className="num">Disk</th>
+              <th>Guacamole</th>
+              <th title="Last connection health check">Health</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {(data?.vms ?? []).map((row) => (
-              <tr key={`${row.vmid}@${row.node}`} className="border-b border-slate-800/50 hover:bg-slate-900/50">
+              <tr key={`${row.vmid}@${row.node}`}>
                 {canManage && (
-                  <td className="py-2 pr-2">
+                  <td>
                     {row.id ? (
                       <input type="checkbox" checked={selected.includes(row.id)} onChange={() => toggleSelect(row.id as string)} />
                     ) : null}
                   </td>
                 )}
-                <td className="py-2"><StatusBadge status={row.status} /></td>
+                <td><StatusBadge status={row.status} /></td>
                 <td>
-                  {row.private && <span title="Privacy-flagged: invisible without a direct grant">🔒 </span>}
-                  {row.isolated && <span title="Network-isolated: default-deny firewall, explicit allows only">🛡️ </span>}
                   {row.id ? (
-                    <Link to={`/vms/${row.id}`} className="text-blue-400 hover:underline">{row.name}</Link>
+                    <Link to={`/vms/${row.id}`}>{row.name}</Link>
                   ) : (
-                    <span className="text-slate-400">{row.name}</span>
+                    <span style={{ color: "var(--pv-text-3)" }}>{row.name}</span>
                   )}
-                  {!row.tracked && <span className="ml-1 text-xs text-slate-600">(untracked)</span>}
+                  {row.private && <span className="pv-mono" title="Privacy-flagged: invisible without a direct grant" style={{ marginLeft: 6, color: "var(--pv-text-3)" }}>private</span>}
+                  {row.isolated && <span className="pv-mono" title="Network-isolated: default-deny firewall, explicit allows only" style={{ marginLeft: 6, color: "var(--pv-text-3)" }}>isolated</span>}
+                  {!row.tracked && <span className="pv-mono" style={{ marginLeft: 6, color: "var(--pv-text-3)" }}>untracked</span>}
                 </td>
-                <td className="font-mono">{row.vmid}</td>
+                <td className="pv-mono">{row.vmid}</td>
                 <td>{row.os ?? "Unknown"}</td>
                 <td>{row.node}</td>
-                <td className="font-mono text-xs">
+                <td className="pv-mono">
                   {row.ip ?? (
                     row.id && row.status === "running" && canEdit ? (
-                      <button
-                        className="text-blue-400 underline text-xs"
+                      <Btn
+                        kind="link"
                         title="Ask the QEMU Guest Agent for the VM's IP address"
                         onClick={() => void detectIp(row.id as string)}
                       >
-                        WAITING FOR GUEST IP — detect
-                      </button>
+                        Detect IP
+                      </Btn>
                     ) : (
-                      <span className="text-slate-600">WAITING FOR GUEST IP</span>
+                      <span style={{ color: "var(--pv-text-3)" }}>—</span>
                     )
                   )}
                 </td>
-                <td>{row.cpu?.max ? `${row.cpu.max} core${row.cpu.max > 1 ? "s" : ""}` : "—"}</td>
-                <td>{fmtBytes(row.mem?.max)}</td>
-                <td>{fmtBytes(row.disk?.max)}</td>
+                <td className="num">{row.cpu?.max ? `${row.cpu.max}c` : "—"}</td>
+                <td className="num">{fmtBytes(row.mem?.max)}</td>
+                <td className="num">{fmtBytes(row.disk?.max)}</td>
                 <td>
                   {row.guacamole?.created ? (
                     <StatusBadge status={row.guacamole.status ?? "ACTIVE"} />
                   ) : (
-                    <span className="text-xs text-slate-600">none</span>
+                    <span style={{ color: "var(--pv-text-3)" }}>—</span>
                   )}
                 </td>
                 <td>{healthDot(row.id)}</td>
                 <td>
-                  <div className="flex flex-wrap gap-1">
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                     {row.id && row.guacamole?.created && canLaunch && (
-                      <button
-                        className={btn}
+                      <Btn
+                        size="sm"
                         title={row.guacamole.protocol ? `Launch via ${row.guacamole.protocol.toUpperCase()}` : "Launch"}
                         onClick={() => void launchGuac(row.id as string, row.guacamole?.protocol ?? undefined)}
                       >
-                        OPEN GUACAMOLE{row.guacamole.protocol ? ` (${row.guacamole.protocol.toUpperCase()})` : ""}
-                      </button>
+                        Open{row.guacamole.protocol ? ` ${row.guacamole.protocol.toUpperCase()}` : ""}
+                      </Btn>
                     )}
                     {row.id && canManage && (
                       <>
-                        <button className={btn} onClick={() => void doAction(row.id as string, "start")}>START</button>
-                        <button className={btn} onClick={() => void doAction(row.id as string, "stop")}>STOP</button>
-                        <button className={btn} onClick={() => void doAction(row.id as string, "restart")}>RESTART</button>
+                        <Btn size="sm" onClick={() => void doAction(row.id as string, "start")}>Start</Btn>
+                        <Btn size="sm" onClick={() => void doAction(row.id as string, "stop")}>Stop</Btn>
+                        <Btn size="sm" onClick={() => void doAction(row.id as string, "restart")}>Restart</Btn>
                       </>
                     )}
                     {row.id && (canEdit || canManage) && (
-                      <Link to={`/vms/${row.id}`} className={btn}>EDIT</Link>
+                      <Link to={`/vms/${row.id}`} className="pv-btn pv-btn-sm">Open</Link>
                     )}
                     {row.id && canDelete && (
-                      <button
-                        className={`${btn} text-red-300`}
+                      <Btn
+                        size="sm"
+                        kind="link"
                         onClick={() =>
-                          confirm(
-                            `Delete VM ${row.name}?`,
-                            `DELETE ${row.name}`,
-                            async () => {
-                              await api(`/vms/${row.id}`, { method: "DELETE", body: { confirmText: `DELETE ${row.name}` } });
-                              void qc.invalidateQueries({ queryKey: ["vms"] });
-                            },
-                          )
+                          del({
+                            ...row,
+                            id: row.id,
+                          })
                         }
                       >
-                        DELETE
-                      </button>
+                        Delete
+                      </Btn>
                     )}
                   </div>
                 </td>
@@ -692,8 +683,14 @@ export default function Vms({ me }: { me: Me }) {
             ))}
           </tbody>
         </table>
-        {!data?.vms.length && <div className="text-sm text-slate-500 py-4">No VMs found in the Proxmox cluster.</div>}
       </div>
+      {!data?.vms.length && (
+        <Empty
+          title="No virtual machines"
+          body="Nothing in the Proxmox cluster is visible to you yet. Provision one, or ask an administrator for access."
+          action={canCreate ? <Btn kind="primary" size="sm" onClick={() => setProvisionOpen(true)}>Provision VM</Btn> : undefined}
+        />
+      )}
     </div>
   );
 }
@@ -728,26 +725,18 @@ function Stepper({ label, value, unit, min, max, step, onChange }: {
   onChange: (v: number) => void;
 }) {
   return (
-    <div className="bg-slate-800/50 border border-slate-700/50 rounded p-3">
-      <div className="text-xs font-medium text-slate-400 mb-2">{label}</div>
-      <div className="flex items-center gap-2">
-        <button
-          className="w-7 h-7 rounded bg-slate-700 hover:bg-slate-600 text-lg leading-none disabled:opacity-30"
-          disabled={value <= min}
-          onClick={() => onChange(Math.max(min, value - step))}
-        >
+    <div style={{ background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6, padding: 10 }}>
+      <div className="pv-label" style={{ marginBottom: 6 }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Btn size="sm" disabled={value <= min} onClick={() => onChange(Math.max(min, value - step))}>
           −
-        </button>
-        <span className="flex-1 text-center font-mono">
-          {value} <span className="text-slate-500 text-xs">{unit}</span>
+        </Btn>
+        <span className="pv-mono" style={{ flex: 1, textAlign: "center" }}>
+          {value} <span style={{ color: "var(--pv-text-3)" }}>{unit}</span>
         </span>
-        <button
-          className="w-7 h-7 rounded bg-slate-700 hover:bg-slate-600 text-lg leading-none disabled:opacity-30"
-          disabled={value >= max}
-          onClick={() => onChange(Math.min(max, value + step))}
-        >
+        <Btn size="sm" disabled={value >= max} onClick={() => onChange(Math.min(max, value + step))}>
           +
-        </button>
+        </Btn>
       </div>
     </div>
   );
@@ -762,13 +751,13 @@ function AssignUsersPicker({ users, assignIds, toggleAssign }: {
   const grantable = users.filter((u) => !u.roles.includes("ADMIN") && !u.roles.includes("OPERATOR"));
   if (!grantable.length) return null;
   return (
-    <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1">
-        Users <span className="text-slate-500">(optional — they get this VM + its Guacamole connections)</span>
+    <div className="pv-field">
+      <label className="pv-label">
+        Users <span style={{ fontWeight: 400 }}>(optional — they get this VM + its Guacamole connections)</span>
       </label>
-      <div className="max-h-28 overflow-y-auto bg-slate-800/50 border border-slate-700/50 rounded p-2 space-y-1">
+      <div style={{ maxHeight: 112, overflowY: "auto", background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6, padding: 8 }}>
         {grantable.map((u) => (
-          <label key={u.id} className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+          <label key={u.id} className="pv-checkrow" style={{ padding: "3px 0", cursor: "pointer" }}>
             <input type="checkbox" checked={assignIds.includes(u.id)} onChange={() => toggleAssign(u.id)} />
             {u.username}
           </label>
@@ -803,8 +792,6 @@ function BasicProvisionForm({ basic, setBasic, templates, defaults, networks, as
   onCancel: () => void;
   submitting: boolean;
 }) {
-  const input = "w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm";
-  const label = "block text-xs font-medium text-slate-400 mb-1";
   const tmpl = templates.find((t) => t.id === basic.templateId);
   const supported = tmpl?.supportedProtocols?.length
     ? tmpl.supportedProtocols
@@ -822,19 +809,19 @@ function BasicProvisionForm({ basic, setBasic, templates, defaults, networks, as
     !!password;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <label className={label}>Name</label>
+    <div>
+      <div className="pv-field">
+        <label className="pv-label">Name</label>
         <input
-          className={input}
+          className="pv-input"
           placeholder="Debian Lab"
           value={basic.name}
           onChange={(e) => setBasic({ ...basic, name: e.target.value })}
         />
       </div>
-      <div>
-        <label className={label}>Template</label>
-        <select className={input} value={basic.templateId} onChange={(e) => onPickTemplate(e.target.value)}>
+      <div className="pv-field">
+        <label className="pv-label">Template</label>
+        <select className="pv-select" value={basic.templateId} onChange={(e) => onPickTemplate(e.target.value)}>
           <option value="">Select template…</option>
           {templates.map((t) => (
             <option key={t.id} value={t.id}>
@@ -844,38 +831,38 @@ function BasicProvisionForm({ basic, setBasic, templates, defaults, networks, as
         </select>
       </div>
       {defaults && defaults.warnings.length > 0 && (
-        <div className="bg-yellow-900/50 border border-yellow-700 text-yellow-200 rounded p-2 text-xs">
+        <div className="pv-notice pv-notice-warn" style={{ fontSize: "0.78rem" }}>
           {defaults.warnings.map((w) => <div key={w}>{w}</div>)}
         </div>
       )}
-      <div>
-        <div className={`${label} mb-2`}>Resources</div>
+      <div className="pv-field">
+        <div className="pv-label" style={{ marginBottom: 8 }}>Resources</div>
         <div className="grid grid-cols-3 gap-2">
           <Stepper label="CPU" value={basic.cpu} unit={basic.cpu === 1 ? "core" : "cores"} min={1} max={32} step={1} onChange={(v) => setBasic({ ...basic, cpu: v })} />
           <Stepper label="Memory" value={memGb} unit="GB" min={1} max={128} step={1} onChange={(v) => setBasic({ ...basic, ramMb: v * 1024 })} />
           <Stepper label="Disk" value={basic.diskGb} unit="GB" min={8} max={1024} step={4} onChange={(v) => setBasic({ ...basic, diskGb: v })} />
         </div>
-        <div className="text-xs text-slate-500 mt-1">
+        <div className="pv-hint">
           Node {defaults?.node ?? "…"} · Storage {defaults?.storage ?? "…"}
           {defaults && !defaults.verified && " (defaults not verified — Proxmox unreachable)"}
         </div>
       </div>
-      <div>
-        <label className={label}>Network</label>
-        <select className={input} value={bridge} onChange={(e) => setBasic({ ...basic, bridge: e.target.value })}>
+      <div className="pv-field">
+        <label className="pv-label">Network</label>
+        <select className="pv-select" value={bridge} onChange={(e) => setBasic({ ...basic, bridge: e.target.value })}>
           {bridgeOptions.map((b) => (
             <option key={b} value={b}>{b}</option>
           ))}
         </select>
       </div>
-      <div>
-        <label className={label}>Remote Access</label>
+      <div className="pv-field">
+        <label className="pv-label">Remote access</label>
         {!basic.templateId ? (
-          <div className="text-xs text-slate-500">Select a template to choose protocols.</div>
+          <div className="pv-hint">Select a template to choose protocols.</div>
         ) : (
-          <div className="flex gap-4 text-sm text-slate-300">
+          <div style={{ display: "flex", gap: 16 }}>
             {supported.map((p) => (
-              <label key={p} className="flex items-center gap-1 uppercase cursor-pointer">
+              <label key={p} className="pv-checkrow" style={{ textTransform: "uppercase", cursor: "pointer" }}>
                 <input
                   type="checkbox"
                   checked={basic.protocols.includes(p)}
@@ -895,21 +882,15 @@ function BasicProvisionForm({ basic, setBasic, templates, defaults, networks, as
         )}
       </div>
       <AssignUsersPicker users={users} assignIds={assignIds} toggleAssign={toggleAssign} />
-      <div className="text-xs text-slate-500">
-        Guest password (generated & encrypted):{" "}
-        <code className="bg-slate-800 px-2 py-1 rounded select-all">{password ?? "…"}</code>
+      <div className="pv-hint" style={{ marginBottom: 12 }}>
+        Guest password (generated &amp; encrypted):{" "}
+        <code className="pv-mono" style={{ userSelect: "all" }}>{password ?? "…"}</code>
       </div>
-      <div className="flex justify-end gap-2">
-        <button onClick={onCancel} className="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">
-          Cancel
-        </button>
-        <button
-          onClick={onSubmit}
-          disabled={!canSubmit || submitting}
-          className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded"
-        >
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <Btn onClick={onCancel}>Cancel</Btn>
+        <Btn kind="primary" onClick={onSubmit} disabled={!canSubmit || submitting}>
           {submitting ? "Creating…" : "Create VM"}
-        </button>
+        </Btn>
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { AppError } from "../util/errors.js";
 import { newId } from "../util/misc.js";
+import type { Queryable } from "../db/pool.js";
 import type { SettingsService } from "./settings.js";
 
 export interface PowerPeriod {
@@ -127,7 +128,7 @@ export async function monthlyUsage(db: Pool, month: string): Promise<VmMonthlyUs
 
 // -- Quotas -------------------------------------------------------------------
 
-export async function getUserQuota(db: Pool, userId: string): Promise<number | null> {
+export async function getUserQuota(db: Queryable, userId: string): Promise<number | null> {
   const result = await db.query<{ max_vms: number | null }>("SELECT max_vms FROM users WHERE id = $1", [userId]);
   return result.rows[0]?.max_vms ?? null;
 }
@@ -145,12 +146,38 @@ export async function setUserQuota(db: Pool, userId: string, maxVms: number | nu
 }
 
 /** Live (non-deleted) VMs created by a user. Assigned-but-not-owned VMs don't count. */
-export async function countUserVms(db: Pool, userId: string): Promise<number> {
+export async function countUserVms(db: Queryable, userId: string): Promise<number> {
   const result = await db.query<{ count: string }>(
     "SELECT COUNT(*) AS count FROM vms WHERE created_by_user_id = $1 AND deleted_at IS NULL",
     [userId],
   );
   return Number(result.rows[0]?.count ?? 0);
+}
+
+/**
+ * In-flight provisions that can still become VMs. Rows stuck in a
+ * non-terminal state for over a day are ignored: the worker's longest wait
+ * loop is ~15 minutes, so anything older is a crashed-worker leftover, and
+ * counting it forever would wedge the user at their quota with no recourse.
+ */
+export async function countActiveProvisioningJobs(db: Queryable, userId: string): Promise<number> {
+  // Chained <> (not NOT IN) and a JS-computed cutoff: pg-mem cannot plan
+  // NOT IN lists combined with interval arithmetic (verified crash), while
+  // real Postgres handles both. These portable forms behave identically.
+  const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
+  const result = await db.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM provisioning_jobs
+      WHERE created_by_user_id = $1
+        AND status <> 'READY' AND status <> 'FAILED' AND status <> 'CANCELLED'
+        AND updated_at > $2`,
+    [userId, cutoff],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+/** Quota-relevant load: owned live VMs plus in-flight provisions. */
+export async function countProvisionLoad(db: Queryable, userId: string): Promise<number> {
+  return (await countUserVms(db, userId)) + (await countActiveProvisioningJobs(db, userId));
 }
 
 // -- Support tickets ------------------------------------------------------------

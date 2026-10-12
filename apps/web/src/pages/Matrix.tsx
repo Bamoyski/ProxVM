@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle } from "../components/ui.js";
+import { PageTitle, Empty, Btn } from "../components/ui.js";
 
 interface CatalogPermission {
   code: string;
@@ -81,17 +81,19 @@ export default function Matrix() {
   };
 
   return (
-    <div>
-      <PageTitle title="Permission Matrix" />
-      <div className="flex flex-wrap gap-2 mb-4 items-center text-sm">
+    <div className="pv-page">
+      <PageTitle title="Permission matrix" description="Who holds what, and where it comes from (role, group, direct grant)." />
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "center" }}>
         <input
-          className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 w-56"
+          className="pv-input"
+          style={{ width: 224 }}
           placeholder="Search users, roles, groups…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
         <select
-          className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5"
+          className="pv-select pv-input-auto"
+          style={{ height: 34 }}
           value={category}
           onChange={(e) => setCategory(e.target.value)}
         >
@@ -101,84 +103,77 @@ export default function Matrix() {
           ))}
         </select>
         <input
-          className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 w-56"
+          className="pv-input"
+          style={{ width: 224 }}
           placeholder="Filter permissions…"
           value={permissionFilter}
           onChange={(e) => setPermissionFilter(e.target.value)}
         />
-        <label className="flex items-center gap-1 text-xs text-slate-300">
+        <label className="pv-checkrow">
           <input type="checkbox" checked={grantedOnly} onChange={(e) => setGrantedOnly(e.target.checked)} />
-          Only users holding the filtered permission (pick exactly one)
+          Only holders (filter to exactly one permission)
         </label>
       </div>
       {selectedPerm && (
-        <div className="bg-slate-900 border border-slate-800 rounded p-4 mb-4">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-lg text-blue-300">{selectedPerm.code}</span>
-            <span className="text-xs text-slate-500">
+        <div className="pv-notice" style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span className="pv-mono" style={{ fontSize: "0.95rem" }}>{selectedPerm.code}</span>
+            <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }}>
               {selectedPerm.category} · scope: {selectedPerm.scope}
             </span>
-            <button
-              className="ml-auto text-xs text-slate-400 hover:text-slate-200 underline"
-              onClick={() => setSelected(null)}
-            >
-              Close
-            </button>
+            <Btn size="sm" kind="link" onClick={() => setSelected(null)}>Close</Btn>
           </div>
-          <div className="text-slate-200 text-base mt-2">{selectedPerm.description}</div>
+          <div style={{ marginTop: 4 }}>{selectedPerm.description}</div>
         </div>
       )}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm border-collapse">
+      <div className="pv-table-wrap">
+        <table className="pv-table">
           <thead>
-            <tr className="text-left text-xs text-slate-400 border-b border-slate-800">
-              <th className="py-2 pr-4 sticky left-0 bg-slate-950">User</th>
+            <tr>
+              <th style={{ position: "sticky", left: 0 }}>User</th>
               {permList.map((p) => (
-                <th key={p.code} className="py-2 px-2 font-mono font-normal whitespace-nowrap" title={p.description || p.code}>
+                <th key={p.code} className="pv-mono" style={{ fontWeight: 500, whiteSpace: "nowrap" }} title={p.description || p.code}>
                   {p.code}
-                  <button
-                    className={`ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full border text-[10px] leading-none ${
-                      selectedPerm?.code === p.code
-                        ? "border-blue-400 text-blue-300"
-                        : "border-slate-600 text-slate-400 hover:border-slate-300 hover:text-slate-200"
-                    }`}
+                  <Btn
+                    size="sm"
+                    kind="link"
                     title={`About ${p.code}`}
                     aria-label={`About ${p.code}`}
                     onClick={() => setSelected(selectedPerm?.code === p.code ? null : p.code)}
                   >
-                    i
-                  </button>
+                    ⓘ
+                  </Btn>
                 </th>
               ))}
-              <th className="py-2 px-2">VMs</th>
+              <th className="num">VMs</th>
             </tr>
           </thead>
           <tbody>
             {users.map((u) => (
-              <tr key={u.user.id} className="border-b border-slate-800/50 hover:bg-slate-900/50">
-                <td className="py-2 pr-4 sticky left-0 bg-slate-950">
+              <tr key={u.user.id}>
+                <td style={{ position: "sticky", left: 0, background: "var(--pv-surface)" }}>
                   {u.user.username}
-                  <span className="text-xs text-slate-500 ml-1">({u.user.roles.join(", ")})</span>
-                  {u.user.active === false && <span className="text-xs text-red-300 ml-1">disabled</span>}
+                  <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 4 }}>({u.user.roles.join(", ")})</span>
+                  {u.user.active === false && <span style={{ fontSize: "0.76rem", color: "var(--pv-err)", marginLeft: 4 }}>disabled</span>}
                 </td>
                 {permList.map((p) => {
                   const sources = has(u, p.code);
                   return (
-                    <td key={p.code} className="py-2 px-2 text-center" title={sources ? sources.join("; ") : "not granted"}>
-                      {sources ? <span className="text-green-400">✓</span> : <span className="text-slate-700">—</span>}
+                    <td key={p.code} style={{ textAlign: "center", color: sources ? "var(--pv-ok)" : "var(--pv-text-3)" }} title={sources ? sources.join("; ") : "not granted"}>
+                      {sources ? "✓" : "—"}
                     </td>
                   );
                 })}
-                <td className="py-2 px-2 font-mono text-xs" title={u.vmAccess.map((v) => v.vmId).join(", ")}>
+                <td className="num pv-mono" title={u.vmAccess.map((v) => v.vmId).join(", ")}>
                   {u.vmAccess.length}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {!users.length && <div className="text-sm text-slate-500 py-4">No users match the current filters.</div>}
       </div>
-      <div className="text-xs text-slate-500 mt-2">Hover a column header for the permission description, or click its ⓘ button for details. Hover a ✓ to see where each permission comes from (role, group, direct grant).</div>
+      {!users.length && <Empty title="No users match the current filters" />}
+      <div className="pv-hint" style={{ marginTop: 8 }}>Hover a ✓ to see where each permission comes from (role, group, direct grant).</div>
     </div>
   );
 }

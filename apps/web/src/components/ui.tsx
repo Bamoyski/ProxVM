@@ -2,20 +2,22 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "../api.js";
 
+/** Status as dot + text with fixed meaning: ok (running/ready), warn
+ * (attention-worthy), err (broken), info, muted (neutral/off). Never pills. */
 export function StatusBadge({ status }: { status: string | null | undefined }) {
   const s = status ?? "unknown";
-  const color =
-    s === "running" || s === "READY" || s === "ACTIVE" || s === "VERIFIED" || s === "ONLINE"
-      ? "bg-green-900 text-green-300"
-      : s === "stopped" || s === "PENDING" || s === "ENCRYPTED" || s === "PROVISIONED"
-        ? "bg-slate-700 text-slate-300"
-        : s === "FAILED" || s === "OFFLINE" || s === "ERROR" || s === "ROTATING"
-          ? "bg-red-900 text-red-300"
-          : "bg-yellow-900 text-yellow-300";
-  return <span className={`px-2 py-0.5 rounded text-xs font-mono ${color}`}>{s}</span>;
+  const tone =
+    s === "running" || s === "READY" || s === "ACTIVE" || s === "VERIFIED" || s === "ONLINE" || s === "connected"
+      ? "pv-status-ok"
+      : s === "FAILED" || s === "OFFLINE" || s === "ERROR" || s === "ROTATING" || s === "failed" || s === "disconnected"
+        ? "pv-status-err"
+        : s === "unknown" || s === "stopped" || s === "PENDING" || s === "PROVISIONED" || s === "ENCRYPTED" || s === "CANCELLED"
+          ? ""
+          : "pv-status-warn";
+  return <span className={`pv-status ${tone}`}>{s}</span>;
 }
 
-export function PageTitle({ title, children }: { title: string; children?: ReactNode }) {
+export function PageTitle({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
   useEffect(() => {
     document.title = `${title} — ProxVM`;
     return () => {
@@ -23,16 +25,59 @@ export function PageTitle({ title, children }: { title: string; children?: React
     };
   }, [title]);
   return (
-    <div className="flex items-center justify-between mb-6">
-      <h1 className="text-2xl font-semibold">{title}</h1>
-      <div className="flex gap-2">{children}</div>
+    <div className="pv-title-row">
+      <h1 className="pv-title">{title}</h1>
+      {children ? <div className="pv-title-actions">{children}</div> : null}
+      {description ? <p className="pv-sub" style={{ flexBasis: "100%", marginBottom: 18 }}>{description}</p> : null}
     </div>
   );
 }
 
 export function ErrorBox({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : String(error);
-  return <div className="bg-red-900/50 border border-red-700 text-red-200 rounded p-3 text-sm">{message}</div>;
+  return <div className="pv-error">{message}</div>;
+}
+
+/** One primary action per group; everything else secondary, ghost, or danger. */
+export function Btn({ kind, size, ...rest }: {
+  kind?: "primary" | "secondary" | "danger" | "link";
+  size?: "sm";
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const cls =
+    kind === "primary" ? "pv-btn pv-btn-primary" :
+    kind === "danger" ? "pv-btn pv-btn-danger" :
+    kind === "link" ? "pv-btn pv-btn-link" :
+    "pv-btn";
+  return <button className={size === "sm" ? `${cls} pv-btn-sm` : cls} {...rest} />;
+}
+
+export function Section({ title, hint, actions, children, id }: {
+  title: string;
+  hint?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+  id?: string;
+}) {
+  return (
+    <section className="pv-section" id={id} style={id ? { scrollMarginTop: 16 } : undefined}>
+      <div className="pv-section-head">
+        <h2 className="pv-section-title">{title}</h2>
+        {hint ? <p className="pv-section-hint">{hint}</p> : null}
+        {actions ? <div className="pv-section-actions">{actions}</div> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export function Empty({ title, body, action }: { title: string; body?: string; action?: ReactNode }) {
+  return (
+    <div className="pv-empty">
+      <b>{title}</b>
+      {body ? <span>{body}</span> : null}
+      {action ? <div style={{ marginTop: 8 }}>{action}</div> : null}
+    </div>
+  );
 }
 
 export function ConfirmDialog({
@@ -52,27 +97,24 @@ export function ConfirmDialog({
   const valid = text === requiredText;
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-[28rem]">
-        <h2 className="text-lg font-semibold mb-2">{title}</h2>
-        <p className="text-sm text-slate-400 mb-4">
-          Type <span className="font-mono text-red-300">{requiredText}</span> to confirm. This action cannot be undone.
+      <div className="pv-panel" style={{ width: "28rem", maxWidth: "calc(100vw - 32px)", boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}>
+        <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 6 }}>{title}</h2>
+        <p className="pv-sub" style={{ marginBottom: 14 }}>
+          Type <span className="pv-mono">{requiredText}</span> to confirm. This action cannot be undone.
         </p>
         <input
-          className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 mb-4 font-mono text-sm"
+          className="pv-input pv-mono"
+          style={{ marginBottom: 16 }}
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={requiredText}
           autoFocus
         />
-        <div className="flex justify-end gap-2">
-          <button onClick={onCancel} className="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 rounded">
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onCancel} className="pv-btn">
             Cancel
           </button>
-          <button
-            disabled={!valid || busy}
-            onClick={onConfirm}
-            className="px-4 py-2 text-sm bg-red-700 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed rounded"
-          >
+          <button disabled={!valid || busy} onClick={onConfirm} className="pv-btn pv-btn-danger">
             {busy ? "Working…" : "Confirm"}
           </button>
         </div>

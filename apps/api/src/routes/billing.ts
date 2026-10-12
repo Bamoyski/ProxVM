@@ -4,6 +4,7 @@ import type { CoreContext } from "@proxvm/core";
 import {
   AppError,
   createTicket,
+  csvCell,
   getAnnouncement,
   getUserQuota,
   isAdmin,
@@ -31,11 +32,7 @@ function currentMonth(): string {
 }
 
 function toCsvCell(value: unknown): string {
-  const text =
-    value === null || value === undefined
-      ? ""
-      : String(value instanceof Date ? value.toISOString() : typeof value === "object" ? JSON.stringify(value) : value);
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  return csvCell(value);
 }
 
 export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
@@ -51,7 +48,7 @@ export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreConte
     return { month, totalHours, vms: rows };
   });
 
-  app.get("/usage/export", { preHandler: adminGuard }, async (request, reply) => {
+  app.get("/usage/export", { preHandler: adminGuard, config: { rateLimit: { max: 30, timeWindow: "1 hour" } } }, async (request, reply) => {
     const query = monthSchema.parse(request.query);
     const month = query.month ?? currentMonth();
     const rows = await monthlyUsage(ctx.db, month);
@@ -74,7 +71,7 @@ export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreConte
     if (!target) throw AppError.notFound("User not found");
     const body = z.object({ maxVms: z.number().int().min(0).max(100000).nullable() }).parse(request.body);
     const maxVms = await setUserQuota(ctx.db, id, body.maxVms);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "QUOTA_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,
@@ -91,7 +88,7 @@ export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreConte
       const user = await app.requireAuth(request);
       const body = z.object({ title: z.string().min(1).max(120), body: z.string().min(1).max(4000) }).parse(request.body);
       const ticket = await createTicket(ctx.db, user.id, body.title, body.body);
-      await ctx.audit.record({
+      await app.audit(request, {
         event: "TICKET_CREATED",
         actorUserId: user.id,
         actorUsername: user.username,
@@ -117,7 +114,7 @@ export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreConte
     const { id } = request.params as { id: string };
     const body = z.object({ status: z.enum(["open", "answered", "closed"]) }).parse(request.body);
     const ticket = await setTicketStatus(ctx.db, id, body.status as TicketStatus, actor.id);
-    await ctx.audit.record({
+    await app.audit(request, {
       event: "TICKET_STATUS_CHANGED",
       actorUserId: actor.id,
       actorUsername: actor.username,

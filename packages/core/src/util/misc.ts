@@ -13,6 +13,21 @@ export function isUuid(value: unknown): value is string {
 
 export const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Single CSV cell encoder shared by every exporter. Two protections:
+ * RFC-style quoting for structural characters, and a leading-quote guard
+ * against spreadsheet formula injection (= + - @ and tab/CR prefixes
+ * execute on import in Excel/Sheets).
+ */
+export function csvCell(value: unknown): string {
+  const raw =
+    value === null || value === undefined
+      ? ""
+      : String(value instanceof Date ? value.toISOString() : typeof value === "object" ? JSON.stringify(value) : value);
+  const text = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
