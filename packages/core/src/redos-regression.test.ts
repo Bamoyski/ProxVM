@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CloudflareClient } from "./cloudflare/client.js";
 import { ProxmoxBackupClient } from "./pbs/client.js";
+import { encodeClientIdentifier } from "./guacamole/api.js";
 import { normalizeHostname, assertValidHostname } from "./services/domains.js";
 
 // Regression tests for CodeQL js/polynomial-redos alerts #7 (cloudflare),
@@ -124,5 +125,48 @@ describe("ReDoS regressions: hostname parsing (#8)", () => {
     expect(normalizeHostname(`${"a".repeat(200000)}`)).toHaveLength(200000);
     expect(() => assertValidHostname(`${"a".repeat(100000)}!`)).toThrow(/Invalid domain name/);
     expect(Date.now() - started).toBeLessThan(5000);
+  }, 15000);
+});
+
+describe("ReDoS regressions: Guacamole identifier encoding (#10)", () => {
+  // The Guacamole web client's own decoding algorithm (mirrors
+  // guacamole-api.test.ts, but utf8 so multibyte identifiers survive —
+  // the implementation encodes utf8 bytes, not latin1).
+  const fromString = (value: string): { id?: string; type?: string; dataSource?: string } => {
+    const padded = value + ["", "===", "==", "="][value.length % 4]!;
+    const decoded = Buffer.from(
+      padded.replace(/[-_]/g, (h) => (({ "-": "+", _: "/" })[h] ?? h)),
+      "base64",
+    ).toString("utf8");
+    const [id, type, dataSource] = decoded.split(String.fromCharCode(0));
+    return { id, type, dataSource };
+  };
+
+  it("encodes identically to the old chain, including padding lengths 0/1/2", () => {
+    // Known vector (10-byte payload → "==" padding, stripped).
+    expect(encodeClientIdentifier("14", "mysql")).toBe("MTQAYwBteXNxbA");
+    // Sweep payload lengths so 0-, 1-, and 2-pad outputs are all covered.
+    for (const identifier of ["a", "ab", "abc", "connection-1", "proxvm-Test_VM.1"]) {
+      for (const dataSource of ["mysql", "postgresql"]) {
+        const encoded = encodeClientIdentifier(identifier, dataSource);
+        expect(encoded).not.toMatch(/[+/=]/);
+        expect(fromString(encoded)).toEqual({ id: identifier, type: "c", dataSource });
+      }
+    }
+    // Identifiers containing URL-significant bytes survive byte-exactly.
+    const tricky = "a+b/c=d é";
+    expect(fromString(encodeClientIdentifier(tricky, "mysql")).id).toBe(tricky);
+  });
+
+  it("handles hostile-sized identifiers in milliseconds with no sheltered alphabet", () => {
+    // Base64 output bounds "=" runs to trailing padding, but hostile
+    // connection names (200KB, every byte value incl. +/=// travelers)
+    // must still encode linearly and round-trip.
+    const hostile = `${"a+/=".repeat(20000)}é${"Z".repeat(50000)}`;
+    const started = Date.now();
+    const encoded = encodeClientIdentifier(hostile, "mysql");
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(encoded).not.toMatch(/[+/=]/);
+    expect(fromString(encoded)).toEqual({ id: hostile, type: "c", dataSource: "mysql" });
   }, 15000);
 });

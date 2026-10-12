@@ -148,11 +148,15 @@ export function encodeClientIdentifier(
   dataSource: string,
   type: GuacClientObjectType = "c",
 ): string {
-  return Buffer.from([identifier, type, dataSource].join(String.fromCharCode(0)), "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+  const raw = Buffer.from([identifier, type, dataSource].join(String.fromCharCode(0)), "utf8").toString("base64");
+  // URL-safe base64 without regex: split/join is linear, while the old
+  // chain (notably /=+$/ on attacker-influenced connection names) risked
+  // quadratic backtracking (CodeQL polynomial-redos). Padding occurs only
+  // at the end of base64 output, so the manual loop below strips at most
+  // the trailing run — identical result, no backtracking possible.
+  let end = raw.length;
+  while (end > 0 && raw.charCodeAt(end - 1) === 61 /* "=" */) end--;
+  return raw.slice(0, end).split("+").join("-").split("/").join("_");
 }
 
 /**
