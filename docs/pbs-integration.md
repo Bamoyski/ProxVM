@@ -74,4 +74,4 @@ This document describes what is wired up and what remains.
 - No backup execution, no scheduling, no restore paths.
 - No fingerprint pinning for self-signed PBS certs (currently trust-on-
   first-use via `verify_ssl=false`, same posture as the PVE client).
-- No PBS UI anywhere (main app or Overwatch) beyond the status endpoint.
+- No PBS UI anywhere beyond the status endpoint.

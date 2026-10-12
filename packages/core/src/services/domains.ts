@@ -3,6 +3,7 @@ import net from "node:net";
 import { AppError } from "../util/errors.js";
 import type { SettingsService } from "./settings.js";
 import { fetchWithSsrfGuard } from "../util/ssrf.js";
+import { stripTrailingSlashes } from "../util/misc.js";
 
 /** True for loopback, unspecified, link-local, and RFC 1918/unique-local ranges. */
 export function isNonPublicIp(ip: string): boolean {
@@ -41,10 +42,34 @@ export function isNonPublicIp(ip: string): boolean {
 export const CANONICAL_KEY = "app.canonical_domain";
 export const ALIASES_KEY = "app.domain_aliases";
 
+/**
+ * Strip a leading URI scheme ("https://") without regex: the old
+ * `/^[a-z][a-z0-9+.-]*:\/\//` pattern has nested overlapping quantifiers
+ * (polynomial backtracking on hostile input, which reaches here via the
+ * raw request Host header). Linear scan, identical accept set.
+ */
+function stripUrlScheme(value: string): string {
+  const idx = value.indexOf("://");
+  if (idx <= 0) return value;
+  const first = value.charCodeAt(0);
+  if (first < 97 || first > 122) return value;
+  for (let i = 1; i < idx; i++) {
+    const c = value.charCodeAt(i);
+    const ok =
+      (c >= 97 && c <= 122) || // a-z
+      (c >= 48 && c <= 57) || // 0-9
+      c === 43 || // +
+      c === 45 || // -
+      c === 46; // .
+    if (!ok) return value;
+  }
+  return value.slice(idx + 3);
+}
+
 /** Lowercase bare hostname: strips scheme, path, port, trailing dot. */
 export function normalizeHostname(raw: string): string {
   let value = raw.trim().toLowerCase();
-  value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
+  value = stripUrlScheme(value);
   value = value.split("/")[0] ?? "";
   value = value.split("@").pop() ?? "";
   const bracketed = value.match(/^\[(.+)\](?::\d+)?$/);
@@ -54,8 +79,37 @@ export function normalizeHostname(raw: string): string {
   return value;
 }
 
+function isHostnameChar(c: number): boolean {
+  return (c >= 97 && c <= 122) || (c >= 48 && c <= 57);
+}
+
+function isValidHostnameLabel(label: string): boolean {
+  if (label.length < 1 || label.length > 63) return false;
+  if (!isHostnameChar(label.charCodeAt(0)) || !isHostnameChar(label.charCodeAt(label.length - 1))) return false;
+  for (let i = 1; i < label.length - 1; i++) {
+    const c = label.charCodeAt(i);
+    if (!isHostnameChar(c) && c !== 45) return false;
+  }
+  return true;
+}
+
 export function assertValidHostname(host: string): void {
-  if (!/^(?=.{1,253}$)[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(host) || !host.includes(".")) {
+  // Manual per-label validation: the old
+  // `/^(?=.{1,253}$)[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/` nests overlapping
+  // quantifiers (polynomial backtracking). Same accept set: 1-253 chars,
+  // dot-separated labels of 1-63 chars, alphanumeric ends, interior
+  // alphanumerics/hyphens, at least one dot.
+  let valid = host.length >= 1 && host.length <= 253 && host.includes(".");
+  if (valid) {
+    const labels = host.split(".");
+    for (const label of labels) {
+      if (!isValidHostnameLabel(label)) {
+        valid = false;
+        break;
+      }
+    }
+  }
+  if (!valid) {
     throw AppError.validation("Invalid domain name (use a bare hostname like app.example.com)");
   }
 }
@@ -144,7 +198,7 @@ export function getAllowedWebOrigins(
   config: DomainConfig,
 ): string[] {
   const out = new Set<string>();
-  const cleanEnv = (envOrigin ?? "").trim().replace(/\/+$/, "");
+  const cleanEnv = stripTrailingSlashes((envOrigin ?? "").trim());
   if (cleanEnv) out.add(cleanEnv);
   const hosts = [config.canonical, ...config.aliases].filter((h): h is string => !!h);
   for (const host of hosts) out.add(`https://${host}`);

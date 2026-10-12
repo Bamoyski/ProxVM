@@ -7,6 +7,7 @@
  */
 import https from "node:https";
 import http from "node:http";
+import { stripTrailingSlashes } from "../util/misc.js";
 
 export class ProxmoxBackupApiError extends Error {
   readonly statusCode: number;
@@ -40,10 +41,6 @@ export interface PbsSnapshot {
   backupTime: number;
   size?: number | null;
   files?: unknown;
-}
-
-function stripTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/, "");
 }
 
 interface HttpResult {

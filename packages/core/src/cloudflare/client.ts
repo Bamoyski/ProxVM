@@ -1,3 +1,5 @@
+import { stripTrailingSlashes } from "../util/misc.js";
+
 export class CloudflareApiError extends Error {
   readonly statusCode: number;
   readonly errors: unknown;
@@ -85,7 +87,9 @@ export class CloudflareClient {
 
   constructor(opts: CloudflareClientOptions) {
     if (!opts.token) throw new CloudflareApiError("Cloudflare API token is required", 400);
-    this.baseUrl = (opts.baseUrl ?? "https://api.cloudflare.com/client/v4").replace(/\/+$/, "");
+    // Linear suffix strip (util/misc): the /\/+$/ pattern backtracks
+    // quadratically on slash-heavy inputs (CodeQL polynomial-redos).
+    this.baseUrl = stripTrailingSlashes(opts.baseUrl ?? "https://api.cloudflare.com/client/v4");
     this.token = opts.token;
     this.timeoutMs = opts.timeoutMs ?? 15000;
     this.fetchImpl = opts.fetchImpl ?? fetch;

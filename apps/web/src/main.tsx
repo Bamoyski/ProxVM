@@ -23,9 +23,9 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
               ProxVM hit an unexpected interface error. Your data is safe — this is display-only.
             </p>
             {this.state.error?.message && (
-              <details className="text-left text-xs text-slate-500 mb-4">
-                <summary className="cursor-pointer hover:text-slate-300">Technical details (for the administrator)</summary>
-                <code className="block mt-2 p-2 bg-slate-950 border border-slate-800 rounded break-all select-all">
+              <details style={{ textAlign: "left", fontSize: "0.76rem", color: "var(--pv-text-3)", marginBottom: 16 }}>
+                <summary style={{ cursor: "pointer" }}>Technical details (for the administrator)</summary>
+                <code className="pv-mono" style={{ display: "block", marginTop: 8, padding: 8, background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6, wordBreak: "break-all", userSelect: "all" }}>
                   {this.state.error.message}
                 </code>
               </details>

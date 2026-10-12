@@ -574,11 +574,11 @@ export default function VmDetail({ me }: { me: Me }) {
                       <input type="checkbox" checked={migrateOnline} onChange={(e) => setMigrateOnline(e.target.checked)} />
                       Online migration (running VMs)
                     </label>
-                    <button onClick={() => void doMigrate()} disabled={!migrateTarget || migrating !== null} className="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded">
+                    <Btn size="sm" onClick={() => void doMigrate()} disabled={!migrateTarget || migrating !== null}>
                       {migrating ? `Migrating to ${migrating.target}…` : "Migrate"}
-                    </button>
+                    </Btn>
                     {migrating && (
-                      <div className="text-xs text-slate-400">Migration running — checking status every few seconds. Safe to leave this page.</div>
+                      <div className="pv-hint">Migration running — checking status every few seconds. Safe to leave this page.</div>
                     )}
                   </div>
                 ) : (
