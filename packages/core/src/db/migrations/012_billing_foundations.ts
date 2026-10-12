@@ -1,3 +1,13 @@
+/* ---------------------------------------------------------------------------
+ * 012_billing_foundations — usage metering, per-user quotas, tickets.
+ *
+ * Inert by default: no limits, no tickets, no power rows on existing
+ * installs, so behavior is unchanged until features opt in. Power periods
+ * are written only on running/stopped transitions (NULL ended_at = running),
+ * never polled — out-of-band Proxmox changes bill correctly without a
+ * sampler. max_vms NULL means unlimited; bounds live in app code because
+ * pg-mem cannot parse a self-referencing CHECK (see inline note).
+ * ------------------------------------------------------------------------- */
 export const billingFoundationsMigration = `
 -- Billing foundations: usage metering, per-user quotas, support tickets.
 -- Everything defaults to inert (no limits, no tickets, no metering rows)

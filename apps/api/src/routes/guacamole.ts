@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Guacamole routes: connection inventory, health snapshots, per-VM launch,
+//   connection test, connection deletion.
+// Permissions: inventory/health need any session (privacy-filtered);
+//   launch needs guac.launch + VM visibility + protocol grant; test needs
+//   vm.read + visibility; delete needs guac.manage.
+// Rate limits: none on management paths (launch is user-initiated demand and
+//   auto-starts stopped VMs, so abuse shows up as audited power events).
+// Security: launch tokens are no-store; expired grants self-clean; protocol
+//   scoping is enforced server-side from effective access, never the client.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -10,6 +21,11 @@ import {
   startVmForLaunchIfStopped,
 } from "@proxvm/core";
 
+/**
+ * Register Guacamole inventory/launch/test/delete endpoints.
+ * WHY visibility-first: every path re-checks VM visibility so privacy-flagged
+ * VMs never leak connection metadata to ungranted privileged list callers.
+ */
 export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 

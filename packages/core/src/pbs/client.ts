@@ -4,6 +4,12 @@
  * Live against the PBS API2 surface: version/datastore/group reads are used
  * by the running app (status checks and future backup scheduling); only
  * startBackup() remains a stub for the next phase.
+ *
+ * Transport mirrors ProxmoxClient (raw node http/https honoring
+ * per-request TLS verification, optional fetch injection for tests).
+ * Auth header is `PBSAPIToken=id:secret` (COLON) — the PVE-style `=` form
+ * yields `invalid token name` from PBS, and token AND user ACLs intersect,
+ * so both must grant access.
  */
 import https from "node:https";
 import http from "node:http";
@@ -20,6 +26,7 @@ export class ProxmoxBackupApiError extends Error {
   }
 }
 
+// --- Option + result shapes ----------------------------------------------------
 export interface ProxmoxBackupClientOptions {
   url: string;
   tokenId: string;
@@ -93,6 +100,7 @@ function nodeHttpRequest(
   });
 }
 
+// --- Client ----------------------------------------------------------------------
 export class ProxmoxBackupClient {
   private readonly baseUrl: string;
   private readonly tokenId: string;
@@ -116,6 +124,9 @@ export class ProxmoxBackupClient {
 
   private headers(body?: unknown): Record<string, string> {
     const h: Record<string, string> = {
+      // WHY `=` between scheme and id but `:` before the secret: PBS parses
+      // `PBSAPIToken=id:secret`; using `=` twice produces `invalid token
+      // name` and a permanently failing client that looks like bad creds.
       Authorization: `PBSAPIToken=${this.tokenId}:${this.tokenSecret}`,
       Accept: "application/json",
     };
@@ -127,6 +138,9 @@ export class ProxmoxBackupClient {
     return h;
   }
 
+  // WHY two transports: production uses node http(s) so self-signed PBS
+  // certs can be honored per request via rejectUnauthorized; fetchImpl exists
+  // only so tests can inject a stub without opening sockets.
   private async httpRequest(path: string, init?: { method?: string; body?: unknown }): Promise<HttpResult> {
     const method = init?.method ?? "GET";
     const serialized = init?.body !== undefined ? JSON.stringify(init.body) : undefined;

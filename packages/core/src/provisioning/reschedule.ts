@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------
+// Provisioning reschedule: worker-side RESCHEDULE handling with attempt caps
+//   and compensation-to-FAILED when the queue is down. No permissions/rate
+//   limits here (worker-internal); audit records every terminal outcome.
+// Security: re-queue failures can never strand a job non-terminal with no
+//   future attempt — the DB row is compensated and the error rethrown.
+// ---------------------------------------------------------------------------
 import type { AuditService } from "../services/audit.js";
 import type { JobsRepository } from "../services/jobs.js";
 import type { Logger } from "../util/logger.js";

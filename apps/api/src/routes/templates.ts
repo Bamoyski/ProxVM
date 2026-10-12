@@ -1,3 +1,12 @@
+// ---------------------------------------------------------------------------
+// Templates routes: list registered provisioning templates, register a new
+//   template against a live Proxmox template, delete with typed confirmation.
+// Permissions: list needs any session (provisioning UX); register/delete
+//   need templates.manage (ADMIN/operator surface).
+// Rate limits: none (management-only writes; each is audited).
+// Security: registration verifies the vmid+node exists live in Proxmox so
+//   jobs cannot point at phantom templates; deletes need DELETE <name>.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -18,13 +27,20 @@ const registerSchema = z.object({
   supportedProtocols: z.array(z.enum(PROTOCOLS)).min(1).default(["ssh"]),
 });
 
+/**
+ * Register template list/register/delete endpoints.
+ * WHY live verification on register: the provisioning pipeline clones by
+ * vmid, so a typo would otherwise surface only mid-job as an orphaned VM.
+ */
 export async function templateRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 
+  // -- List (any session; provisioning UX needs it) --------------------------
   app.get("/templates", { preHandler: app.requireAuth }, async () => {
     return { templates: await ctx.templates.list() };
   });
 
+  // -- Register/delete (templates.manage, audited) ---------------------------
   app.post("/templates", async (request) => {
     const actor = await app.requirePermission("templates.manage")(request);
     const body = registerSchema.parse(request.body);

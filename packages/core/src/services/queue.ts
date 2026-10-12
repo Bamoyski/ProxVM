@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Provisioning queue: BullMQ wrapper linking queue jobs to DB job rows.
+// - Redis payloads are untrusted (shared bus): validateQueuePayload rejects
+//   malformed/foreign shapes so the worker fails the DB row instead of
+//   crashing on them; attempts stay single-shot (attempts: 1), retries are
+//   explicit re-enqueues with bumped attempt counters.
+// - Bull job ids embed the DB id + attempt (db-<id>-a<n>) for traceability;
+//   the DB row stores the Bull id back so cancel paths can remove the right
+//   queued job. removeBullJob is best-effort and never throws.
+// ---------------------------------------------------------------------------
 import type IORedis from "ioredis";
 import { Queue } from "bullmq";
 import { isUuid } from "../util/misc.js";
@@ -23,6 +33,7 @@ export function validateQueuePayload(data: unknown): { jobDbId: string; attempt:
   return { jobDbId, attempt: attempt as number };
 }
 
+/** Shared BullMQ queue with bounded retention for completed/failed jobs. */
 export function createProvisioningQueue(redis: IORedis): Queue<EnqueueJobData> {
   return new Queue<EnqueueJobData>(PROVISIONING_QUEUE, {
     connection: redis,
@@ -34,6 +45,10 @@ export function createProvisioningQueue(redis: IORedis): Queue<EnqueueJobData> {
   });
 }
 
+/**
+ * Enqueues one provisioning attempt and links the Bull id back to the DB
+ * row so cancel paths can remove the queued job. Delay defers the run.
+ */
 export async function enqueueProvisioningJob(
   queue: Queue<EnqueueJobData>,
   jobs: JobsRepository,

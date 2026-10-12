@@ -1,3 +1,14 @@
+/* ---------------------------------------------------------------------------
+ * proxmox/client.ts — Proxmox VE API2 client (nodes, QEMU, firewall, agent).
+ *
+ * Raw node http/https transport honors per-request TLS verification (homelab
+ * PVE certs are self-signed; verifySsl=false targets that case), with an
+ * injectable fetch for tests. Auth is `PVEAPIToken=id=secret` (note the two
+ * `=` — PBS uses `:` instead; do not copy that form here). User-facing
+ * messages omit hostnames/URLs (they reach normal users); structured context
+ * rides in `detail` for logs and privileged 502s. Backups run via vzdump
+ * here — PBS has no VM-backup endpoint of its own.
+ * ------------------------------------------------------------------------- */
 import https from "node:https";
 import http from "node:http";
 import type { ProxmoxAgentInfo, ProxmoxNodeStatus, ProxmoxQemuResource, ProxmoxVmConfig } from "@proxvm/shared";
@@ -17,6 +28,7 @@ export class ProxmoxApiError extends Error {
   }
 }
 
+// --- Option + wire shapes -------------------------------------------------------
 export interface ProxmoxClientOptions {
   url: string;
   tokenId: string;
@@ -38,6 +50,7 @@ interface HttpResult {
   text: string;
 }
 
+// --- Raw transport (shared by every request; fetch path below for tests) ------
 function nodeHttpRequest(
   target: string,
   opts: {
@@ -82,6 +95,7 @@ function nodeHttpRequest(
   });
 }
 
+// --- Client ------------------------------------------------------------------------
 export class ProxmoxClient {
   private readonly baseUrl: string;
   private readonly tokenId: string;
@@ -176,6 +190,12 @@ export class ProxmoxClient {
     }
   }
 
+  /**
+   * Envelope + status handling for one API2 call. WHY data-over-errors
+   * order: PVE returns HTTP 200 with an `errors` map for parameter problems,
+   * so checking status alone would treat invalid input as success; and any
+   * non-JSON body (proxy error page) becomes its own error, never a cast.
+   */
   async request<T = unknown>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
     const result = await this.httpRequest(path, init);
     let json: { data?: T; errors?: Record<string, unknown> } | null = null;
@@ -232,6 +252,7 @@ export class ProxmoxClient {
     }));
   }
 
+  /** Cluster-wide VM inventory (templates included; filter at the call site). */
   async clusterResources(): Promise<ProxmoxQemuResource[]> {
     const resources = await this.request<Array<Record<string, unknown>>>("/cluster/resources?type=vm");
     const out: ProxmoxQemuResource[] = [];
@@ -349,6 +370,11 @@ export class ProxmoxClient {
     return resources.filter((r) => r.template === 1);
   }
 
+  /**
+   * Storage list across the cluster. WHY per-node try/continue: one offline
+   * node must not fail the whole inventory — its storages are simply absent
+   * until it returns, and the caller still gets every reachable node.
+   */
   async storages(node?: string): Promise<Array<Record<string, unknown>>> {
     if (node) return this.request(`/nodes/${encodeURIComponent(node)}/storage`);
     const nodes = await this.nodes();
@@ -368,6 +394,11 @@ export class ProxmoxClient {
     return this.request(`/nodes/${encodeURIComponent(node)}/network`);
   }
 
+  /**
+   * Reserve the next cluster-wide VMID. WHY validate finiteness: PVE answers
+   * in a bare number that a proxy hiccup can turn into garbage — cloning
+   * into VMID NaN would corrupt inventory, so fail loudly here instead.
+   */
   async nextId(): Promise<number> {
     const result = await this.request<number | string>("/cluster/nextid");
     const value = Number(result);
@@ -520,6 +551,11 @@ export class ProxmoxClient {
     return this.request<ProxmoxTaskStatus>(`/nodes/${node}/tasks/${safe}/status`);
   }
 
+  /**
+   * Poll a task UPID until stopped or the deadline passes. WHY exitstatus
+   * "OK"-or-empty: some PVE versions report success with an empty string,
+   * so requiring exactly "OK" would turn good clones into false failures.
+   */
   async waitForTask(node: string, upid: string, timeoutMs = 600000, pollMs = 2000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -537,6 +573,11 @@ export class ProxmoxClient {
     throw new ProxmoxApiError(`Timed out waiting for Proxmox task ${upid}`, 504, null);
   }
 
+  /**
+   * Guest-agent presence probe. WHY null-on-error (not throw): a missing
+   * agent is an expected state (fresh clone, agent not installed), and the
+   * polling loops above treat null as "not yet" rather than a hard failure.
+   */
   async agentInfo(node: string, vmid: number): Promise<Record<string, unknown> | null> {
     try {
       return await this.request<Record<string, unknown>>(`/nodes/${node}/qemu/${vmid}/agent/info`);
@@ -603,6 +644,12 @@ export class ProxmoxClient {
     };
   }
 
+  /**
+   * IPv4 inventory for one guest. WHY dedupe + drop non-ipv4: the agent
+   * reports loopback, link-local, and v6 alongside real addresses, and the
+   * same IPv4 can repeat per interface — callers need a clean unique v4 set
+   * for Guacamole rows and stale-DHCP detection.
+   */
   async guestIpAddresses(node: string, vmid: number): Promise<ProxmoxAgentInfo | null> {
     const info = await this.agentInfo(node, vmid);
     if (!info) return null;

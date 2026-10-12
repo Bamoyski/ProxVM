@@ -1,3 +1,11 @@
+// ---------------------------------------------------------------------------
+// Shared zod schemas: single validation authority for auth, users, setup,
+//   provisioning (full + Basic partial), credentials, and query shapes.
+// Security: passwordComplexity (12/upper/lower/number/symbol, 128 cap) is
+//   the one password-SETTING rule everywhere; login stays wider (512) so
+//   older longer passwords still verify; VM names/IPs are tightened here so
+//   API + worker reject the same bad input.
+// ---------------------------------------------------------------------------
 import { z } from "zod";
 import {
   CRED_STATUS,
@@ -12,6 +20,11 @@ import {
   VM_STATUS,
 } from "./enums.js";
 
+/**
+ * Render a length-preserving redaction placeholder (never the secret).
+ * WHY keep the length: logs/UI can distinguish empty vs set secrets without
+ * revealing anything about the value itself.
+ */
 export const redact = (value: string): string =>
   value ? `[REDACTED:${value.length}]` : "[REDACTED]";
 

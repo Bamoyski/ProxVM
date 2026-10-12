@@ -1,9 +1,21 @@
+// ---------------------------------------------------------------------------
+// CredentialsService: encrypted per-VM guest password vault (one row/VM).
+// - Plaintext never touches the DB: callers pass passwords in, encrypt()
+//   runs here, and only ciphertext + key_id persist for key rotation.
+// - view() is the only safe read shape; findByVm returns ciphertext and is
+//   for rotation/Guacamole sync paths only, never for API responses.
+// - tryClaimRotation is a compare-and-set on status so exactly one racer
+//   leaves <> 'ROTATING'; losers must back off (409) or force-retry.
+// - Status transitions (ENCRYPTED/ROTATING/VERIFIED/etc.) are advisory UI
+//   state, not a security boundary; the ciphertext is the secret.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import type { CredStatus } from "@proxvm/shared";
 import { AppError } from "../util/errors.js";
 import { newId } from "../util/misc.js";
 import type { CredentialRow } from "./rows.js";
 
+/** Safe API shape: metadata only, never ciphertext. */
 export interface VmCredentialView {
   id: string;
   vmId: string;
@@ -14,12 +26,14 @@ export interface VmCredentialView {
   lastRotatedAt: Date | null;
 }
 
+/** Encrypted per-VM vault; plaintext only in transit (see header). */
 export class CredentialsService {
   constructor(
     private readonly db: Pool,
     private readonly encrypt: (plaintext: string) => string,
   ) {}
 
+  // -- Writes: single row per VM; store() upserts, rotate() re-encrypts -
   async store(vmId: string, username: string, password: string, status: CredStatus = "ENCRYPTED"): Promise<string> {
     const existing = await this.findByVm(vmId);
     if (existing) {
@@ -89,6 +103,7 @@ export class CredentialsService {
     );
   }
 
+  // -- Reads: ciphertext for rotation/sync only; view() is UI-safe -----
   async findByVm(vmId: string): Promise<CredentialRow | null> {
     const result = await this.db.query<CredentialRow>(
       "SELECT * FROM vm_credentials WHERE vm_id = $1",
@@ -116,6 +131,7 @@ export class CredentialsService {
   }
 }
 
+/** Splits "keyId:ciphertext"; legacy rows without a prefix read as v1. */
 export function keyIdOf(ciphertext: string): string {
   const sep = ciphertext.indexOf(":");
   return sep > 0 ? ciphertext.slice(0, sep) : "v1";

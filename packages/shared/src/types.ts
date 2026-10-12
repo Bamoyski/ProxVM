@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------
+// Shared domain types: DB row shapes (users, VMs, credentials, templates,
+//   Guacamole, jobs/steps, access) plus Proxmox/agent/storage wire shapes.
+// WHY interfaces mirror DB columns: services map rows 1:1, so drift here
+//   surfaces as a type error rather than a silent runtime mismatch. Secrets
+//   travel only as ciphertext fields; plaintext lives in transit, not rows.
+// ---------------------------------------------------------------------------
 import type {
   AuditEvent,
   CredStatus,

@@ -1,9 +1,20 @@
+// ---------------------------------------------------------------------------
+// TemplatesService: Proxmox template registry behind provisioning choices.
+// - Identity is (node, proxmoxVmid): register() upserts on that key so
+//   re-registering refreshes metadata instead of duplicating rows.
+// - ensureProvisionable is the automation gate: Linux requires cloud-init,
+//   Windows requires Cloudbase-Init + cloud-init drive; anything else gets
+//   a validation/501 before a job is ever queued (not mid-provision).
+// - Rows are purely descriptive (defaults, protocols, agent requirements);
+//   tenant isolation lives in the VM/access layers, not here.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import type { OsType, Protocol, ProvisioningMethod, TemplateRecord } from "@proxvm/shared";
 import { AppError } from "../util/errors.js";
 import { isUuid, newId } from "../util/misc.js";
 import type { TemplateRow } from "./rows.js";
 
+/** Registration-time template metadata; identity is (node, proxmoxVmid). */
 export interface RegisterTemplateInput {
   name: string;
   node: string;
@@ -18,6 +29,7 @@ export interface RegisterTemplateInput {
   supportedProtocols: Protocol[];
 }
 
+/** Template registry; register() upserts on (node, proxmoxVmid). */
 export class TemplatesService {
   constructor(private readonly db: Pool) {}
 
@@ -71,6 +83,7 @@ export class TemplatesService {
     return toTemplateRecord(result.rows[0] as TemplateRow);
   }
 
+  // -- Reads: full list, (node, vmid) identity, id lookups --------------
   async list(): Promise<TemplateRecord[]> {
     const result = await this.db.query<TemplateRow>(
       "SELECT * FROM vm_templates ORDER BY name ASC",
@@ -108,6 +121,10 @@ export class TemplatesService {
     await this.db.query("DELETE FROM vm_templates WHERE id = $1", [id]);
   }
 
+  /**
+   * Automation gate: throws unless the template can provision unattended.
+   * Linux needs cloud-init; Windows needs Cloudbase-Init on the drive.
+   */
   ensureProvisionable(template: TemplateRecord): void {
     if (template.osType === "linux" && template.provisioningMethod !== "cloud-init") {
       throw AppError.validation(

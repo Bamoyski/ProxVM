@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// GuacamoleService: mirror of Guacamole DB/API state for connections/users.
+// - Local rows hold ciphertext + key_id only; plaintext passwords are
+//   decrypted transiently for Guacamole calls and never logged/stored.
+// - upsertConnection creates the Guacamole-side connection first, then the
+//   local row, so a Guacamole failure leaves no orphan local record.
+// - launch() mints single live tokens per session (old ones revoked first)
+//   and degrades to login-mode with detail instead of throwing when the API
+//   is down; token tracking rows are encrypted and best-effort.
+// - Disabling a ProxVM user suspends (not deletes) the Guac account so
+//   direct Guacamole logins stop too; deletes revoke grants then drop rows.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import type { Protocol } from "@proxvm/shared";
 import { AppError } from "../util/errors.js";
@@ -18,6 +30,7 @@ import { testConnection, type ConnectionTestResult } from "../guacamole/test-con
 import type { HostKeyService } from "../ssh/host-keys.js";
 import type { GuacConnectionRow, GuacUserRow } from "./rows.js";
 
+/** Local deps (pool + encrypt/decrypt + host-key policy) for Guac sync. */
 export interface GuacamoleServiceDeps {
   db: Pool;
   encrypt: (plaintext: string) => string;
@@ -25,6 +38,7 @@ export interface GuacamoleServiceDeps {
   hostKeys: HostKeyService;
 }
 
+/** Local mirror of Guac connections/users; secrets stay ciphertext. */
 export class GuacamoleService {
   constructor(private readonly deps: GuacamoleServiceDeps) {}
 
@@ -32,6 +46,7 @@ export class GuacamoleService {
     return this.deps.db;
   }
 
+  // -- Connections: local rows + Guacamole-side create/sync --------------
   async findConnectionRecord(vmId: string, protocol?: Protocol): Promise<GuacConnectionRow | null> {
     if (protocol) {
       const result = await this.db.query<GuacConnectionRow>(
@@ -162,6 +177,7 @@ export class GuacamoleService {
     }
   }
 
+  // -- Users, grants, tokens: access sync + single-live-token launch ----
   async findUserRecord(userId: string): Promise<GuacUserRow | null> {
     const result = await this.db.query<GuacUserRow>(
       "SELECT * FROM guacamole_users WHERE user_id = $1",

@@ -1,6 +1,17 @@
+// ---------------------------------------------------------------------------
+// Job progress pub/sub: Redis channel per job feeding SSE subscribers.
+// - Publishing is best-effort by design: a Redis blip must never fail a
+//   healthy provisioning step or mask the real outcome, so failures are
+//   swallowed and subscribers simply miss that update.
+// - PROGRESS_COMPLETION maps lifecycle states to UI percentages; terminal
+//   states all report 100 so the bar parks full on READY/FAILED/CANCELLED.
+// - Channels are per-job (proxvm:job:<id>); step/job truth stays in the DB,
+//   Redis carries hints only and is never read back as state.
+// ---------------------------------------------------------------------------
 import type IORedis from "ioredis";
 import type { JobProgressData, JobStatus } from "@proxvm/shared";
 
+/** Redis pub/sub channel carrying one job's progress events. */
 export const jobProgressChannel = (jobId: string): string => `proxvm:job:${jobId}`;
 
 export async function publishProgress(
@@ -35,6 +46,7 @@ export const PROGRESS_COMPLETION: Record<string, number> = {
   CANCELLED: 100,
 };
 
+/** UI percentage for a lifecycle state; unknown states report 0. */
 export function progressFor(status: JobStatus, step: string | null): number {
   return PROGRESS_COMPLETION[status] ?? 0;
 }

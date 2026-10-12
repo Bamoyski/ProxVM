@@ -1,3 +1,12 @@
+// ---------------------------------------------------------------------------
+// Launch helper: opportunistic pre-launch start for stopped VMs.
+// - Power truth comes from live Proxmox qemuStatus, not the cached DB row,
+//   because state may have changed outside ProxVM since the last reconcile.
+// - Only exact "stopped" triggers a start; anything else (running, paused,
+//   unknown strings) returns false so launch proceeds to Guacamole as-is.
+// - The Proxmox task is awaited so QEMU exists before Guacamole URLs mint;
+//   guest OS services may still need their normal boot time afterwards.
+// ---------------------------------------------------------------------------
 import type { ProxmoxClient } from "../proxmox/client.js";
 
 /**

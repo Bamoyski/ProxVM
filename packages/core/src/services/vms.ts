@@ -1,9 +1,21 @@
+// ---------------------------------------------------------------------------
+// VmsRepository: VM registry + access/visibility rules for every VM route.
+// - Soft delete (deleted_at) hides rows; UNIQUE(vmid, node) still holds, so
+//   listVmidsByNode includes deleted rows to avoid reassigning a VMID.
+// - Direct, group, and creator-ownership grants union: creators implicitly
+//   own their VMs so privacy flags work without pre-configured grant rows.
+// - All grant checks honor expires_at (NULL = forever); hasAccessOrOwns is
+//   the only ownership-aware check, hasAccess is grants-only.
+// - Privacy-flagged VMs deny even ADMIN/OPERATOR without a concrete grant
+//   or ownership; missing VMs deny via `allowed` so callers can 404/403.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import type { VmRecord, VmStatus } from "@proxvm/shared";
 import { AppError } from "../util/errors.js";
 import { isUuid, newId } from "../util/misc.js";
 import type { VmRow } from "./rows.js";
 
+/** Input for registering a VM row; status defaults to pending. */
 export interface CreateVmInput {
   vmid: number;
   node: string;
@@ -15,6 +27,7 @@ export interface CreateVmInput {
   templateId?: string;
 }
 
+/** VM registry + grant/visibility enforcement (see header for model). */
 export class VmsRepository {
   constructor(private readonly db: Pool) {}
 
@@ -44,6 +57,7 @@ export class VmsRepository {
     return this.create(input);
   }
 
+  // -- Reads: live rows only (deleted_at hides; VMID guard is separate) --
   async findById(id: string): Promise<VmRecord | null> {
     if (!isUuid(id)) return null;
     const result = await this.db.query<VmRow>(
@@ -141,6 +155,7 @@ export class VmsRepository {
     await this.db.query("UPDATE vms SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1", [id]);
   }
 
+  // -- Access grants: upsert vs replace, revocation, visibility --------
   async setAccess(
     vmId: string,
     userId: string,

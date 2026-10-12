@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Domains routes: canonical/alias config, Cloudflare DNS + tunnel mgmt,
+//   domain switch (DNS + tunnel + verify + flip), Securly filter watch.
+// Permissions: /domains/public is intentionally unauthenticated (pre-login
+//   alias bounce; hostnames only, already public via DNS); everything else
+//   requires settings.manage.
+// Rate limits: none (admin-only writes; each mutation is audited).
+// Security: tokens never returned (configured boolean only); targets reject
+//   URLs/private IPs; tunnel writes are blocked for local-config tunnels;
+//   switch verifies DNS before flipping canonical so URLs never void.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -23,6 +34,11 @@ const cloudflareSchema = z.object({
   tunnelId: z.string().min(1).max(128).optional(),
 });
 
+/**
+ * Expand a bare label to a FQDN within the zone (@ means the apex).
+ * WHY lowercase+trim first: DNS is case-insensitive, so normalizing here
+ * keeps record matching and canonical comparisons from diverging.
+ */
 function qualifyName(name: string, zoneName: string): string {
   const trimmed = name.trim().toLowerCase();
   if (trimmed === "@") return zoneName;
@@ -30,6 +46,11 @@ function qualifyName(name: string, zoneName: string): string {
   return `${trimmed}.${zoneName}`;
 }
 
+/**
+ * Register domain/Cloudflare/tunnel/filter-check endpoints.
+ * WHY public + private split: the SPA must resolve the canonical host before
+ * login, so only that hostname-only read is public; all control stays gated.
+ */
 export async function domainRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
   const guard = app.requirePermission("settings.manage");

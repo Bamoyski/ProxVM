@@ -1,3 +1,14 @@
+/* ---------------------------------------------------------------------------
+ * guacamole/db.ts — direct management of the Guacamole JDBC database.
+ *
+ * ProxVM writes users, connections, permissions, and session history rows
+ * straight into Guacamole's schema on BOTH supported engines (Postgres and
+ * MariaDB/MySQL), which share one GuacamoleDbClient interface. Passwords
+ * MUST stay SHA-256 salted-hash here: that format is Guacamole's own login
+ * verifier, so Argon2 would lock every Guacamole user out. Multi-step writes
+ * run in explicit transactions with idempotent create paths (existing rows
+ * return their ids) so retries and double-provisions stay safe.
+ * ------------------------------------------------------------------------- */
 import { createHash, randomBytes } from "node:crypto";
 import { Pool as PgPool } from "pg";
 import { createPgPool } from "../db/pool.js";
@@ -5,6 +16,7 @@ import mysql from "mysql2/promise";
 import type { Pool as MySqlPool } from "mysql2/promise";
 import type { Protocol } from "@proxvm/shared";
 
+// --- Shared shapes -------------------------------------------------------------
 export type GuacamoleDbEngine = "postgresql" | "mariadb" | "mysql";
 
 export class GuacamoleDbError extends Error {
@@ -43,6 +55,12 @@ export interface GuacamoleDbClient {
   lastSessionEnd(connectionName: string): Promise<Date | null>;
 }
 
+// --- Password + parameter encoding (Guacamole-compat, do not "improve") -------
+/**
+ * Hash a Guacamole-user password in Guacamole's JDBC format (documented
+ * inline at the call site). Fresh 32-byte salt per password; hash and salt
+ * are stored in separate columns, never concatenated.
+ */
 export function sha256SaltedHashPassword(password: string): { hash: Buffer; salt: Buffer } {
   const salt = randomBytes(32);
   // Matches Guacamole's SHA256PasswordEncryptionService (guacamole-auth-jdbc):
@@ -66,6 +84,12 @@ export function encodeParameter(value: string): string {
   return value;
 }
 
+/**
+ * Build the stored parameter map for one protocol. WHY the per-protocol
+ * extras: RDP needs `security=any` + `ignore-cert` against self-signed guest
+ * certs, and SSH pins a readable font/color baseline — without them fresh
+ * connections render badly or refuse to negotiate on first launch.
+ */
 export function connectionParamsFor(opts: GuacConnectionParams): Record<string, string> {
   if (opts.protocol === "ssh") {
     return {
@@ -97,9 +121,16 @@ export function connectionParamsFor(opts: GuacConnectionParams): Record<string, 
   };
 }
 
+// --- Postgres implementation ---------------------------------------------------
 export class GuacamolePostgresClient implements GuacamoleDbClient {
   constructor(private readonly pool: PgPool) {}
 
+  /**
+   * Three-stage health check: connectivity, then Guacamole schema presence,
+   * then best-effort version read. WHY staged: "DB down" vs "empty DB" need
+   * different operator fixes, and a missing version row must not fail the
+   * check on older-but-valid Guacamole schemas.
+   */
   async testConnection(): Promise<{ ok: boolean; schemaVersion: string | null; detail: string | null }> {
     try {
       const result = await this.pool.query<{ c: string }>("SELECT 1 AS c");
@@ -138,6 +169,12 @@ export class GuacamolePostgresClient implements GuacamoleDbClient {
     return { ok: true, schemaVersion, detail: null };
   }
 
+  /**
+   * Idempotent user create (Postgres): an existing entity returns its user_id
+   * without touching the password, so a retried provision never rotates a
+   * working credential out from under an active session. Entity + user rows
+   * commit atomically — a half-created user would break Guacamole's FK graph.
+   */
   async createUser(opts: { username: string; password: string }): Promise<number> {
     const client = await this.pool.connect();
     try {
@@ -195,6 +232,11 @@ export class GuacamolePostgresClient implements GuacamoleDbClient {
     );
   }
 
+  /**
+   * Ordered teardown (Postgres): permission rows go before the user/entity
+   * rows because Guacamole's FKs point at the entity — deleting the entity
+   * first would either fail or cascade away rows other code still audits.
+   */
   async deleteUser(username: string): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -232,6 +274,11 @@ export class GuacamolePostgresClient implements GuacamoleDbClient {
     }
   }
 
+  /**
+   * Idempotent connection create (Postgres): existing names return their id
+   * untouched, so re-provisioning a VM reuses the Guacamole row (and its
+   * permissions/history) instead of orphaning a duplicate on every retry.
+   */
   async createConnection(opts: { name: string; protocol: string; params: Record<string, string> }): Promise<number> {
     const client = await this.pool.connect();
     try {
@@ -373,6 +420,7 @@ export class GuacamolePostgresClient implements GuacamoleDbClient {
   }
 }
 
+// --- MySQL/MariaDB implementation (same contract, ? placeholders) --------------
 export class GuacamoleMySqlClient implements GuacamoleDbClient {
   constructor(private readonly pool: MySqlPool) {}
 
@@ -426,6 +474,12 @@ export class GuacamoleMySqlClient implements GuacamoleDbClient {
     return { ok: true, schemaVersion, detail: null };
   }
 
+  /**
+   * Idempotent user create (MySQL): same contract as Postgres, except an
+   * entity row with no user row (crashed first provision) is repaired by
+   * setting the password and returning the recovered id instead of failing
+   * on a duplicate-entity insert.
+   */
   async createUser(opts: { username: string; password: string }): Promise<number> {
     const conn = await this.pool.getConnection();
     try {
@@ -549,6 +603,12 @@ export class GuacamoleMySqlClient implements GuacamoleDbClient {
     }
   }
 
+  /**
+   * Idempotent connection create (MySQL): unlike Postgres it also refreshes
+   * params on the existing row, because MySQL lacks the upsert path the pg
+   * side relies on elsewhere — without this, re-provisions would keep stale
+   * IPs after a guest address change.
+   */
   async createConnection(opts: { name: string; protocol: string; params: Record<string, string> }): Promise<number> {
     const conn = await this.pool.getConnection();
     try {
@@ -689,6 +749,7 @@ export class GuacamoleMySqlClient implements GuacamoleDbClient {
   }
 }
 
+// --- Factory -------------------------------------------------------------------
 export interface GuacamoleDbSettings {
   engine: GuacamoleDbEngine;
   dbHost: string;
@@ -699,6 +760,12 @@ export interface GuacamoleDbSettings {
   dbSsl: boolean;
 }
 
+/**
+ * Build the engine-appropriate client plus a close() for its pool. WHY the
+ * mariadb/mysql fold: both speak the mysql2 dialect here, so one code path
+ * serves both; only "postgresql" takes the pg path. Callers must call
+ * close() on shutdown or the process hangs on open pool handles.
+ */
 export function createGuacamoleDbClient(settings: GuacamoleDbSettings): { client: GuacamoleDbClient; close: () => Promise<void> } {
   const engine = settings.engine === "mariadb" || settings.engine === "mysql" ? "mysql" : "postgresql";
   if (engine === "mysql") {

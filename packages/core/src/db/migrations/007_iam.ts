@@ -1,3 +1,13 @@
+/* ---------------------------------------------------------------------------
+ * 007_iam — permission catalog, role grants, groups, and access scoping.
+ *
+ * The permissions table is the enforced contract: every code seeded here is
+ * checked somewhere by the backend, so adding a code without an enforcement
+ * site (or vice versa) silently mis-authorizes. Built-ins and presets share
+ * fixed UUIDs and is_system=true (undeletable via the API); grants compose
+ * via role_permissions, user_permissions, and group inheritance, all with
+ * optional expiry. vm_access gains protocol scoping (NULL = all protocols).
+ * ------------------------------------------------------------------------- */
 export const iamMigration = `
 -- Roles: describe custom/preset roles; built-ins are protected (is_system).
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';

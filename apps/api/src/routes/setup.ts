@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Setup routes: first-run wizard (status, connection testers, complete).
+// Permissions: unauthenticated while unconfigured, gated by the one-time
+//   setup token (no users exist yet); once configured, testers require ADMIN
+//   (settings.manage) and /complete refuses outright.
+// Rate limits: 20/min/IP on every test/complete endpoint so internet scanners
+//   get 429s instead of a free SSRF oracle.
+// Security: single-flight completion blocks double-admin races; tokens are
+//   compared in constant time and rotated on completion; URLs pass SSRF
+//   guards before any outbound connection is opened.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import {
   buildLocalConfig,
@@ -27,6 +38,11 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 let setupToken: string | null = null;
 let setupInProgress = false;
 
+/**
+ * Mint (or reuse) the process-local one-time setup token.
+ * WHY process-local: unconfigured instances have no DB/users yet, so the
+ * token lives in memory and is read from the server log, never the net.
+ */
 export function initSetupToken(): string {
   if (!setupToken) setupToken = randomBytes(32).toString("hex");
   return setupToken;
@@ -50,6 +66,12 @@ function requireSetupToken(request: { headers: Record<string, unknown> }): void 
   }
 }
 
+/**
+ * Register the first-run setup wizard endpoints.
+ * WHY token-gated instead of open: test-* endpoints make the server open
+ * outbound connections, so without the log-distributed token they would be
+ * an unauthenticated SSRF oracle on fresh installs.
+ */
 export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promise<void> {
   const configured = opts.setupMode === false;
   if (!configured) initSetupToken();

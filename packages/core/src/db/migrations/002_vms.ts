@@ -1,4 +1,15 @@
+/* ---------------------------------------------------------------------------
+ * 002_vms — VM inventory and its satellite rows (credentials, Guacamole
+ * mappings, access grants).
+ *
+ * vms is the system of record keyed UNIQUE(vmid, node) — one Proxmox guest
+ * maps to one row. Credentials store ciphertext + keyId only (never plain
+ * text); guacamole_connections mirrors the external Guacamole rows by name;
+ * vm_access grants are directional (user -> VM) and cascade on VM delete so
+ * no orphan grant survives its VM. Soft delete via deleted_at, not removal.
+ * ------------------------------------------------------------------------- */
 export const vmsMigration = `
+-- Core inventory: UNIQUE(vmid, node) pins one row per Proxmox guest.
 CREATE TABLE vms (
   id UUID PRIMARY KEY,
   vmid INT NOT NULL,
@@ -17,6 +28,7 @@ CREATE TABLE vms (
 
 CREATE INDEX idx_vms_node ON vms(node);
 
+-- Clone sources: one row per Proxmox template with provisioning defaults.
 CREATE TABLE vm_templates (
   id UUID PRIMARY KEY,
   name TEXT NOT NULL,
@@ -35,6 +47,7 @@ CREATE TABLE vm_templates (
   UNIQUE (node, proxmox_vmid)
 );
 
+-- Vault pointers: ciphertext + keyId only; rotation updates these in place.
 CREATE TABLE vm_credentials (
   id UUID PRIMARY KEY,
   vm_id UUID NOT NULL REFERENCES vms(id) ON DELETE CASCADE,
@@ -67,6 +80,7 @@ CREATE TABLE guacamole_connections (
 
 CREATE INDEX idx_guac_conn_vm ON guacamole_connections(vm_id);
 
+-- Per-user Guacamole logins (one external Guacamole user per app user).
 CREATE TABLE guacamole_users (
   id UUID PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -79,6 +93,7 @@ CREATE TABLE guacamole_users (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Direct grants (user -> VM); CASCADE keeps grants from outliving the VM.
 CREATE TABLE vm_access (
   vm_id UUID NOT NULL REFERENCES vms(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

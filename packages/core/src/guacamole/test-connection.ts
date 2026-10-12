@@ -1,3 +1,12 @@
+/* ---------------------------------------------------------------------------
+ * test-connection.ts — pre-launch reachability diagnosis per VM/protocol.
+ *
+ * Layered checks (TCP, then SSH auth or an RDP X.224 handshake) separate "the
+ * guest is down / IP stale / firewall" from "reachable but credential or RDP
+ * stack broken", so the UI can point at the guest instead of ProxVM. Every
+ * probe is bounded by a timeout and never throws; details never contain
+ * secrets. Stale DHCP is the usual suspect — re-check the guest agent first.
+ * ------------------------------------------------------------------------- */
 import net from "node:net";
 import { probeSsh } from "../ssh/client.js";
 import type { HostKeyPolicy } from "../ssh/host-keys.js";
@@ -18,6 +27,9 @@ export interface ConnectionTestResult {
 export function testTcp(host: string, port: number, timeoutMs = 8000): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
+    // WHY the done latch: connect/error/timeout can all fire for one socket
+    // (error then close), and without it the promise resolves twice while the
+    // timer keeps the event loop alive past the answer.
     const finish = (value: boolean): void => {
       if (done) return;
       done = true;
@@ -62,6 +74,9 @@ export function testRdpHandshake(host: string, port: number, timeoutMs = 10000):
     const sock = net.connect(port, host);
     const timer = setTimeout(() => finish(false), timeoutMs);
     sock.on("connect", () => sock.write(request));
+    // WHY byte 5 == 0xd0: that is the X.224 Connection Confirm PDU type; any
+    // other (or truncated) reply means something accepted TCP without
+    // speaking RDP, which is exactly the wedged-listener case we report.
     sock.on("data", (chunk: Buffer) => {
       chunks.push(chunk);
       const data = Buffer.concat(chunks);
@@ -75,6 +90,13 @@ export function testRdpHandshake(host: string, port: number, timeoutMs = 10000):
   });
 }
 
+// --- Layered diagnosis ---------------------------------------------------------
+/**
+ * Run the layered probe for one VM/protocol: TCP first, then the
+ * protocol-specific check (SSH auth via probeSsh, RDP handshake). SSH without
+ * credentials degrades to the TCP result — there is nothing to authenticate
+ * with, so reporting "unreachable" would lie about a reachable host.
+ */
 export async function testConnection(opts: {
   protocol: string;
   hostname: string;

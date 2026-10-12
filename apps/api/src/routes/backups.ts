@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Backups routes: fleet overview, PBS schedules (CRUD + bulk), manual run /
+//   prune triggers (single + bulk), run history, snapshot listing.
+// Permissions: writes need vm.manage + per-VM visibility; history/snapshots
+//   need vm.read + visibility; ADMINs see all, others only granted VMs.
+// Rate limits: single run/prune 10/hr, bulk run 5/hr (vzdump is expensive;
+//   202-accepted async runs are picked up by the minute ticker).
+// Security: PBS must be configured or every mutating path 503s; triggers
+//   never block on vzdump; bulk paths return per-VM results + summary audit.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -20,6 +30,11 @@ import {
 // mutates, or spends resources needs vm.manage. All executions are
 // asynchronous (PENDING runs picked up by the minute ticker); triggers
 // return 202 immediately and never block on vzdump.
+/**
+ * Register PBS backup scheduling/execution/history endpoints.
+ * WHY async triggers: vzdump runs for minutes, so POST only queues a PENDING
+ * run and returns 202; the ticker executes, keeping HTTP workers free.
+ */
 export async function backupRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
   const manageGuard = app.requirePermission("vm.manage");

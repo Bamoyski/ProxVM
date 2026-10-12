@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Threat detection: stateless, recomputed findings over recent audit rows.
+// - No findings table: every rule is pure over (rows, now), so there is
+//   nothing to dismiss, age out, or desync; same input always same output.
+// - Summaries carry no VM names/ids, so results need no privacy-flag
+//   filtering before display.
+// - Webhook alerting dedupes on deterministic finding ids (last 200 kept);
+//   the webhook URL is SSRF-guarded with resolve-and-pin + manual redirects.
+// - findNewIpLogins is the one stateful rule: it queries history beyond the
+//   window to spot first-seen (actor, ip) logins.
+// ---------------------------------------------------------------------------
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { Pool } from "pg";
 import type { AuditRecord } from "@proxvm/shared";
@@ -76,6 +87,7 @@ function span(rows: AuditRecord[]): { firstSeen: Date; lastSeen: Date } {
   return { firstSeen: first, lastSeen: last };
 }
 
+  // -- Auth rules: brute-force, spray, compromised-login, lockout probes
 /** N or more failed logins against one account inside 15 minutes. */
 function bruteForceAccounts(rows: AuditRecord[]): ThreatFinding[] {
   const out: ThreatFinding[] = [];
@@ -567,6 +579,7 @@ export function isBlockedWebhookHost(hostname: string): boolean {
   return false;
 }
 
+/** Rejects non-http(s), loopback/link-local/metadata webhook targets. */
 export function assertSafeWebhookUrl(raw: string): string {
   const url = raw.trim();
   let parsed: URL;

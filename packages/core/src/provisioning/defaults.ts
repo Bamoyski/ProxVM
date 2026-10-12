@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------
+// Provisioning defaults: Basic->full request resolution + form prefill with
+//   live Proxmox verification. No permissions enforced here (caller owns auth);
+//   no rate limits (pure function over settings/template/cluster state).
+// Security: never exposes secrets (resource names only); fail-fast static
+//   checks prevent orphaned clones; final zod parse keeps Advanced parity.
+// ---------------------------------------------------------------------------
 import type {
   BasicProvisionRequest,
   Protocol,

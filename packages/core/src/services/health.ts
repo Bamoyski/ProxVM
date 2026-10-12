@@ -1,3 +1,12 @@
+// ---------------------------------------------------------------------------
+// Health checks: point-in-time dependency probes for the status surface.
+// - Each probe is timed and never throws: timed() converts errors to
+//   { status: "ERROR", detail } so one down dependency does not hide the
+//   rest of the results.
+// - Worker liveness is Redis-heartbeat age (>30s = stale); Guacamole web is
+//   checked with an SSRF-guarded fetch where only 5xx fails (4xx still
+//   proves the app answers). No probe mutates state.
+// ---------------------------------------------------------------------------
 import type IORedis from "ioredis";
 import type { Pool } from "pg";
 import type { HealthCheckResult } from "@proxvm/shared";
@@ -31,6 +40,10 @@ async function timed(name: string, fn: () => Promise<void>): Promise<HealthCheck
   }
 }
 
+/**
+ * Runs every dependency probe; each result is timed and errors become
+ * ERROR rows so one outage never hides the remaining checks.
+ */
 export async function runHealthChecks(deps: HealthDeps): Promise<HealthCheckResult[]> {
   const results: HealthCheckResult[] = [];
 
@@ -74,6 +87,7 @@ export async function runHealthChecks(deps: HealthDeps): Promise<HealthCheckResu
   return results;
 }
 
+/** Records worker liveness (30s TTL); absence means the worker is down. */
 export function setWorkerHeartbeat(redis: IORedis): void {
   void redis.set(WORKER_HEARTBEAT_KEY, String(Date.now()), "EX", 30);
 }

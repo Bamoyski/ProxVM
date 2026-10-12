@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// iam-store: persistence for the IAM model (permissions/roles/groups/links).
+// - Reads/writes raw rows; authorization math (effective permissions, live
+//   checks) lives in iam.js — this file must not reimplement tenure logic.
+// - Expiry discipline: live checks use isLive()/expires_at comparisons so
+//   stale memberships and grants stop conferring without a sweeper; counts
+//   follow the same rule wherever they gate what an operator sees.
+// - Custom roles persist permission rows; legacy roles resolve via
+//   roleEffectivePermissions, which is why group rollups join through it.
+// - Group detail rollups (members/roles/VMs) are counts only, safe to show
+//   in admin lists without leaking grant contents.
+// ---------------------------------------------------------------------------
 import { isUuid, newId } from "../util/misc.js";
 import type { Queryable } from "../db/pool.js";
 import { isLive, roleEffectivePermissions } from "./iam.js";
@@ -24,6 +36,7 @@ export interface GroupRow {
   created_at: Date;
 }
 
+/** Ordered permission catalog backing admin pickers and rollups. */
 export async function listPermissions(db: Queryable): Promise<PermissionEntry[]> {
   const result = await db.query<PermissionEntry>(
     "SELECT code, category, description, scope FROM permissions ORDER BY category ASC, code ASC",
@@ -31,6 +44,7 @@ export async function listPermissions(db: Queryable): Promise<PermissionEntry[]>
   return result.rows;
 }
 
+  // -- Roles: catalog, detail, create/update, permission rewrites --------
 export async function listRoles(db: Queryable): Promise<RoleDetail[]> {
   const roles = await db.query<RoleRow>(
     "SELECT id, name, description, is_system FROM roles ORDER BY name ASC",
@@ -152,6 +166,7 @@ export interface GroupDetail extends GroupRow {
   vmCount: number;
 }
 
+  // -- Groups: catalog, members, roles, VM grants -------------------------
 export async function listGroups(db: Queryable): Promise<GroupDetail[]> {
   const groups = await db.query<GroupRow>("SELECT * FROM groups ORDER BY name ASC");
   const out: GroupDetail[] = [];

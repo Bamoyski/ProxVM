@@ -1,3 +1,12 @@
+// ---------------------------------------------------------------------------
+// Proxmox routes: cluster status, node inventory, per-node storage/networks,
+//   and Proxmox-side template enumeration (read-only passthrough).
+// Permissions: every endpoint requires proxmox.read (operator+ surface).
+// Rate limits: none (read-only cluster metadata; no mutation to throttle).
+// Security: node names are allowlist-validated before interpolation into
+//   upstream paths; storage/network rows are projected so config text and
+//   digests never reach tenants.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import type { CoreContext } from "@proxvm/core";
 import { AppError } from "@proxvm/core";
@@ -17,6 +26,11 @@ function requireNode(query: unknown): string {
   return node;
 }
 
+/**
+ * Register read-only Proxmox cluster passthrough endpoints.
+ * WHY projection over raw rows: upstream payloads carry config/digests, so
+ * each handler returns only the capacity/identity fields tenants need.
+ */
 export async function proxmoxRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const guard = app.requirePermission("proxmox.read");
 

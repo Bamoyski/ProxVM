@@ -1,3 +1,11 @@
+/* ---------------------------------------------------------------------------
+ * errors.ts — the single typed error for the whole backend (AppError).
+ *
+ * Every service throws AppError with a stable machine code + HTTP status;
+ * the API layer maps code/status to responses. `cause` chains the low-level
+ * failure for server logs only, while `details` carries the safe, user-facing
+ * authorization explanation (never internals — no hostnames, SQL, traces).
+ * ------------------------------------------------------------------------- */
 export type AppErrorCode =
   | "NOT_IMPLEMENTED"
   | "SETUP_REQUIRED"
@@ -22,6 +30,12 @@ export interface ErrorExplanation {
   permission?: string | string[];
 }
 
+// --- AppError ---------------------------------------------------------------
+/**
+ * Typed operational error: code is the stable contract clients switch on,
+ * statusCode drives the HTTP response, cause preserves the root failure for
+ * logs. Prefer the static factories below so codes and statuses stay paired.
+ */
 export class AppError extends Error {
   readonly code: AppErrorCode;
   readonly statusCode: number;
@@ -37,11 +51,17 @@ export class AppError extends Error {
     this.cause = cause;
   }
 
+  /**
+   * Attach safe, user-facing context (e.g. which permission was missing).
+   * WHY a separate opt-in field: message strings get logged and rendered in
+   * varied shapes, while details stays structured for the UI to display.
+   */
   withDetails(details: Record<string, unknown>): this {
     this.details = details;
     return this;
   }
 
+  // --- Common factories (code + status stay paired; no ad-hoc numbers) ---
   static notFound(message = "Resource not found"): AppError {
     return new AppError("NOT_FOUND", message, 404);
   }
@@ -62,6 +82,11 @@ export class AppError extends Error {
     return new AppError("CONFLICT", message, 409);
   }
 
+  /**
+   * Wrap a downstream failure (Proxmox/Guacamole/Cloudflare/PBS). WHY 502:
+   * the fault is neither the client's (4xx) nor ours (500) — an upstream
+   * dependency failed, and the service prefix tells which one at a glance.
+   */
   static external(service: string, message: string, cause?: unknown): AppError {
     return new AppError("EXTERNAL_SERVICE_ERROR", `${service}: ${message}`, 502, cause);
   }

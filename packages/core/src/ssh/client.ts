@@ -1,3 +1,12 @@
+/* ---------------------------------------------------------------------------
+ * ssh/client.ts — password SSH probe + remote command execution (ssh2).
+ *
+ * Both entry points return SshResult instead of throwing, so callers can
+ * distinguish AUTH_FAILED (wrong/stale credential) from CONNECTION_FAILED
+ * (network, timeout, host-key pin mismatch). Host-key TOFU pinning is
+ * enforced BEFORE any credential is sent; failures always fail closed.
+ * Timeouts default to 15s (probe) / 30s (command) for slow homelab guests.
+ * ------------------------------------------------------------------------- */
 import { Client, type ConnectConfig } from "ssh2";
 import { keyTypeOf, sha256Hex, type HostKeyPolicy } from "./host-keys.js";
 
@@ -9,6 +18,7 @@ export interface SshResult {
   output?: string;
 }
 
+// --- Shared option + verifier plumbing ----------------------------------------
 export interface SshCommonOptions {
   host: string;
   port?: number;
@@ -75,6 +85,13 @@ async function afterAuthenticated(
   }
 }
 
+// --- Probe: authenticate + trivial exec --------------------------------------
+/**
+ * Open an SSH session and run `echo proxvm-ok` to prove the stored password
+ * works. Exec failure still counts as AUTHENTICATED: auth already succeeded
+ * (some locked-down shells deny exec), so conflating the two would report
+ * good passwords as bad and trigger needless rotations.
+ */
 export function probeSsh(opts: SshCommonOptions): Promise<SshResult> {
   const timeoutMs = opts.timeoutMs ?? 15000;
   return new Promise((resolve) => {
@@ -118,6 +135,9 @@ export function probeSsh(opts: SshCommonOptions): Promise<SshResult> {
       .on("error", (err: Error) => {
         clearTimeout(timeout);
         if (policyFailure.current) {
+          // WHY prefer the pin verdict: a host-key mismatch surfaces as a
+          // generic handshake error, which would otherwise misreport as a
+          // network failure and hide the MITM signal from the operator.
           resolve({ status: "CONNECTION_FAILED", detail: policyFailure.current });
           return;
         }
@@ -135,6 +155,12 @@ export function probeSsh(opts: SshCommonOptions): Promise<SshResult> {
   });
 }
 
+// --- Remote command -----------------------------------------------------------
+/**
+ * Run one shell command over a fresh SSH session (password rotation, guest
+ * setup steps). Resolves AUTHENTICATED with stdout||stderr on close; like
+ * probeSsh it never rejects — timeouts and exec denials are result states.
+ */
 export function runSshCommand(opts: SshCommonOptions & { command: string }): Promise<SshResult> {
   const timeoutMs = opts.timeoutMs ?? 30000;
   return new Promise((resolve) => {
@@ -204,6 +230,12 @@ export function runSshCommand(opts: SshCommonOptions & { command: string }): Pro
   });
 }
 
+// --- Connect-config builder ---------------------------------------------------
+/**
+ * Build the ssh2 ConnectConfig. WHY the verifier attaches only when a policy
+ * exists: without hostKey the legacy no-check behavior applies, and passing
+ * a verifier unconditionally would change handshake behavior for tests.
+ */
 function baseConnectConfig(
   opts: SshCommonOptions,
   timeoutMs: number,
@@ -216,6 +248,8 @@ function baseConnectConfig(
     password: opts.password,
     readyTimeout: timeoutMs,
     tryKeyboard: false,
+    // WHY 5s keepalive: NAT/firewall middleboxes silently drop idle control
+    // connections during long provisions; keepalives hold the mapping open.
     keepaliveInterval: 5000,
   };
   if (opts.hostKey) cfg.hostVerifier = extra.hostVerifier;

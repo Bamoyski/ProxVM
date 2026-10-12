@@ -1,3 +1,12 @@
+// ---------------------------------------------------------------------------
+// Settings routes: app/proxmox/guacamole get + put (admin console backing).
+// Permissions: every endpoint requires settings.manage (ADMIN-only in the
+//   default role matrix); no self-service or per-VM paths live here.
+// Rate limits: none (admin-only surface; changes are infrequent + audited).
+// Security: secrets round-trip masked ("********" keeps the stored value);
+//   URLs pass SSRF guards; webhook/CIDR inputs are allowlist-validated;
+//   client caches are invalidated on every write; changes are audited.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -25,10 +34,16 @@ const guacSchema = z.object({
   dbSsl: z.boolean().default(false),
 });
 
+/**
+ * Register admin settings read/write endpoints.
+ * WHY masked-secret round-tripping: the UI cannot hold plaintext secrets, so
+ * the sentinel preserves stored values while still allowing explicit rotate.
+ */
 export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
   const guard = app.requirePermission("settings.manage");
 
+  // -- App-wide tunables (retention, announcements, ceilings) ----------------
   app.put("/settings/app", async (request) => {
     const actor = await guard(request);
     const body = z
@@ -118,6 +133,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     return { ok: true };
   });
 
+  // -- Proxmox connection (masked secret round-trip) -------------------------
   app.get("/settings/proxmox", { preHandler: guard }, async () => {
     const s = await ctx.settings.proxmox();
     if (!s) return { configured: false, settings: null };
@@ -161,6 +177,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     return { ok: true };
   });
 
+  // -- Guacamole connection (masked secret round-trip) -----------------------
   app.get("/settings/guacamole", { preHandler: guard }, async () => {
     const g = await ctx.settings.guacamole();
     if (!g) return { configured: false, settings: null };

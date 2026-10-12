@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// IAM routes: permission catalog, effective-access self views, roles CRUD,
+//   user role/permission grants, groups + group roles/members/VM access,
+//   full access matrix.
+// Permissions: roles.manage for roles, groups.manage for groups, users.manage
+//   for user grants + matrix; catalog/effective/check are any-authenticated
+//   self-service. Group VM grants additionally require vm.edit.
+// Rate limits: none (management-only surface; audit covers misuse).
+// Security: conferral rules (assertMayConfer/assertCanAdministerTarget) stop
+//   delegated managers from escalating; system roles are deletion-protected;
+//   Guacamole reconciliation is best-effort so DB stays authoritative.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -44,6 +56,11 @@ function parseExpiresAt(raw: string | undefined, field = "expiresAt"): Date | nu
   return date;
 }
 
+/**
+ * Register roles/groups/grants/matrix endpoints.
+ * WHY split guards: roles vs groups vs users have distinct delegation risks,
+ * so each section gets the narrowest manage permission plus conferral caps.
+ */
 export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
   const rolesGuard = app.requirePermission("roles.manage");

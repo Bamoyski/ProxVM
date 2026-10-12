@@ -1,3 +1,16 @@
+// ---------------------------------------------------------------------------
+// VMs routes: provisioning, listing/detail, power, clone, make-template,
+//   migration, stats, bulk actions, schedules, share links, discovery,
+//   resize, per-VM access/invite management, privacy/class/boot flags, IP.
+// Permissions: vm.create/vm.read/vm.edit/vm.delete/vm.manage + granular
+//   vm.start/stop/restart; share create/revoke needs vm.edit; redeem is
+//   unauthenticated by design (token-bearer) with a 30/min throttle.
+// Rate limits: provision 30/hr/IP, clone 10/hr, discovery 10/hr, share
+//   redeem 30/min, bulk backup triggers 5/hr (flood/abuse throttles).
+// Security: every path enforces VM visibility (privacy-flag bypass removal);
+//   quotas + policy ceilings bind tenants; destructive actions need typed
+//   confirmation; all mutations are audited.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -42,6 +55,11 @@ const ipOverrideSchema = z.object({ ip: z.string().ip({ version: "v4" }) });
 const actionBody = z.object({ force: z.boolean().optional() });
 const deleteBody = z.object({ confirmText: z.string().min(1) });
 
+/**
+ * Register the full VM lifecycle + access-management surface.
+ * WHY one module: provisioning, power, access, and flag endpoints all share
+ * the resolveVmAccess visibility gate, so they stay consistent together.
+ */
 export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 
@@ -619,8 +637,6 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const from = vm.node;
     const detachedIso = query.detachedIso ? query.detachedIso.split(",").filter(Boolean) : [];
     await ctx.vms.updateNode(vm.id, query.target);
-    // Request-scoped audit (fills client IP + actor): never ctx.audit.record
-    // directly on HTTP paths.
     await app.audit(request, {
       event: "VM_MIGRATED",
       actorUserId: user.id,

@@ -1,3 +1,16 @@
+// ---------------------------------------------------------------------------
+// rotateVmCredential: online guest-password rotation with verify+rollback.
+// - Order is guest-first, vault-second: the stored credential is only
+//   replaced after the guest accepts the new password, so the vault never
+//   claims a password the guest does not know (the lockout seen before).
+// - A failed verify rolls back to the old password AND re-verifies it
+//   before claiming VERIFIED; an unconfirmable rollback stores FAILED so
+//   operators know the vault may disagree with the guest.
+// - Concurrency is gated by a CAS claim (tryClaimRotation); force:true is
+//   only for operator-confirmed recovery of a crashed ROTATING claim.
+// - Guacamole sync failure is non-fatal by design (guacSynced:false) so a
+//   Guacamole outage cannot undo an already-rotated guest password.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import { AppError } from "../util/errors.js";
 import { generatePassword } from "../crypto/password.js";
@@ -13,6 +26,7 @@ import type { ProxmoxClient } from "../proxmox/client.js";
 import type { GuacamoleDbClient } from "../guacamole/db.js";
 import type { Logger } from "../util/logger.js";
 
+/** Full rotation context: stores, decrypt, host-key policy, clients, audit. */
 export interface RotationDeps {
   db: Pool;
   logger: Logger;
@@ -53,6 +67,11 @@ export interface RotationActor {
   username: string;
 }
 
+/**
+ * Rotates a VM guest password guest-first, vault-second (see header).
+ * Throws on guest-apply/verify failure; Guacamole sync failure is
+ * returned as guacSynced:false rather than thrown.
+ */
 export async function rotateVmCredential(
   deps: RotationDeps,
   vmId: string,
@@ -256,6 +275,7 @@ export async function rotateVmCredential(
   };
 }
 
+  // -- Guest mechanisms: SSH chpasswd first, agent fallback ------------
 async function rotateViaSsh(
   host: string,
   username: string,

@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// RegistrationService: self-service signup queue (pending/approved/reject).
+// - Pending rows hold a real password hash, so retention matters: expired
+//   pendings are unapprovable and pruned; decided rows get hashes scrubbed.
+// - approve() runs in a transaction with SELECT ... FOR UPDATE so two
+//   concurrent approvals serialize instead of double-creating the account.
+// - Role conferral is NOT decided here: the caller passes roles, this layer
+//   only assigns them to the newly created user inside the same txn.
+// - Username uniqueness spans users + live pendings; expired-but-unpruned
+//   rows are dropped inline so re-requests do not wait for the sweeper.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import type { Role } from "@proxvm/shared";
 import { newId } from "../util/misc.js";
@@ -64,6 +75,7 @@ export class RegistrationService {
     return created;
   }
 
+  // -- Reads: single row + filtered lists + pending count ---------------
   async get(id: string): Promise<RegistrationRequest | null> {
     const result = await this.db.query("SELECT * FROM registration_requests WHERE id = $1", [id]);
     const row = result.rows[0] as Record<string, unknown> | undefined;

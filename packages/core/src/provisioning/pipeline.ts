@@ -1,3 +1,21 @@
+// ---------------------------------------------------------------------------
+// VM provisioning pipeline (worker side).
+//
+// A provisioning job moves through ordered steps (validate → clone →
+// configure → network → credentials → Guacamole → verify), each recorded
+// in provisioning_steps so a crash/resume never repeats completed work.
+// Two rules govern every change here:
+//
+// 1. RE-AUTHORIZE AT EXECUTION. The queue (shared Redis) is not a trust
+//    boundary: runProvisioningJob re-checks creator active + vm.create +
+//    quota + vm.edit-for-assigns + policy ceilings AFTER dequeue, because
+//    any of them may have been revoked between enqueue and execution.
+//    Creator-less jobs fail closed. Never "optimize" these checks away.
+// 2. COMPENSATE, DON'T ORPHAN. Every failure path marks the job FAILED
+//    with the reason, audits PROVISIONING_FAILED, and rolls back partial
+//    state (Proxmox guest, Guacamole records, access rows) so retries
+//    start clean instead of colliding with leftovers.
+// ---------------------------------------------------------------------------
 import type IORedis from "ioredis";
 import type { Pool } from "pg";
 import type { JobStep, JobStatus, OsType, Protocol, ProvisionVmRequest } from "@proxvm/shared";

@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// JobsRepository: provisioning-job ledger + per-step state machine.
+// - Jobs move PENDING -> ... -> READY/FAILED/CANCELLED; updateStatus stamps
+//   started_at on first non-PENDING and finished_at only on terminal states
+//   so retries and polls cannot rewrite history.
+// - Steps upsert on (job_id, step): re-running a step overwrites state, and
+//   started_at is preserved across RUNNING re-entries while finished_at is
+//   set only on SUCCEEDED/FAILED/SKIPPED.
+// - resetForRetry only reopens FAILED steps; SUCCEEDED work is never redone.
+// - activeJobWithName is the double-submit guard (same creator + VM name +
+//   non-terminal); activeJobsForVm gates unsafe concurrent ops per VM.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import type { JobStatus, JobStep, ProvisioningStepRecord, StepState } from "@proxvm/shared";
 import { AppError } from "../util/errors.js";
@@ -5,6 +17,7 @@ import { isUuid, newId } from "../util/misc.js";
 import type { Queryable } from "../db/pool.js";
 import type { JobRow, StepRow } from "./rows.js";
 
+/** DB-backed provisioning job with raw request payload + lifecycle stamps. */
 export interface JobRecord {
   id: string;
   vmId: string | null;
@@ -19,6 +32,7 @@ export interface JobRecord {
   updatedAt: Date;
 }
 
+/** Provisioning-job ledger + step state machine (see header for flow). */
 export class JobsRepository {
   constructor(private readonly db: Pool) {}
 
@@ -80,6 +94,7 @@ export class JobsRepository {
     return result.rows.map(toJobRecord);
   }
 
+  // -- Lifecycle: status/stamps, bull linkage, retry reset ---------------
   async updateStatus(id: string, status: JobStatus, error: string | null = null): Promise<void> {
     await this.db.query(
       `UPDATE provisioning_jobs
@@ -118,6 +133,7 @@ export class JobsRepository {
     );
   }
 
+  // -- Steps: upsert state + ordered reads for resume/progress ---------
   async setStep(jobId: string, step: JobStep, state: StepState, detail: Record<string, unknown> | null = null, error: string | null = null): Promise<void> {
     await this.db.query(
       `INSERT INTO provisioning_steps (id, job_id, step, state, detail, error, started_at, finished_at)

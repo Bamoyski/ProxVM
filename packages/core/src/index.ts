@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------
+// Core package barrel: re-exports utils, config, crypto, DB, context, infra
+//   clients (Proxmox/Guacamole/Cloudflare/PBS/SSH), services, provisioning.
+// WHY one barrel: the API and worker compose a CoreContext from these
+//   modules, so a single "@proxvm/core" surface keeps service wiring stable
+//   while internals stay free to move between files.
+// ---------------------------------------------------------------------------
 export * from "./util/errors.js";
 export * from "./util/logger.js";
 export * from "./util/misc.js";

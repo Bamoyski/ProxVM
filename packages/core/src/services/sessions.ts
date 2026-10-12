@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// SessionsService: cookie-session lifecycle (create/validate/touch/revoke).
+// - Only the SHA-256 hash of the session id is stored; the raw sid travels
+//   in the cookie only, so a DB read alone never yields a session.
+// - CSRF tokens are derived deterministically from (sid, signing key) and
+//   never persisted: concurrent tabs and repeat /me calls stay consistent.
+// - validate() enforces three independent ends of life: explicit revocation,
+//   absolute expiry, and idle timeout from last_active_at. All compare with
+//   Date.now() so clock skew fails closed toward logout, not extension.
+// - Token comparison is timing-safe; cleanup only deletes rows dead >1 day
+//   so recent forensics survive logout.
+// ---------------------------------------------------------------------------
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import type { SessionRecord } from "@proxvm/shared";
@@ -20,6 +32,7 @@ export interface ActiveSession {
   idleTimeoutMinutes: number;
 }
 
+/** Creates + validates cookie sessions; owns the sid-hash + CSRF derivation. */
 export class SessionsService {
   private readonly csrfKey: Buffer;
 
@@ -76,6 +89,7 @@ export class SessionsService {
     };
   }
 
+  // -- Validation: revocation + absolute expiry + idle window -----------
   async validate(sid: string): Promise<SessionRecord | null> {
     const record = await this.findBySid(sid);
     if (!record) return null;
@@ -118,6 +132,7 @@ export class SessionsService {
     };
   }
 
+  // -- Revocation / retention: logout paths + dead-row sweeper ----------
   async touch(sessionId: string): Promise<void> {
     await this.db.query("UPDATE sessions SET last_active_at = NOW() WHERE id = $1", [sessionId]);
   }
@@ -140,10 +155,12 @@ export class SessionsService {
   }
 }
 
+/** SHA-256 of the raw sid; the only session identifier stored at rest. */
 export function hashSid(sid: string): string {
   return createHash("sha256").update(sid, "utf8").digest("hex");
 }
 
+/** Timing-safe CSRF check; missing or mismatched tokens are 403. */
 export function checkCsrf(expected: string, provided: string | undefined): void {
   if (!provided) throw AppError.forbidden("CSRF token missing");
   if (!timingSafeEqualStr(expected, provided)) throw AppError.forbidden("CSRF token mismatch");

@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Firewall routes: per-VM isolation status, apply/remove default-deny
+//   isolation, and add/remove individual ProxVM-managed guest rules.
+// Permissions: status needs vm.read + visibility; all mutations need
+//   vm.edit + visibility (privacy-flagged VMs additionally need a grant).
+// Rate limits: none (guest-firewall writes are operator-paced + audited).
+// Security: isolation is opt-in per VM and never touches dc/node/host fw;
+//   only ProxVM-tagged rules are deletable here so hand-made Proxmox rules
+//   cannot be surprise-removed; every change is audited.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -24,6 +34,11 @@ function guacdHostFromSettings(url: string | undefined): string | null {
   }
 }
 
+/**
+ * Register per-VM guest-firewall status/isolation/rule endpoints.
+ * WHY backend-authoritative: the UI only renders what these return, so the
+ * Proxmox guest firewall stays the single source of truth for enforcement.
+ */
 export async function firewallRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 

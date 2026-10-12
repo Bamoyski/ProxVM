@@ -1,8 +1,19 @@
+// ---------------------------------------------------------------------------
+// AuditService: append-only security trail + filtered reads for UI/threats.
+// - record() sanitizes detail recursively (password/token/secret shapes ->
+//   [REDACTED], depth-capped) so callers can pass rich context safely; the
+//   allowlist lives in FORBIDDEN_* below, not at call sites.
+// - list() builds parameterized filters only (no string-interpolated input)
+//   and LIKE-escapes free text; limit/offset are appended positionally.
+// - prune() is the sole delete path and refuses windows under 1 day, so a
+//   misconfigured retention cannot wipe the recent trail threat rules need.
+// ---------------------------------------------------------------------------
 import type { Queryable } from "../db/pool.js";
 import type { AuditEvent, AuditRecord } from "@proxvm/shared";
 import { newId } from "../util/misc.js";
 import { AppError } from "../util/errors.js";
 
+/** Caller-supplied audit fields; detail is sanitized before insert. */
 export interface AuditEntryInput {
   event: AuditEvent;
   actorUserId?: string | null;
@@ -13,6 +24,7 @@ export interface AuditEntryInput {
   detail?: Record<string, unknown> | null;
 }
 
+/** Append-only trail; record() redacts secrets, list() filters safely. */
 export class AuditService {
   constructor(private readonly db: Queryable) {}
 
@@ -34,6 +46,7 @@ export class AuditService {
     );
   }
 
+  // -- Reads: optional filters composed as parameterized ANDs -----------
   async list(opts: {
     limit?: number;
     offset?: number;

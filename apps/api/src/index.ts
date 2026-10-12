@@ -1,9 +1,21 @@
+// ---------------------------------------------------------------------------
+// API entrypoint: boots Fastify in setup mode (unconfigured, wizard only)
+//   or configured mode (DB + Redis + CoreContext + provisioning queue).
+// Security: setup mode is unauthenticated by design and must never face
+//   untrusted networks; configured mode warns (or refuses, with the env
+//   override) on insecure cookies / plaintext public origins.
+// ---------------------------------------------------------------------------
 import { loadConfig, defaultConfigPath, createCore, createPgPool, makeLogger, createProvisioningQueue, type EnqueueJobData } from "@proxvm/core";
 import { buildApp } from "./app.js";
 import { initSetupToken } from "./routes/setup.js";
 import IORedis from "ioredis";
 import type { Queue } from "bullmq";
 
+/**
+ * Boot the API: setup wizard when no config exists, full stack otherwise.
+ * WHY fail fast on DB/cookie misconfig: serving traffic without storage or
+ * with downgraded session security would silently corrupt or expose data.
+ */
 async function main(): Promise<void> {
   const logger = makeLogger("api");
   const port = Number(process.env.PROXVM_PORT ?? "4000");

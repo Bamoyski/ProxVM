@@ -1,3 +1,12 @@
+/* ---------------------------------------------------------------------------
+ * guacamole/api.ts — Guacamole web-API client (tokens, listing, launch URLs).
+ *
+ * Talks to /api/tokens and the session-data tree over 15s-abort fetches.
+ * Error messages deliberately omit host/URL (they surface to normal users
+ * via launch fallbacks); the configured URL stays visible to admins only.
+ * Client-identifier encoding must mirror the web client's toString(), or the
+ * tunnel connect fails with HTTP 400 on garbage-decoded identifiers.
+ * ------------------------------------------------------------------------- */
 export class GuacamoleApiError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message);
@@ -13,8 +22,10 @@ export interface GuacamoleToken {
   availableDataSources: string[];
 }
 
+// --- Token + connection client ------------------------------------------------
 import { stripTrailingSlashes } from "../util/misc.js";
 
+/** Thin wrapper over the Guacamole REST surface ProxVM needs. */
 export class GuacamoleApiClient {
   constructor(private readonly baseUrl: string) {}
 
@@ -22,6 +33,11 @@ export class GuacamoleApiClient {
     return stripTrailingSlashes(this.baseUrl);
   }
 
+  /**
+   * Exchange a username+password for a Guacamole auth token (login). Throws
+   * GuacamoleApiError on transport failure or non-2xx; the response body is
+   * truncated to 300 chars so a verbose error page can't flood the caller.
+   */
   async requestToken(username: string, password: string): Promise<GuacamoleToken> {
     let response: Response;
     try {
@@ -76,6 +92,11 @@ export class GuacamoleApiClient {
     }
   }
 
+  /**
+   * List stored connections for one data source. WHY Object.values().flat():
+   * Guacamole groups the map by parent identifier, so entries arrive nested
+   * one level deeper than the flat list callers actually need.
+   */
   async fetchConnections(token: string, dataSource: string): Promise<Array<{ identifier: string; name: string; protocol: string }>> {
     const response = await fetch(
       `${this.url}/api/session/data/${encodeURIComponent(dataSource)}/connections?token=${encodeURIComponent(token)}`,
@@ -93,6 +114,11 @@ export class GuacamoleApiClient {
     }));
   }
 
+  /**
+   * Resolve a stored connection's numeric identifier by display name. Exact
+   * match only — Guacamole names are unique per data source, and fuzzy
+   * matching could launch the wrong guest's session.
+   */
   async findConnectionIdentifier(token: string, dataSource: string, connectionName: string): Promise<string | null> {
     const connections = await this.fetchConnections(token, dataSource);
     const match = connections.find((c) => c.name === connectionName);
@@ -129,6 +155,11 @@ export function encodeClientIdentifier(
     .replace(/=+$/g, "");
 }
 
+/**
+ * Build a `#/client/` launch URL for a stored connection. The auth token
+ * rides in the query string (Guacamole web-client convention); leaking that
+ * URL equals session hijack, so callers never log or persist it.
+ */
 export function buildClientLaunchUrl(
   guacamoleUrl: string,
   identifier: string,
@@ -140,10 +171,17 @@ export function buildClientLaunchUrl(
   return `${stripTrailingSlashes(guacamoleUrl)}/#/client/${encoded}?token=${encodeURIComponent(authToken)}`;
 }
 
+/**
+ * Base login URL for the Guacamole web app (fallback when direct launch
+ * fails). Trailing slashes are stripped so concatenation never yields `//`.
+ */
 export function buildLoginUrl(guacamoleUrl: string): string {
   return `${stripTrailingSlashes(guacamoleUrl)}/`;
 }
 
+// --- Response helper -----------------------------------------------------------
+// WHY swallow body errors: the error path must never throw its own error and
+// mask the login failure it is trying to report — empty string is enough.
 async function safeText(response: Response): Promise<string> {
   try {
     return await response.text();

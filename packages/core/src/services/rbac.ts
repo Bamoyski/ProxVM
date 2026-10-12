@@ -1,3 +1,18 @@
+// ---------------------------------------------------------------------------
+// Legacy system-role permissions (ADMIN / OPERATOR / USER).
+//
+// These hardcoded sets are the FAST PATH inside requirePermission: zero
+// queries, evaluated from the already-loaded session user. Anything richer
+// (custom roles, group roles, direct grants, expiries) lives in services/
+// iam.ts and is resolved against the database instead.
+//
+// CRITICAL INVARIANT for reviewers: hasPermission/isAdmin read
+// user.roles, which UsersService populates EXPIRED-FILTERED
+// (expires_at IS NULL OR > NOW()). An expired ADMIN grant therefore
+// vanishes from these checks with no extra code — but ONLY because the
+// loader filters. If you ever populate UserWithRoles from another source,
+// filter expiries there too or expired admins come back to life.
+// ---------------------------------------------------------------------------
 import type { Role, UserWithRoles } from "@proxvm/shared";
 import { ROLES } from "@proxvm/shared";
 
@@ -77,11 +92,16 @@ export function permissionsForRole(role: Role): ReadonlySet<Permission> {
   return ROLE_PERMISSIONS[role];
 }
 
+/**
+ * Legacy fast-path check. Inactive users are denied even with live grants
+ * (disablement must win over every permission source).
+ */
 export function hasPermission(user: UserWithRoles | null, permission: Permission): boolean {
   if (!user || !user.active) return false;
   return user.roles.some((role) => permissionsForRole(role).has(permission));
 }
 
+/** See the file header: roles here are already expiry-filtered by the loader. */
 export function isAdmin(user: UserWithRoles | null): boolean {
   return !!user && user.roles.includes("ADMIN");
 }

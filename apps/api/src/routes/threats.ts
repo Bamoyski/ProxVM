@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Threats routes: point-in-time findings recomputed from the audit trail
+//   (brute force, new-IP logins, out-of-band Proxmox power changes).
+// Permissions: audit.read (same visibility as the audit log itself).
+// Rate limits: none (read-only recomputation over a bounded 5000-event
+//   window; days clamped to 1..30 to bound scan cost).
+// Security: findings carry no VM names/ids so privacy-flagged entries need
+//   no extra filtering; a down Proxmox API skips the live rule instead of
+//   failing the page (liveChecked reports whether it ran).
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -7,6 +17,11 @@ import { detectOutOfBand, detectThreats, findNewIpLogins, type LiveVmPower } fro
 // on every request. Same visibility as the audit log itself (audit.read);
 // findings carry no VM names/ids so privacy-flagged entries need no extra
 // filtering.
+/**
+ * Register the threat-findings endpoint.
+ * WHY recompute per request: findings are a view over the audit trail, not
+ * stored state, so they can never go stale or desync from retention prunes.
+ */
 export async function threatRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 

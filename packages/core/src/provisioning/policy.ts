@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------
+// Provisioning policy: resource ceilings + static-IP allowlist enforcement
+//   shared by the API (early 400) and the worker (failed job). Admins exempt
+//   (quotas model); rejections throw, never silently clamp.
+// Security: allowlist-gated statics block infra/foreign subnets; network/
+//   broadcast addresses and duplicate IPs are refused before any clone.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import { AppError } from "../util/errors.js";
 import type { Queryable } from "../db/pool.js";

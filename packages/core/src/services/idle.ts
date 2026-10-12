@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Idle auto-shutdown: reconciler + pure decider for user-class VMs.
+// - Policy comes from settings with clamped bounds; disabled short-circuits
+//   the whole pass before any Proxmox/Guac I/O (see getIdlePolicy).
+// - shouldAutoShutdown is pure (signals, policy, now) for deterministic
+//   tests; reconcileIdleShutdown only gathers signals and acts on verdicts.
+// - Unknowns fail safe toward RUNNING: no CPU data, unreachable Guacamole,
+//   or zero session history all veto shutdown (a fresh VM is not idle).
+// - Server-class VMs are never touched; shutdowns are graceful ACPI with an
+//   audit trail per VM, and per-VM try/catch keeps one failure from the rest.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import { AppError } from "../util/errors.js";
 import type { ProxmoxClient } from "../proxmox/client.js";
@@ -24,6 +35,7 @@ export interface IdlePolicy {
   cpuThreshold: number;
 }
 
+/** Reads clamped idle policy from settings; disabled skips all I/O. */
 export async function getIdlePolicy(settings: Pick<SettingsService, "get">): Promise<IdlePolicy> {
   const [enabled, minutes, cpu] = await Promise.all([
     settings.get("power.idle_shutdown_enabled"),
@@ -48,6 +60,10 @@ export interface IdleSignals {
   lastActivityMs: number | null;
 }
 
+/**
+ * Pure shutdown decider: every veto (stopped, sessions, unreadable CPU,
+ * hot CPU, never-used, recently-active) fails safe toward running.
+ */
 export function shouldAutoShutdown(
   signals: IdleSignals,
   policy: { idleMinutes: number; cpuThreshold: number },
@@ -175,6 +191,7 @@ export async function reconcileIdleShutdown(
   return outcomes;
 }
 
+/** Validates + persists vm_class; rejects anything but server|user. */
 export async function setVmClassValidated(
   vms: VmsRepository,
   vmId: string,

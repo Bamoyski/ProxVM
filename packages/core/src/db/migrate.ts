@@ -1,3 +1,11 @@
+/* ---------------------------------------------------------------------------
+ * migrate.ts — ordered, idempotent schema migration runner.
+ *
+ * MIGRATIONS is append-only and ordered: each entry runs once inside its own
+ * transaction and records into schema_migrations. NEVER edit an applied
+ * migration's SQL (fresh installs would diverge from upgraded ones) — add a
+ * new numbered migration instead. Runs automatically on API boot.
+ * ------------------------------------------------------------------------- */
 import type { Queryable } from "./pool.js";
 import type { Logger } from "../util/logger.js";
 
@@ -7,6 +15,7 @@ export interface Migration {
   sql: string;
 }
 
+// --- Migration catalog (order matters: applied strictly top to bottom) -----
 import { initialMigration } from "./migrations/001_initial.js";
 import { vmsMigration } from "./migrations/002_vms.js";
 import { jobsMigration } from "./migrations/003_jobs.js";
@@ -49,6 +58,13 @@ export const MIGRATIONS: Migration[] = [
   { id: "019", name: "csrf_token_derivation", sql: csrfTokenDerivationMigration },
 ];
 
+// --- Runner ----------------------------------------------------------------
+/**
+ * Apply every pending migration in order, returning the ids applied now.
+ * WHY one transaction per migration (not one for all): a failure rolls back
+ * only the bad migration, leaving earlier ones recorded so the next boot
+ * retries exactly where it stopped instead of replaying everything.
+ */
 export async function runMigrations(db: Queryable, logger: Logger): Promise<string[]> {
   await db.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (

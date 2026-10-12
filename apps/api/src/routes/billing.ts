@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Billing routes: usage metering (summary + CSV), per-user VM quotas,
+//   support tickets, and the public announcement read.
+// Permissions: usage/quota/ticket-status need users.manage (ADMIN-only);
+//   ticket create/list and announcement read need any session (users see
+//   only their own tickets; admins see the whole queue).
+// Rate limits: ticket creation 20/hr and usage export 30/hr (abuse + scan
+//   throttles); reads are otherwise uncapped.
+// Security: additive and inert by default (null quota = unlimited); quota
+//   changes and ticket transitions are audited with actor + target.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -35,6 +46,12 @@ function toCsvCell(value: unknown): string {
   return csvCell(value);
 }
 
+/**
+ * Register usage/quota/ticket/announcement endpoints.
+ * WHY split visibility: metering and quotas are admin-only cost controls,
+ * while tickets/announcements are user-facing, so one module serves both
+ * with per-endpoint guards rather than a shared gate.
+ */
 export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
   const adminGuard = app.requirePermission("users.manage");

@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// ProxVM API composition root: builds the Fastify app, registers the auth
+// plugin FIRST (everything below depends on requireAuth/requirePermission),
+// mounts every route group, and starts the background tickers (schedules,
+// health, metering, idle-shutdown, threats, backups, session/IAM sweeps).
+//
+// Security posture encoded here, not scattered: trustProxy defaults to
+// socket-IP-only (X-Forwarded-For is attacker-controlled input), global +
+// per-route rate limits, security headers, CSRF on writes, and a 1 MB body
+// cap so expensive handlers (Argon2, XML/JSON parses) can't be fed
+// unbounded input. Change these defaults only with a security reason.
+// ---------------------------------------------------------------------------
 import Fastify, { type FastifyInstance } from "fastify";
 import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";

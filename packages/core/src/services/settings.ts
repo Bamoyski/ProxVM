@@ -1,8 +1,21 @@
+// ---------------------------------------------------------------------------
+// SettingsService: typed key/value store with transparent secret encryption.
+// - Reads decrypt on the way out, writes encrypt on the way in; the
+//   `encrypted` column records which form is at rest per key.
+// - isSecretKey decides the default from the key suffix, so new secret keys
+//   stay encrypted even when callers forget the flag; plaintext keys stay
+//   queryable for non-sensitive config.
+// - setSecretWithSentinel lets UIs round-trip "__UNCHANGED__" without ever
+//   seeing the secret; missing-key + sentinel is a 400, not a silent write.
+// - Secrets here back Proxmox/PBS/Guacamole clients: never log values, only
+//   presence (configured/not) at route level.
+// ---------------------------------------------------------------------------
 import type { Queryable } from "../db/pool.js";
 import { AppError } from "../util/errors.js";
 
 export const UNCHANGED_SENTINEL = "__UNCHANGED__";
 
+/** Typed Proxmox settings projection; null until url + secret exist. */
 export interface StoredProxmoxSettings {
   url: string;
   tokenId: string;
@@ -41,6 +54,7 @@ export interface SettingsServiceDeps {
   decrypt: (stored: string) => string;
 }
 
+/** Key/value settings with transparent encrypt-on-write/decrypt-on-read. */
 export class SettingsService {
   constructor(
     private readonly db: Queryable,
@@ -48,6 +62,7 @@ export class SettingsService {
     private readonly decrypt: (stored: string) => string,
   ) {}
 
+  // -- Reads: decrypted values; typed projections (proxmox/pbs/guac) ----
   async get(key: string): Promise<{ value: string; encrypted: boolean } | null> {
     const result = await this.db.query<{ value: string; encrypted: boolean }>(
       "SELECT value, encrypted FROM settings WHERE key = $1",
@@ -73,6 +88,7 @@ export class SettingsService {
     }
   }
 
+  // -- Writes: auto-encrypt by suffix; sentinel preserves secrets -------
   async set(key: string, value: string, opts: { encrypted?: boolean; category?: string } = {}): Promise<void> {
     const encrypted = opts.encrypted ?? isSecretKey(key);
     const stored = encrypted ? this.encrypt(value) : value;

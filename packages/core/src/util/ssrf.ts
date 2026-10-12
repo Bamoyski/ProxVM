@@ -1,3 +1,13 @@
+/* ---------------------------------------------------------------------------
+ * ssrf.ts — server-side request forgery guard for operator-configured URLs.
+ *
+ * Every server-initiated fetch (Proxmox/Guacamole/PBS URLs, webhooks, health
+ * checks) funnels through assertSafeServerUrl / fetchWithSsrfGuard. Private
+ * LAN ranges are ALLOWED by design (homelab services live on 192.168.x);
+ * loopback, link-local, and cloud-metadata endpoints are always refused, in
+ * every textual form plus DNS-rebinding to them. Only trusted roles can set
+ * these URLs, so the residual trust is in the operator, not the network.
+ * ------------------------------------------------------------------------- */
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { AppError } from "./errors.js";
@@ -14,6 +24,11 @@ import { AppError } from "./errors.js";
  * settings.manage holders, so the remaining trust is in the operator.
  */
 
+// --- Obfuscated-literal parser ------------------------------------------------
+// WHY this parser exists: attackers spell 127.0.0.1 as hex/octal/int or
+// short forms (0x7f.1, 0177.0.0.1, 2130706433, 127.1). isIP misses all of
+// them, so every dotted/decimal/hex/octal form is normalized to 4 octets
+// before the block check below. Returns null when not numeric at all.
 function parseNumericParts(host: string): number[] | null {
   let v4 = host;
   const mapped = host.match(/^(?:::ffff:)(.+)$/i);
@@ -25,6 +40,8 @@ function parseNumericParts(host: string): number[] | null {
         const n = (parseInt(groups[0]!, 16) << 16) | parseInt(groups[1]!, 16);
         v4 = [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
       } else {
+        // WHY fail closed: an unparseable ::ffff: tail is treated as loopback
+        // rather than let through — a weird tail must never become a bypass.
         return [127, 0, 0, 1];
       }
     }
@@ -80,6 +97,8 @@ export function isBlockedServerDestination(hostname: string): boolean {
   ) {
     return true;
   }
+  // WHY the quad-prefix pre-check: "127.0.0.1.evil.com" normalizes oddly in
+  // some resolvers, so a leading blocked quad refuses fast before DNS.
   const quadPrefix = host.match(/^(\d{1,3}(?:\.\d{1,3}){3})\./);
   if (quadPrefix) {
     const octets = quadPrefix[1]!.split(".").map(Number);
@@ -100,12 +119,16 @@ export function isBlockedServerDestination(hostname: string): boolean {
     const h = host.toLowerCase();
     if (h === "::1" || h === "::") return true;
     if (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd")) return true;
+    // WHY blanket-refuse ::ffff:: the v4 check above already judged the
+    // embedded address, and an unjudgeable tail fails closed there — so any
+    // remaining ::ffff: form reaching here must not slip through as "v6".
     if (h.startsWith("::ffff:")) return true;
     return false;
   }
   return false;
 }
 
+// --- DNS + URL + redirect-guard layer -----------------------------------------
 /** Literal check first, then DNS: every resolved address must be safe. */
 export async function assertSafeServerHost(hostname: string, what = "destination"): Promise<void> {
   if (isBlockedServerDestination(hostname)) {
@@ -152,6 +175,8 @@ export async function fetchWithSsrfGuard(
   let current = url;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const parsed = new URL(current);
+    // WHY re-check every hop: DNS is re-resolved per redirect so a safe first
+    // host can't bounce us to loopback/metadata mid-chain (rebinding-safe).
     await assertSafeServerHost(parsed.hostname, "redirect target");
     const res = await fetch(current, { ...init, redirect: "manual" });
     if (res.status !== 301 && res.status !== 302 && res.status !== 307 && res.status !== 308) {

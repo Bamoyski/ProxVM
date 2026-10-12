@@ -1,3 +1,12 @@
+/* ---------------------------------------------------------------------------
+ * 009_homelab — homelab extras: power schedules, share links, service scans.
+ *
+ * All four tables are keyed to vms with ON DELETE CASCADE so removing a VM
+ * cleans its schedules, links, and health snapshots — nothing here may
+ * outlive its VM. Share-link tokens store only token_hash (like passwords);
+ * the bearer itself is shown once at creation. connection_health rows are
+ * upserted snapshots (one per VM/protocol), never an append-only log.
+ * ------------------------------------------------------------------------- */
 export const homelabMigration = `
 -- Scheduled power actions (start/stop/restart) evaluated every minute.
 -- days is '*' (daily) or a comma list of weekday numbers (0=Sunday).

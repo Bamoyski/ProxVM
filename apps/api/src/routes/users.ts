@@ -1,3 +1,12 @@
+// ---------------------------------------------------------------------------
+// Users routes: list/create/update/delete users + registration approval queue.
+// Permissions: all endpoints require users.manage; conferral rules further
+//   restrict who may grant roles (assertMayConfer) and who may act on whom
+//   (assertCanAdministerTarget) so delegated admins cannot escalate upward.
+// Rate limits: none (admin-only surface; abuse is an insider/audit matter).
+// Security: password resets/disables revoke sessions + Guacamole tokens;
+//   self-disable/self-delete/self-demote and last-admin removal are refused.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -19,6 +28,11 @@ const updateUserSchema = z.object({
   givenName: z.string().max(128).optional(),
 });
 
+/**
+ * Register user-admin + registration-queue endpoints.
+ * WHY one guard for all: every path here mutates identity/role state, so a
+ * single users.manage gate plus per-target conferral checks applies evenly.
+ */
 export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 

@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// Homelab extras: power schedules, share links, service scans, conn health.
+// - Schedules claim-then-run (last_run_at stamped before Proxmox I/O) so
+//   overlapping tickers cannot double-fire the same minute; one bad VM is
+//   audited and skipped without stopping the rest of the pass.
+// - Share-link tokens are stored as SHA-256 hashes and redeemed with a
+//   timing-safe compare + atomic use_count increment, so validity cannot be
+//   probed byte-by-byte and maxUses cannot be raced past.
+// - Service scans are bounded-concurrency TCP snapshots that never throw;
+//   connection health snapshots cap detail length and isolate per-protocol
+//   failures so one bad check does not fail the batch.
+// ---------------------------------------------------------------------------
 import { randomBytes, createHash } from "node:crypto";
 import net from "node:net";
 import { newId } from "../util/misc.js";
@@ -30,6 +42,7 @@ export interface VmSchedule {
   createdAt: Date;
 }
 
+/** Parses '*' (daily) or deduped weekday numbers; throws on bad input. */
 export function parseScheduleDays(days: string): number[] | null {
   if (days.trim() === "*") return null;
   const raw = days.split(",");
@@ -84,6 +97,7 @@ export async function listSchedules(db: Queryable): Promise<VmSchedule[]> {
   return result.rows.map(toSchedule);
 }
 
+/** Validates + inserts a schedule; days default to daily ('*'). */
 export async function createSchedule(
   db: Queryable,
   input: { vmId: string; action: string; minute: number; hour: number; days?: string; createdBy?: string | null },
@@ -369,6 +383,7 @@ export async function scanVmServices(
   return found.sort((a, b) => a.port - b.port);
 }
 
+/** Replaces a VM's service snapshot wholesale (delete + reinsert). */
 export async function storeVmServices(db: Queryable, vmId: string, services: DiscoveredService[]): Promise<void> {
   await db.query("DELETE FROM vm_services WHERE vm_id = $1", [vmId]);
   for (const service of services) {

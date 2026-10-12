@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// CoreContext: the single composition root of the backend. createCore()
+// wires every service to the same pool/redis/config, runs pending
+// migrations, derives the vault encrypt/decrypt closures from the master
+// key, and hands out lazily-built, short-TTL infrastructure clients
+// (Proxmox/Guacamole/Cloudflare/PBS). API routes, the worker, tickers and
+// tests all share this surface — anything both sides need (notably the
+// re-authorization helpers) must live here or under services/, never
+// copy-pasted per caller.
+// ---------------------------------------------------------------------------
 import type IORedis from "ioredis";
 import type { Pool } from "pg";
 import type { LocalConfig } from "@proxvm/shared";

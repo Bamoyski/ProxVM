@@ -1,9 +1,24 @@
+// ---------------------------------------------------------------------------
+// Jobs routes: provisioning job list/detail, retry, cancel, rollback, and
+//   the SSE progress stream.
+// Permissions: jobs.read for list/detail/stream, jobs.retry for retry,
+//   jobs.cancel for cancel; rollback additionally requires vm.delete. Every
+//   path also enforces creator-or-privileged scoping + privacy-flag VM gate.
+// Rate limits: none (named-permission + ownership gates carry the control).
+// Security: job request payloads are redacted in reads; retry refuses active
+//   jobs; rollback deletes Proxmox/Guac records before soft-deleting the VM.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import { AppError, enqueueProvisioningJob, removeBullJob, type EnqueueJobData } from "@proxvm/core";
 import type { Queue } from "bullmq";
 
+/**
+ * Register provisioning-job read/retry/cancel/rollback/stream endpoints.
+ * WHY creator scoping plus privacy filtering: job rows can reference private
+ * VMs, so ownership alone is insufficient without the per-VM grant check.
+ */
 export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 
@@ -37,6 +52,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     }
   };
 
+  // -- List/detail (creator-scoped, privacy-filtered) ----------------------
   app.get("/jobs", { preHandler: app.requirePermission("jobs.read") }, async (request) => {
     const query = z
       .object({
@@ -83,6 +99,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     return { job: { ...job, request: safeRequest }, steps };
   });
 
+  // -- Retry/cancel/rollback (terminal-state guarded) ----------------------
   app.post("/jobs/:id/retry", { preHandler: app.requirePermission("jobs.retry") }, async (request) => {
     const { id } = request.params as { id: string };
     const user = await app.requireAuth(request);
@@ -196,6 +213,7 @@ export async function jobRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     return { ok: true };
   });
 
+  // -- Live progress stream (SSE over Redis pub/sub) -------------------------
   app.get("/jobs/:id/events", { preHandler: app.requirePermission("jobs.read") }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const job = await ctx.jobs.require(id);

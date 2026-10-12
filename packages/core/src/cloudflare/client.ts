@@ -1,3 +1,13 @@
+/* ---------------------------------------------------------------------------
+ * cloudflare/client.ts — Cloudflare v4 API client (DNS, zones, tunnels).
+ *
+ * Bearer-token auth with a 15s default timeout; every response is a
+ * `{success, errors, result}` envelope, so non-2xx AND success:false both
+ * throw with the joined API messages preserved. Tunnel ingress edits are
+ * order-sensitive (catch-all last) — use ensureTunnelIngressRule rather than
+ * hand-rolling the array. Tokens are chat-rotated if ever pasted: treat as
+ * exposed the moment they leave the vault.
+ * ------------------------------------------------------------------------- */
 import { stripTrailingSlashes } from "../util/misc.js";
 
 export class CloudflareApiError extends Error {
@@ -11,6 +21,7 @@ export class CloudflareApiError extends Error {
   }
 }
 
+// --- Pure ingress helpers (no I/O; unit-tested in isolation) -------------------
 export interface CloudflareZone {
   id: string;
   name: string;
@@ -68,10 +79,13 @@ export function ensureTunnelIngressRule(
 
 /** Service target currently routed for a hostname, if any. */
 export function tunnelServiceFor(rules: TunnelIngressRule[], hostname: string): string | null {
+  // WHY case-insensitive compare: DNS hostnames are case-insensitive, so an
+  // exact-case lookup would miss an identical rule and duplicate it.
   const host = hostname.trim().toLowerCase();
   return rules.find((r) => (r.hostname ?? "").toLowerCase() === host)?.service ?? null;
 }
 
+// --- Authenticated API client ----------------------------------------------------
 export interface CloudflareClientOptions {
   token: string;
   baseUrl?: string;
@@ -79,6 +93,7 @@ export interface CloudflareClientOptions {
   fetchImpl?: typeof fetch;
 }
 
+/** Thin wrapper over the Cloudflare v4 endpoints ProxVM needs. */
 export class CloudflareClient {
   private readonly baseUrl: string;
   private readonly token: string;
@@ -95,6 +110,12 @@ export class CloudflareClient {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
+  /**
+   * Single request pipeline: abort-timeout fetch, then envelope validation.
+   * WHY clearTimeout in both paths: the catch rethrows, so a `finally`-only
+   * clear would still run — but the explicit clear in catch frees the handle
+   * before the throw unwinds, avoiding a dangling timer on every outage.
+   */
   private async request<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -153,6 +174,12 @@ export class CloudflareClient {
     return Array.isArray(records) ? records : [];
   }
 
+  /**
+   * Create a DNS record. WHY the ttl:1 + proxied:true defaults: Cloudflare
+   * uses 1 for "automatic" TTL, and ProxVM records sit behind the proxy —
+   * callers override per record, but an unproxied direct-origin record must
+   * be a conscious choice, never the default.
+   */
   async createDnsRecord(
     zoneId: string,
     record: { type: string; name: string; content: string; proxied?: boolean; ttl?: number },

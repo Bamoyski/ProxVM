@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Filter monitoring supplement: Securly block-oracle checks (admin alerts).
+// - See the module contract above for oracle semantics (DENY vs SS bodies,
+//   verified live) and scope discipline: canonical domain only, unknown
+//   verdicts report unknown and trigger nothing.
+// - Config is env-first (PROXVM_SECURILY_USEREMAIL) with settings fallback;
+//   broker fetches are timeout-bounded and injected (fetchImpl) for tests.
+// - parseSecurlyVerdict treats ONLY a leading DENY as blocked; anything
+//   else is clean-by-absence, never an error, so broker changes fail open
+//   toward "clean" only when the body is present and non-empty.
+// ---------------------------------------------------------------------------
 import type { SettingsService } from "./settings.js";
 
 /**
@@ -29,6 +40,7 @@ export interface SecurlyConfig {
   useremail: string | null;
 }
 
+/** Env-first Securly identity with settings fallback; null when unset. */
 export async function getSecurlyConfig(
   settings: Pick<SettingsService, "get">,
 ): Promise<SecurlyConfig> {
@@ -64,6 +76,10 @@ export function parseSecurlyVerdict(body: string): { status: "blocked" | "clean"
   return { status: "clean", ruleId: null };
 }
 
+/**
+ * Broker probe for one hostname. Non-OK/empty bodies and transport errors
+ * report unknown (never clean) so outages cannot masquerade as unblocked.
+ */
 export async function checkSecurlyBlock(
   hostname: string,
   useremail: string,

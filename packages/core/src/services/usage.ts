@@ -1,3 +1,16 @@
+// ---------------------------------------------------------------------------
+// Usage metering, quotas, tickets, announcements (one module, four concerns).
+// - Power periods are transition-written (one row per power cycle, not per
+//   poll); open/close/reconcile are idempotent so routes and the reconciler
+//   can both call them safely.
+// - Quota load = owned live VMs + fresh in-flight provisions; provisions
+//   older than a day are ignored because the worker's longest wait is ~15
+//   min, so anything older is a crashed-worker leftover, not real load.
+// - Monthly hours are overlapped in JS (not SQL) for pg-mem portability;
+//   open periods count up to now.
+// - Tickets validate lengths server-side; announcements are settings-backed
+//   (500-char cap) with no extra schema.
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import { AppError } from "../util/errors.js";
 import { newId } from "../util/misc.js";
@@ -128,6 +141,7 @@ export async function monthlyUsage(db: Pool, month: string): Promise<VmMonthlyUs
 
 // -- Quotas -------------------------------------------------------------------
 
+/** Quota ceiling for a user; null means unlimited (no row override). */
 export async function getUserQuota(db: Queryable, userId: string): Promise<number | null> {
   const result = await db.query<{ max_vms: number | null }>("SELECT max_vms FROM users WHERE id = $1", [userId]);
   return result.rows[0]?.max_vms ?? null;
@@ -184,6 +198,7 @@ export async function countProvisionLoad(db: Queryable, userId: string): Promise
 
 const TICKET_STATUSES: TicketStatus[] = ["open", "answered", "closed"];
 
+/** Creates a ticket after trimming + enforcing title/body length caps. */
 export async function createTicket(db: Pool, userId: string, title: string, body: string): Promise<SupportTicket> {
   const cleanTitle = title.trim();
   const cleanBody = body.trim();

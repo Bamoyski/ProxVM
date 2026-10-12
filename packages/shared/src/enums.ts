@@ -1,3 +1,11 @@
+// ---------------------------------------------------------------------------
+// Shared enums: closed vocabularies (roles, OS, protocols, job/step states,
+//   VM/credential states, audit events, network modes) used by zod schemas,
+//   DB checks, and UI option lists.
+// WHY const-tuples + union types: one literal list drives both runtime
+//   validation (z.enum) and compile-time narrowing, so adding a value is a
+//   single deliberate edit. AUDIT_EVENTS is append-only — history depends it.
+// ---------------------------------------------------------------------------
 export const ROLES = ["ADMIN", "OPERATOR", "USER"] as const;
 export type Role = (typeof ROLES)[number];
 

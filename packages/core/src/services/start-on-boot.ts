@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------
+// Start-on-boot sync: Proxmox native `onboot` flag + local desired-state row.
+// - Proxmox owns the behavior (starts flagged guests at node boot in order);
+//   ProxVM holds no poller, this helper only keeps flag and DB in agreement.
+// - Write order is Proxmox-first, DB-second: a Proxmox rejection leaves the
+//   DB untouched so the two never disagree after a successful call.
+// ---------------------------------------------------------------------------
 import type { ProxmoxClient } from "../proxmox/client.js";
 import type { VmsRepository } from "./vms.js";
 

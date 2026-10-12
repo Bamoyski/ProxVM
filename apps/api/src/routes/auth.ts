@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Auth routes: login, self-service registration, logout, password change.
+// Permissions: mostly unauthenticated by design (login/register) or any
+//   authenticated session (logout/change-password); no named permission gates.
+// Rate limits: login 20/min/IP + 10/min/username, register 5/min/IP,
+//   change-password 10/min/IP + 10/min/account (brute-force throttles).
+// Security: uniform 401s hide user existence; dummy Argon2 equalizes timing;
+//   sessions are httpOnly SameSite=strict; password changes revoke all
+//   sessions + Guacamole tokens. Every outcome is audited.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -15,9 +25,15 @@ const changePasswordSchema = z.object({
   newPassword: passwordComplexity,
 });
 
+/**
+ * Register login/register/logout/change-password endpoints on the app.
+ * WHY a single group: all four share session-cookie + audit conventions,
+ * so keeping them together keeps the auth security posture reviewable.
+ */
 export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 
+  // -- Login (throttled, enumeration-hardened) -------------------------------
   app.post(
     "/auth/login",
     {
@@ -154,6 +170,7 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
     },
   );
 
+  // -- Logout (session + Guacamole cleanup) -------------------------------
   app.post("/auth/logout", async (request, reply) => {
     if (request.sessionId) {
       await ctx.sessions.revoke(request.sessionId);
@@ -188,6 +205,7 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
     return { ok: true };
   });
 
+  // -- Password change (session-bound, throttled) -------------------------
   app.post(
     "/auth/change-password",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },

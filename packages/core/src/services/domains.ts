@@ -1,3 +1,16 @@
+// ---------------------------------------------------------------------------
+// Domains: canonical-host redirects, CORS origins, Cloudflare + DNS checks.
+// - Canonical + aliases are the only redirect sources; unknown hosts (IPs,
+//   localhost) always serve normally, and non-GET/API traffic never 301s
+//   (clients do not follow POST redirects safely; share GETs are exempt).
+// - Switching canonical keeps the old host as an alias so old URLs survive;
+//   old DNS records must NOT be deleted during a switch.
+// - verifyDomainReachability gates on public DNS (IP literals and private
+//   ranges rejected: admin-gated endpoint must not become a scan oracle);
+//   the HTTPS probe is advisory because TLS lives at the proxy layer.
+// - Hostname parsing/validation avoids regex backtracking (linear scans) as
+//   input arrives via the raw Host header.
+// ---------------------------------------------------------------------------
 import { promises as dns } from "node:dns";
 import net from "node:net";
 import { AppError } from "../util/errors.js";
@@ -93,6 +106,7 @@ function isValidHostnameLabel(label: string): boolean {
   return true;
 }
 
+/** Throws unless the host is a dotted bare hostname (labels 1-63 chars). */
 export function assertValidHostname(host: string): void {
   // Manual per-label validation: the old
   // `/^(?=.{1,253}$)[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/` nests overlapping
@@ -144,6 +158,7 @@ export function resolveDomainRedirect(opts: {
   return `https://${opts.canonical}${path}${query}`;
 }
 
+/** Canonical + deduped aliases + Cloudflare zone for request handling. */
 export async function getDomainConfig(settings: Pick<SettingsService, "get">): Promise<
   DomainConfig & { cloudflareZoneId: string | null }
 > {
@@ -326,6 +341,7 @@ export async function addDomainAlias(
   return { canonical: current.canonical, aliases };
 }
 
+/** Drops an alias; canonical is never touched by alias removal. */
 export async function removeDomainAlias(
   settings: Pick<SettingsService, "get" | "set">,
   rawHost: string,

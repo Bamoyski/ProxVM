@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// Backups supplement: overview + snapshot projection helpers (see state-
+// machine contract above for PENDING -> RUNNING -> OK|FAILED ownership).
+// - Ticker phases stay separated (queue due, start pending, finalize
+//   running) with per-phase try/catch so one phase never starves the rest.
+// - Creator re-auth gates both queueing and starting: revoked/disabled
+//   owners skip with BACKUP_SKIPPED audit instead of running orphaned jobs.
+// - Retention chains a prune run only after a successful backup with
+//   keepLast set; PBS failures degrade overview/snapshot reads to nulls,
+//   never to a failed page.
+// ---------------------------------------------------------------------------
 import { newId } from "../util/misc.js";
 import type { Queryable } from "../db/pool.js";
 import { AppError } from "../util/errors.js";
@@ -160,6 +171,7 @@ export function validateBackupScheduleInput(input: BackupScheduleInput): {
   return { mode, storage: input.storage, datastore, minute: input.minute, hour: input.hour, days, keepLast };
 }
 
+  // -- Schedules: validation, CRUD, due-queueing with re-auth ------------
 export async function listBackupSchedules(db: Queryable, vmId?: string): Promise<BackupSchedule[]> {
   const result = vmId
     ? await db.query("SELECT * FROM pbs_backup_schedules WHERE vm_id = $1 ORDER BY hour ASC, minute ASC", [vmId])
@@ -195,6 +207,7 @@ export async function setBackupScheduleEnabled(db: Queryable, id: string, enable
   await db.query("UPDATE pbs_backup_schedules SET enabled = $2 WHERE id = $1", [id, enabled]);
 }
 
+  // -- Runs: capped creation, atomic claim, terminal transitions ---------
 export async function listBackupRuns(
   db: Queryable,
   opts: { vmId?: string; limit?: number } = {},
@@ -272,6 +285,7 @@ export async function failBackupRun(db: Queryable, id: string, error: string): P
   await db.query("UPDATE pbs_backups SET status = 'FAILED', error = $2, finished_at = NOW() WHERE id = $1", [id, error]);
 }
 
+/** Marks a run done; only called after the task reports terminal OK. */
 export async function completeBackupRun(db: Queryable, id: string): Promise<void> {
   await db.query("UPDATE pbs_backups SET status = 'OK', finished_at = NOW() WHERE id = $1", [id]);
 }

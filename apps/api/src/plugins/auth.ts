@@ -1,3 +1,15 @@
+// ---------------------------------------------------------------------------
+// Request authentication + authorization decorators (requireAuth,
+// requirePermission, requireAdmin) plus the request-scoped audit writer.
+//
+// Authorization layering, cheapest first: (1) legacy system-role fast path
+// over the session user's expiry-filtered roles (zero queries); (2) full
+// effective-access resolution (custom/group/direct grants) memoized PER
+// REQUEST only — never shared across requests, so revocations and expiries
+// take effect on the very next request. Sessions revalidate + reload the
+// user on EVERY request for the same reason: there is no long-lived
+// "is admin" cache anywhere in this path by design.
+// ---------------------------------------------------------------------------
 import fastifyPlugin from "fastify-plugin";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { UserWithRoles } from "@proxvm/shared";

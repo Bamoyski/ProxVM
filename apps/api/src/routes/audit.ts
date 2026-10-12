@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Audit routes: filtered audit-log reads + bounded CSV export.
+// Permissions: both endpoints require audit.read; entries tied to
+//   privacy-flagged VMs (or deleted VMs, treated as private) are then
+//   filtered per concrete grant so audit.read cannot leak private activity.
+// Rate limits: export capped at 30/hr (full-table scans are the costliest
+//   read here); list itself is uncapped but paginated (max 200/page).
+// Security: CSV cells are escaped via csvCell; export honors the same
+//   filters + privacy redaction as the list endpoint.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -12,6 +22,11 @@ const querySchema = z.object({
   actor: z.string().max(64).optional(),
 });
 
+/**
+ * Register audit-log list + CSV export endpoints.
+ * WHY shared privacy filtering: both paths funnel through one helper so the
+ * export can never expose entries the list endpoint would withhold.
+ */
 export async function auditRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 

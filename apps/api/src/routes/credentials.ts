@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Credentials routes: per-VM metadata view, reveal, copy-to-clipboard,
+//   rotation, password generation, and the global credential inventory.
+// Permissions: view/generate need any session + VM visibility; reveal/copy
+//   need cred.reveal + visibility; rotate needs cred.rotate + visibility;
+//   global inventory needs cred.reveal and still filters privacy-flagged VMs.
+// Rate limits: none (visibility + named-permission gates carry the control).
+// Security: only reveal/copy return plaintext and both audit with the actor;
+//   list/view paths never include secrets (masked display constant instead).
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -6,6 +16,12 @@ import { credentialRotateSchema } from "@proxvm/shared";
 
 const REVEAL_DISPLAY = "••••••••••••••••••";
 
+/**
+ * Register credential view/reveal/copy/rotate/generate endpoints.
+ * WHY reveal and copy are distinct events: copy-to-clipboard vs on-screen
+ * reveal have different exfiltration profiles, so the audit trail keeps them
+ * separable for incident review.
+ */
 export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 
@@ -15,6 +31,7 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
     return { user, allowed };
   };
 
+  // -- Per-VM credential view/reveal/copy/rotate ---------------------------
   app.get("/vms/:id/credentials", async (request) => {
     const { id } = request.params as { id: string };
     const access = await resolveAccess(request, id);
@@ -81,6 +98,7 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
     return result;
   });
 
+  // -- Password generation (authenticated utility, no VM needed) -----------
   app.post("/vms/:id/credentials/generate", async (request) => {
     await app.requireAuth(request);
     return { password: generatePassword() };
@@ -91,6 +109,7 @@ export async function credentialRoutes(app: FastifyInstance, opts: { ctx: CoreCo
     return { password: generatePassword() };
   });
 
+  // -- Global inventory (privacy-filtered, metadata only) ------------------
   app.get("/credentials", async (request) => {
     const user = await app.requirePermission("cred.reveal")(request);
     const vms = await ctx.vms.list();

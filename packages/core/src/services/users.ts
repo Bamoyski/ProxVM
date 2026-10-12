@@ -1,3 +1,14 @@
+// ---------------------------------------------------------------------------
+// UsersService: canonical user + role store behind every auth decision.
+// - Role reads ignore expired user_roles rows (NULL or future expires_at),
+//   so temporary grants stop conferring access without a cleanup job.
+// - The initial admin is immutable (no demote/delete/deactivate) and at
+//   least one other active ADMIN must remain: guards below enforce both.
+// - Failed-login counting is atomic in SQL; a fresh lockout revokes live
+//   sessions so lockout ends access, not just future logins.
+// - Password hashes never leave this layer in public shapes (see
+//   toPublicUser); callers must not log or serialize UserWithRoles.
+// ---------------------------------------------------------------------------
 import type { Pool, PoolClient } from "pg";
 import type { Queryable } from "../db/pool.js";
 import type { PublicUser, Role, UserWithRoles } from "@proxvm/shared";
@@ -7,6 +18,7 @@ import { ROLE_IDS, validRoles } from "./rbac.js";
 import { settingsSeeds } from "../db/migrations/001_initial.js";
 import type { UserRoleRow } from "./rows.js";
 
+/** Input for creating a user; roles are validated + mapped to role ids. */
 export interface CreateUserInput {
   username: string;
   email?: string;
@@ -15,9 +27,11 @@ export interface CreateUserInput {
   roles: Role[];
 }
 
+/** Canonical user store; all role reads filter expired grants (see header). */
 export class UsersService {
   constructor(private readonly db: Pool) {}
 
+  // -- Bootstrap / counts ------------------------------------------------
   async ensureSeeded(): Promise<void> {
     const result = await this.db.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM roles");
     if (result.rows[0]?.count === "0") {
@@ -77,6 +91,7 @@ export class UsersService {
     return Number(result.rows[0]?.c ?? "0");
   }
 
+  // -- Admin safety guards: initial-admin immutable, last-admin kept ----
   async setRolesGuarded(userId: string, roles: Role[]): Promise<void> {
     const target = await this.requireById(userId);
     if (await this.isInitialAdmin(userId)) {
@@ -115,6 +130,7 @@ export class UsersService {
     return true;
   }
 
+  // -- Lookups: role assembly filters expired grants (NOW() check) -----
   async findByUsername(username: string): Promise<UserWithRoles | null> {
     const result = await this.selectWhere("WHERE u.username = $1", [username]);
     return assembleUsers(result.rows)[0] ?? null;
@@ -173,6 +189,7 @@ export class UsersService {
     ]);
   }
 
+  // -- Lockout: atomic counter + session revocation on fresh lock -----
   async recordFailedLogin(username: string, maxAttempts: number, lockMinutes: number): Promise<{ locked: boolean; remaining: number }> {
     const user = await this.findByUsername(username);
     if (!user) return { locked: true, remaining: -1 };
@@ -229,6 +246,9 @@ export class UsersService {
   }
 }
 
+// Collapses the one-row-per-role join into a single user with a roles[].
+// WHY: LEFT JOIN fans out; unknown role names are dropped so a renamed or
+// removed role can never surface as a phantom permission downstream.
 function assembleUsers(rows: UserRoleRow[]): UserWithRoles[] {
   const map = new Map<string, UserWithRoles>();
   for (const row of rows) {
@@ -258,6 +278,7 @@ function assembleUsers(rows: UserRoleRow[]): UserWithRoles[] {
   return [...map.values()];
 }
 
+/** Strips secrets/lockout internals for API responses; safe to serialize. */
 export function toPublicUser(user: UserWithRoles): PublicUser {
   return {
     id: user.id,

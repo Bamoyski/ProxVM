@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------------------
+// Firewall service entry: ProxVM-tagged guest rules + status/apply/remove.
+// - See the model comment below for the full isolation contract (default
+//   deny, rule order, DHCP/DNS carve-outs, IPv4-only limits, opt-in scope).
+// - Invariants repeated for skimmers: cluster firewall must be on (else
+//   guest rules are silently ignored), and only PROXVM_RULE_COMMENT rules
+//   are ever deleted so hand-made/template rules survive apply/remove.
+// - Rule creation is last-first at pos 0 because Proxmox prepends: that is
+//   what keeps builder order == evaluation order (first match wins).
+// ---------------------------------------------------------------------------
 import type { Pool } from "pg";
 import { AppError } from "../util/errors.js";
 import type { ProxmoxClient } from "../proxmox/client.js";
@@ -145,6 +155,7 @@ export function buildIsolationRules(opts: IsolationOptions): IsolationRule[] {
   return rules;
 }
 
+/** True only for ProxVM-stamped rules; hand-made rules never match. */
 export function isProxvmRule(rule: { comment?: unknown }): boolean {
   return typeof rule.comment === "string" && rule.comment.startsWith(PROXVM_RULE_COMMENT);
 }
@@ -239,6 +250,7 @@ async function clusterFirewallEnabled(proxmox: ProxmoxClient): Promise<boolean> 
   return enable === 1 || enable === "1" || enable === true;
 }
 
+/** Read-only status: policies + ProxVM vs foreign rule split. */
 export async function getIsolationStatus(
   proxmox: ProxmoxClient,
   node: string,

@@ -1,3 +1,12 @@
+// ---------------------------------------------------------------------------
+// Provisioning worker: drains the BullMQ queue and runs runProvisioningJob
+// per job. The queue payload is UNTRUSTED (shared Redis is not a trust
+// boundary): every payload is shape-validated before use, malformed rows
+// are failed explicitly so nothing sticks PENDING, and authorization +
+// quota + policy are all RE-CHECKED inside runProvisioningJob at execution
+// time. Concurrency is deliberately 2 — clones are heavy and Proxmox
+// serializes much of this work anyway.
+// ---------------------------------------------------------------------------
 import IORedis from "ioredis";
 import { Worker, type Job } from "bullmq";
 import {

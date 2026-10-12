@@ -30,6 +30,11 @@ import type { Logger } from "../util/logger.js";
 // Expiration is authoritative: any grant whose expires_at has passed is
 // ignored by resolution (no background job required for denial), while a
 // periodic sweep revokes leftover Guacamole permissions and prunes rows.
+//
+// REVIEWER CONTRACT: every new grant table/edge MUST filter
+// (expires_at IS NULL OR expires_at > NOW()) in BOTH the SQL and any
+// in-memory isLive() check, or expired privileges silently resurrect.
+// Strictly-greater (not >=): a grant expiring exactly now is already dead.
 // ---------------------------------------------------------------------------
 
 export const KNOWN_PROTOCOLS: ReadonlySet<string> = new Set(["ssh", "rdp", "vnc"]);

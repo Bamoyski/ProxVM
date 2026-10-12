@@ -1,3 +1,11 @@
+// ---------------------------------------------------------------------------
+// Content routes: mini-CMS reads/writes for operator-editable site copy.
+// Permissions: reads need any session; writes need settings.manage.
+// Rate limits: none (small settings-row writes; key allowlist bounds scope).
+// Security: keys are an exact allowlist; values render as escaped TEXT;
+//   link keys additionally require https:///mailto: server-side; empty
+//   values delete the row (reset to built-in) instead of storing blanks.
+// ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
@@ -68,6 +76,12 @@ function assertValidEntry(key: string, value: string): void {
   }
 }
 
+/**
+ * Register site-copy read/write endpoints.
+ * WHY settings-backed, not a new table: copy is tiny and infrequent, so
+ * plain settings rows avoid a migration while the key allowlist keeps other
+ * settings unreachable through this path.
+ */
 export async function contentRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 

@@ -1,5 +1,16 @@
+// ---------------------------------------------------------------------------
+// rows.ts: shared DB-row shapes (snake_case) for every service query.
+// - No logic and no queries here: each interface mirrors its table's SELECT
+//   *, so services stay honest about which columns they consume.
+// - Date/boolean/nullable fields mirror pg output (e.g. locked_until, ISO
+//   timestamps as Date); converters to API records live with their service
+//   (toVmRecord, toJobRecord, assembleUsers), not here.
+// - RoleRow re-export exists for legacy imports; new code imports from the
+//   IAM module instead.
+// ---------------------------------------------------------------------------
 import type { AuditEvent, CredStatus, JobStatus, JobStep, OsType, Protocol, ProvisioningMethod, Role, StepState, VmStatus } from "@proxvm/shared";
 
+  // -- Identity rows: users, sessions, audit --------------------------------
 export interface UserRow {
   id: string;
   username: string;
@@ -44,6 +55,7 @@ export interface AuditRow {
   created_at: Date;
 }
 
+  // -- Inventory rows: VMs, credentials, templates, Guacamole, jobs -------
 export interface VmRow {
   id: string;
   vmid: number;
