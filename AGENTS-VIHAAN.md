@@ -22,6 +22,9 @@ your pull requests and runs anything that needs live infrastructure.
 **Never push to `main`. Never commit onto `main`. Never force-push `main`
 or any branch you did not create.** Every change ships as a pull request
 that Ben reviews and merges. No exceptions, including "trivial" fixes.
+(Ben himself pushes directly — that is the maintainer's prerogative and
+changes nothing for you. If you see direct pushes in the history, they
+are his, not a precedent.)
 
 Every task follows this shape:
 
