@@ -125,18 +125,23 @@ export default function Backups() {
   // Backup-capable Proxmox storages on the selected VMs' nodes, for the
   // destination dropdown (no guessing storage IDs).
   const nodes = [...new Set(checked.map((id) => rows.find((r) => r.vmId === id)?.node).filter((n): n is string => !!n))];
-  const { data: storageData } = useQuery({
+  const { data: storageData, isError: storageError, isFetching: storageLoading } = useQuery({
     queryKey: ["backup-storages", nodes.sort().join(",")],
     queryFn: async () => {
       const names = new Map<string, number>();
       await Promise.all(
         nodes.map(async (node) => {
           try {
-            const res = await api<{ storage: Array<{ storage: string; type: string | null }> }>(
+            const res = await api<{ storage: Array<{ storage: string; type: string | null; content: string | null }> }>(
               `/proxmox/storage?node=${encodeURIComponent(node)}`,
             );
             for (const s of res.storage ?? []) {
-              if ((s.type ?? "").toLowerCase() === "pbs" && s.storage) {
+              // PBS-backed storages report type "pbs"; anything whose content
+              // allows backups is also usable as a vzdump target, so accept
+              // both — a type-field surprise must never hide a real target.
+              const isPbs = (s.type ?? "").toLowerCase() === "pbs";
+              const allowsBackup = (s.content ?? "").toLowerCase().split(",").includes("backup");
+              if ((isPbs || allowsBackup) && s.storage) {
                 names.set(s.storage, (names.get(s.storage) ?? 0) + 1);
               }
             }
@@ -151,6 +156,9 @@ export default function Backups() {
     enabled: nodes.length > 0,
   });
   const storageOptions = storageData ?? [];
+  // storageData undefined + error = Proxmox unreachable (distinct from
+  // "reachable but no backup storage"), so the empty state can say so.
+  const storageUnreachable = storageError && !storageData;
   const storageValue = storageOptions.includes(form.storage) || !form.storage ? form.storage : "";
 
   const focus = focusId || checked[0] || "";
@@ -312,7 +320,15 @@ export default function Backups() {
               value={storageValue}
               onChange={(e) => setForm({ ...form, storage: e.target.value })}
             >
-              <option value="">{storageOptions.length ? "Choose storage…" : "No backup storage found — type it"}</option>
+              <option value="">
+              {storageLoading
+                ? "Loading storages…"
+                : storageOptions.length
+                  ? "Choose storage…"
+                  : storageUnreachable
+                    ? "Proxmox unreachable — type it"
+                    : "No backup storage found — type it"}
+            </option>
               {storageOptions.map((name) => (
                 <option key={name} value={name}>{name}</option>
               ))}
@@ -321,10 +337,15 @@ export default function Backups() {
               <input
                 className="pv-input"
                 style={{ marginTop: 6 }}
-                placeholder="Storage ID, e.g. pbs-store"
+                placeholder="Storage ID, e.g. ProxVM"
                 value={form.storage}
                 onChange={(e) => setForm({ ...form, storage: e.target.value })}
               />
+            )}
+            {storageUnreachable && (
+              <div className="pv-hint" style={{ marginTop: 6 }}>
+                Cannot reach Proxmox right now — check the node is up, then refresh. Typing the ID still works.
+              </div>
             )}
           </div>
           <div className="grid grid-cols-3 gap-2">
