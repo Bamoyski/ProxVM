@@ -4,6 +4,7 @@ build/
 *.tsbuildinfo
 # Local agent notes — never push (per operator instruction).
 AGENTS.md
+SYNC.md
 .env
 .env.*
 !.env.example
