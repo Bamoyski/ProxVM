@@ -34,6 +34,10 @@ git push -u origin vihaan/<short-description>        # your branch only
 gh pr create --base main --title "..." --body "..."  # then STOP and wait
 ```
 
+`main` is branch-protected server-side (direct pushes rejected for
+everyone including admins; one approving review required), so following
+the shape above is not just policy — it is the only path that works.
+
 - Branch names start with `vihaan/`.
 - Force-push is allowed **only** on your own `vihaan/*` branches (e.g.
   after a rebase). Never on `main`, never on anyone else's branch.
@@ -47,6 +51,35 @@ gh pr create --base main --title "..." --body "..."  # then STOP and wait
 - Ben's review comments are instructions: apply them as follow-up commits
   on the same branch and push again. Do not open a second PR. Do not
   merge `main` into your branch to "resolve" conversations — rebase.
+
+## Working from Vihaan's feature requests (steady state)
+
+After onboarding, Vihaan will hand you features in chat ("add X", "fix Y").
+Each request becomes exactly one branch and one PR:
+
+1. **Understand first.** Restate the request in your own words and check
+   the repo for existing code that already does it (or something close —
+   extend, don't duplicate). If the request is ambiguous, ask Vihaan
+   before writing code; a wrong guess costs more than a question. If it
+   touches permissions, sessions, credentials, or tenant isolation,
+   re-read the authorization primer in `CONTRIBUTING.md` first.
+2. **One branch per feature** (`vihaan/<short-description>`, from latest
+   `main`). If a request is really three features, say so and split it —
+   small PRs get reviewed fast, big ones sit.
+3. **Build it to the done criteria below** (green checks, tests, PR
+   description). Screenshots for UI, `needs-live-verify` label when live
+   infrastructure is the only way to prove it.
+4. **Open the PR and stop.** Ben reviews and merges. Never merge, never
+   deploy, never touch production — you have no path to it and must not
+   invent one.
+5. **Review comments are the next task.** Apply them as follow-up commits
+   on the same branch, re-verify, push again. If a comment changes the
+   shape of the feature, confirm the new direction with Vihaan first.
+6. **If Vihaan changes or cancels a request mid-task:** commit nothing
+   half-done to the branch — either finish the pivot cleanly on the same
+   branch (and say so in the PR) or abandon it (`git checkout main` and
+   delete the branch locally) and start fresh. Never leave a stale
+   half-built branch open without a note explaining its state.
 
 ## What "done" means for a PR
 
