@@ -400,7 +400,12 @@ export async function executePendingBackups(deps: BackupTickerDeps): Promise<{ s
         const datastore = run.datastore ?? (await deps.settings.getPlain("pbs.datastore"));
         if (!datastore) throw AppError.validation("No PBS datastore configured for this prune");
         if (run.keepLast === null) throw AppError.validation("Prune requires keepLast");
-        const upid = await pbs.pruneSnapshots(datastore, { backupId: `vm/${vm.vmid}`, keepLast: run.keepLast });
+        // Resolve the real group id first: PBS reports bare numeric ids
+        // ("136"), not "vm/136". Pruning an unmatched id would either fail
+        // opaquely or — worse — succeed against the wrong group.
+        const backupId = resolveVmBackupId(await pbs.listBackupGroups(datastore), vm.vmid);
+        if (!backupId) throw AppError.validation("No snapshots found for this VM — nothing to prune");
+        const upid = await pbs.pruneSnapshots(datastore, { backupId, keepLast: run.keepLast });
         await deps.db.query("UPDATE pbs_backups SET upid = $2 WHERE id = $1", [run.id, upid]);
       } else {
         const proxmox = await deps.getProxmoxClient();
@@ -577,6 +582,40 @@ export interface VmSnapshotMatch {
 }
 
 /**
+ * Live PBS servers report VM snapshot groups with a BARE numeric backup-id
+ * (e.g. `"backup-id": "136"`, verified against PBS 4.2) — not the
+ * `"vm/136"` form older docs and fixtures suggest. Both forms must match,
+ * or snapshots stay invisible and prunes address a group that does not
+ * exist. The bare form only counts when backup-type is "vm" (or absent),
+ * so a container/host group that happens to share the number never
+ * collides with a VM.
+ */
+export function groupBelongsToVm(rec: Record<string, unknown>, vmid: number): boolean {
+  const id = rec["backup-id"];
+  if (id === `vm/${vmid}`) return true;
+  if (id === String(vmid)) {
+    const type = rec["backup-type"];
+    return type === undefined || type === "vm";
+  }
+  return false;
+}
+
+/** The backup-id string to address PBS with for this VM (prefixed form
+ *  preferred when both exist), or null when the VM has no snapshots. */
+export function resolveVmBackupId(groups: unknown[], vmid: number): string | null {
+  let bare: string | null = null;
+  for (const g of groups) {
+    if (typeof g !== "object" || g === null) continue;
+    const rec = g as Record<string, unknown>;
+    if (rec["backup-id"] === `vm/${vmid}`) return `vm/${vmid}`;
+    if (bare === null && groupBelongsToVm(rec, vmid) && typeof rec["backup-id"] === "string") {
+      bare = rec["backup-id"] as string;
+    }
+  }
+  return bare;
+}
+
+/**
  * Pure matcher: fold raw PBS group rows into per-VM snapshot summaries.
  * Unknown shapes are skipped; no group content (files, paths, secrets)
  * survives — only counts and timestamps come out.
@@ -585,13 +624,13 @@ export function matchSnapshotsToVms(
   groups: unknown[],
   vms: Array<{ id: string; vmid: number }>,
 ): Map<string, VmSnapshotMatch> {
-  const byBackupId = new Map<string, { count: number; lastBackup: string | null }>();
+  const byBackupId = new Map<string, { count: number; lastBackup: string | null; backupType: unknown }>();
   for (const g of groups.slice(0, 500)) {
     if (typeof g !== "object" || g === null) continue;
     const rec = g as Record<string, unknown>;
     if (typeof rec["backup-id"] !== "string") continue;
     const last = rec["last-backup"];
-    const entry = byBackupId.get(rec["backup-id"] as string) ?? { count: 0, lastBackup: null };
+    const entry = byBackupId.get(rec["backup-id"] as string) ?? { count: 0, lastBackup: null, backupType: rec["backup-type"] };
     entry.count += typeof rec["backup-count"] === "number" ? (rec["backup-count"] as number) : 1;
     const stamp =
       typeof last === "number"
@@ -604,8 +643,17 @@ export function matchSnapshotsToVms(
   }
   const out = new Map<string, VmSnapshotMatch>();
   for (const vm of vms) {
-    const hit = byBackupId.get(`vm/${vm.vmid}`);
-    if (hit) out.set(vm.id, { count: hit.count, lastBackup: hit.lastBackup });
+    // Either id form counts (see groupBelongsToVm): the prefixed form, plus
+    // the bare numeric id when its group is vm-typed (or untyped).
+    const direct = byBackupId.get(`vm/${vm.vmid}`);
+    const bare = byBackupId.get(String(vm.vmid));
+    const bareUsable = bare && (bare.backupType === undefined || bare.backupType === "vm");
+    const count = (direct?.count ?? 0) + (bareUsable ? bare.count : 0);
+    const lastBackup = [direct?.lastBackup, bareUsable ? bare.lastBackup : null]
+      .filter((s): s is string => !!s)
+      .sort()
+      .pop() ?? null;
+    if (direct || bareUsable) out.set(vm.id, { count, lastBackup });
   }
   return out;
 }
@@ -676,15 +724,14 @@ export async function listVmSnapshots(
   const store = datastore ?? (await deps.settings.getPlain("pbs.datastore"));
   if (!store) throw AppError.validation("No PBS datastore configured");
   const groups = await pbs.listBackupGroups(store);
-  const want = `vm/${vm.vmid}`;
   const out: BackupSnapshot[] = [];
   for (const g of groups.slice(0, 200)) {
     if (typeof g !== "object" || g === null) continue;
     const rec = g as Record<string, unknown>;
-    if (rec["backup-id"] !== want) continue;
+    if (!groupBelongsToVm(rec, vm.vmid)) continue;
     const last = rec["last-backup"];
     out.push({
-      backupId: String(rec["backup-id"] ?? want),
+      backupId: String(rec["backup-id"]),
       backupType: typeof rec["backup-type"] === "string" ? (rec["backup-type"] as string) : null,
       backupCount: typeof rec["backup-count"] === "number" ? (rec["backup-count"] as number) : null,
       lastBackup:

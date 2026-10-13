@@ -17,6 +17,7 @@ import {
   listVmSnapshots,
   getBackupOverview,
   matchSnapshotsToVms,
+  resolveVmBackupId,
   type CoreContext,
   type LocalConfig,
   type BackupTickerDeps,
@@ -74,6 +75,9 @@ describe("PBS backup service", () => {
     listBackupGroups: async () => [
       { "backup-id": "vm/9999", "backup-type": "vm", "backup-count": 2, "last-backup": 1700000000, files: [{ filename: "qemu-server.conf", password: "should-never-leak" }] },
       { "backup-id": "vm/1111", "backup-type": "vm", "backup-count": 1, "last-backup": 1700000000 },
+      // Live PBS 4.2 reports bare numeric ids for vzdump-made groups.
+      { "backup-id": "991", "backup-type": "vm", "backup-count": 3, "last-backup": 1700000001 },
+      { "backup-id": "992", "backup-type": "ct", "backup-count": 9, "last-backup": 1700000002 },
     ],
   };
 
@@ -280,7 +284,7 @@ describe("PBS backup service", () => {
     });
     const exec = await executePendingBackups(deps());
     expect(exec.started).toBe(1);
-    expect(pbsCalls).toEqual(["prune:pbs-data:vm/991:5"]);
+    expect(pbsCalls).toEqual(["prune:pbs-data:991:5"]);
     const fin = await finalizeBackupRuns(deps());
     expect(fin.finished).toBe(1);
     const audit = await ctx.audit.list({ vmId, limit: 20 });
@@ -325,6 +329,50 @@ describe("PBS backup service", () => {
     expect(matched.get("vm-a")?.lastBackup).toContain("2023");
     expect(matched.has("vm-b")).toBe(false);
     expect(JSON.stringify([...matched.entries()])).not.toContain("secret");
+  });
+
+  it("matches bare numeric backup-ids from live PBS, ignoring ct collisions", async () => {
+    const vms = [
+      { id: "vm-a", vmid: 991 },
+      { id: "vm-b", vmid: 992 },
+      { id: "vm-c", vmid: 993 },
+    ];
+    const groups = [
+      { "backup-id": "991", "backup-type": "vm", "backup-count": 3, "last-backup": 1700000001 },
+      { "backup-id": "992", "backup-type": "ct", "backup-count": 9, "last-backup": 1700000002 },
+      { "backup-id": "vm/993", "backup-type": "vm", "backup-count": 1, "last-backup": 1700000003 },
+    ];
+    const matched = matchSnapshotsToVms(groups, vms);
+    expect(matched.get("vm-a")).toMatchObject({ count: 3 });
+    // Bare id with ct type must not attach to the VM.
+    expect(matched.has("vm-b")).toBe(false);
+    expect(matched.get("vm-c")).toMatchObject({ count: 1 });
+    expect(resolveVmBackupId(groups, 991)).toBe("991");
+    expect(resolveVmBackupId(groups, 993)).toBe("vm/993");
+    expect(resolveVmBackupId(groups, 992)).toBeNull();
+    expect(resolveVmBackupId(groups, 404)).toBeNull();
+  });
+
+  it("lists bare-id snapshots and fails prunes with no snapshots honestly", async () => {
+    // vmId currently points at vmid 991 -> bare "991" group in the fixture.
+    const snaps = await listVmSnapshots(deps(), vmId);
+    expect(snaps).toHaveLength(1);
+    expect(snaps[0]).toMatchObject({ backupId: "991", backupType: "vm", backupCount: 3 });
+    // Point at a vmid with no group at all: prune resolves nothing and the
+    // run fails with an honest validation error, never a blind PBS call.
+    await ctx.db.query("UPDATE vms SET vmid = 4242 WHERE id = $1", [vmId]);
+    const run = await createBackupRun(ctx.db, {
+      vmId, kind: "prune", keepLast: 5, createdBy: creatorId,
+    });
+    pbsCalls.length = 0;
+    const exec = await executePendingBackups(deps());
+    expect(exec.failed).toBe(1);
+    expect(pbsCalls).toHaveLength(0);
+    const failed = (await listBackupRuns(ctx.db, { vmId })).find((r) => r.id === run.id)!;
+    expect(failed.status).toBe("FAILED");
+    expect(failed.error).toMatch(/No snapshots found/);
+    await ctx.db.query("UPDATE vms SET vmid = 991 WHERE id = $1", [vmId]);
+    await ctx.db.query("DELETE FROM pbs_backups WHERE vm_id = $1", [vmId]);
   });
 
   it("builds a fleet overview row per VM", async () => {
