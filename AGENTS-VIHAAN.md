@@ -51,6 +51,13 @@ the shape above is not just policy — it is the only path that works.
   (`https://github.com/Bamoyski/ProxVM/compare/main...vihaan/<name>`)
   so the PR can be opened in one click. Never let a missing CLI push you
   toward committing on `main`.
+- No `gh` CLI at all? Stop and tell Vihaan exactly this, then wait: run
+  `winget install --id GitHub.cli` (Windows) or install GitHub CLI for
+  your OS, then `gh auth login`, then tell me to retry. Do NOT accept
+  tokens, passwords, or any credential pasted into chat as a substitute
+  — `gh auth login` (browser flow, never leaves his machine) is the only
+  acceptable setup. Once he confirms, create the PR yourself with
+  `gh pr create --base main --title "..." --body "..."`.
 - Ben's review comments are instructions: apply them as follow-up commits
   on the same branch and push again. Do not open a second PR. Do not
   merge `main` into your branch to "resolve" conversations — rebase.
