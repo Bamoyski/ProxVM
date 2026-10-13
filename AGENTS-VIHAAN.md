@@ -46,6 +46,9 @@ the shape above is not just policy — it is the only path that works.
   after a rebase). Never on `main`, never on anyone else's branch.
 - If `main` moves under you, rebase your branch onto it and re-run the
   full verification before pushing again.
+- Fresh clone: run `npm run build` once before the verification gates —
+  `typecheck` and `test` resolve `@proxvm/*` imports from `dist`, which
+  does not exist until the first build.
 - No `gh` authentication on your machine? Push the branch with git, then
   end your turn with the exact compare URL
   (`https://github.com/Bamoyski/ProxVM/compare/main...vihaan/<name>`)

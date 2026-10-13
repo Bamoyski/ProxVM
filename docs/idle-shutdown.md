@@ -32,7 +32,7 @@ period on the next reconcile pass automatically.
 ## Operating it
 
 - Mark desktops/user VMs as **User** class; leave infrastructure
-  (templates hosts, monitoring, tunnels, Guacamole box) as **Server**.
+  (template hosts, monitoring, tunnels, Guacamole box) as **Server**.
 - Tune minutes (5–10080) and CPU threshold in Settings → Application.
 - Watch `VM_AUTO_SHUTDOWN` in the audit log for exactly what happened and why.
 - Launching a Guacamole connection automatically starts a stopped VM through

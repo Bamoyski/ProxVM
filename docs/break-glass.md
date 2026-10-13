@@ -20,12 +20,14 @@ access an attacker should never have.
    ```bash
    PROXVM_CONFIG_DIR=/data/.proxvm node scripts/break-glass.mjs <username>
    ```
-   Use an existing admin username to reset it, or a new name to create a
-   fresh administrator. The script prompts for the new password (minimum 12
-   characters); prefer `PROXVM_BG_PASSWORD=...` only in a private shell —
+   A new name creates a fresh administrator; an existing username must add
+   `--force-takeover` to be converted (this strips its current roles, so
+   resetting an existing admin is explicit, never silent). The script
+   prompts for the new password (12–128 characters) when run on a TTY;
+   otherwise set it via `PROXVM_BG_PASSWORD=...` in a private shell only —
    command lines are visible in process listings.
 2. The script sets an Argon2id hash (same parameters as the app), re-enables
-   and unlocks the account, grants ADMIN, and revokes all of its sessions.
+   and unlocks the account, replaces its roles with ADMIN, and revokes all of its sessions.
 3. Log in normally with the new password.
 4. **Immediately after recovery:** rotate every other administrator
    credential, review the audit log for how access was lost, and re-secure
@@ -37,9 +39,10 @@ access an attacker should never have.
   restoring from backup, not break-glass.
 - It does not touch Guacamole, Proxmox, or VM guest passwords; recover those
   through their own consoles.
-- Every use should itself be audited out-of-band (who ran it, when, why):
-  the script writes no audit row because the audit system may be part of
-  what is broken.
+- Every use should itself be recorded out-of-band (who ran it, when, why):
+  the script writes a `BREAK_GLASS_USED` audit row on a best-effort basis,
+  but the audit table may itself be part of what is broken, so do not rely
+  on that row alone.
 
 ## Preventing the need
 

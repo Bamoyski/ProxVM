@@ -71,7 +71,8 @@ This document describes what is wired up and what remains.
 
 ## Deliberately not done yet
 
-- No backup execution, no scheduling, no restore paths.
+- No restore paths: overwriting a live VM from backup is destructive, so
+  snapshots stay browsable read-only until restore gets its own design
+  review.
 - No fingerprint pinning for self-signed PBS certs (currently trust-on-
   first-use via `verify_ssl=false`, same posture as the PVE client).
-- No PBS UI anywhere beyond the status endpoint.

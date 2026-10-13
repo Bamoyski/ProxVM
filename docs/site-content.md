@@ -29,7 +29,7 @@ built-in default when unset, and clearing a field restores it.
 
 ## Adding a new editable spot
 
-1. Pick a `snake.case` key and a built-in default in the page component.
+1. Pick a dotted lowercase key (for example `contact.email`) and a built-in default in the page component.
 2. Read it via `useSiteContent()` (`get` for text, `getHttps` for links).
 3. Append the key to `KNOWN_KEYS` in `apps/api/src/routes/content.ts` plus
    any value validation, and to `FIELDS` in `apps/web/src/pages/Content.tsx`.
