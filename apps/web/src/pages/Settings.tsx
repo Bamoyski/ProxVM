@@ -162,6 +162,10 @@ function AppSettings() {
           idleMinutes: number;
           threatWebhookUrl: string | null;
           threatMinSeverity: string;
+          gotifyUrl: string | null;
+          gotifyPriority: number;
+          gotifyEnabled: boolean;
+          gotifyConfigured: boolean;
           maxCpu: number | null;
           maxRamMb: number | null;
           maxDiskGb: number | null;
@@ -197,6 +201,21 @@ function AppSettings() {
   const shownWebhook = webhookTouched ? webhookUrl : (currentWebhook ?? "");
   const shownSeverity = severityTouched ? minSeverity : ((data?.settings?.threatMinSeverity ?? "high") as "high" | "medium" | "low");
 
+  const [gotifyUrl, setGotifyUrl] = useState("");
+  const [gotifyTouched, setGotifyTouched] = useState(false);
+  const [gotifyToken, setGotifyToken] = useState("");
+  const [gotifyTokenTouched, setGotifyTokenTouched] = useState(false);
+  const [gotifyPriority, setGotifyPriority] = useState("5");
+  const [gotifyPriorityTouched, setGotifyPriorityTouched] = useState(false);
+  const [gotifyEnabled, setGotifyEnabled] = useState<boolean | null>(null);
+  const currentGotifyUrl = data?.settings?.gotifyUrl ?? null;
+  const shownGotifyUrl = gotifyTouched ? gotifyUrl : (currentGotifyUrl ?? "");
+  const currentGotifyPriority = data?.settings?.gotifyPriority ?? 5;
+  const shownGotifyPriority = gotifyPriorityTouched ? gotifyPriority : String(currentGotifyPriority);
+  const shownGotifyEnabled = gotifyEnabled ?? (data?.settings?.gotifyEnabled ?? false);
+  const gotifyConfigured = data?.settings?.gotifyConfigured ?? false;
+  const [gotifyTestMsg, setGotifyTestMsg] = useState<string | null>(null);
+
   const [maxCpu, setMaxCpu] = useState("");
   const [maxRamMb, setMaxRamMb] = useState("");
   const [maxDiskGb, setMaxDiskGb] = useState("");
@@ -223,6 +242,10 @@ function AppSettings() {
         idleMinutes?: number;
         threatWebhookUrl?: string | null;
         threatMinSeverity?: "high" | "medium" | "low";
+        gotifyUrl?: string | null;
+        gotifyToken?: string | null;
+        gotifyPriority?: number;
+        gotifyEnabled?: boolean;
         maxCpu?: number | null;
         maxRamMb?: number | null;
         maxDiskGb?: number | null;
@@ -247,6 +270,18 @@ function AppSettings() {
         if (trimmed !== "" && trimmed.length > 512) throw new Error("Webhook URL must be 512 characters or fewer");
         body.threatWebhookUrl = trimmed === "" ? null : trimmed;
         body.threatMinSeverity = shownSeverity;
+      }
+      if (gotifyTouched || gotifyTokenTouched || gotifyPriorityTouched || gotifyEnabled !== null) {
+        const trimmed = shownGotifyUrl.trim();
+        if (trimmed !== "" && trimmed.length > 512) throw new Error("Gotify URL must be 512 characters or fewer");
+        if (gotifyTouched) body.gotifyUrl = trimmed === "" ? null : trimmed;
+        if (gotifyTokenTouched) body.gotifyToken = gotifyToken.trim() === "" ? null : gotifyToken.trim();
+        if (gotifyPriorityTouched) {
+          const n = Number(shownGotifyPriority);
+          if (!Number.isInteger(n) || n < 0 || n > 10) throw new Error("Gotify priority must be 0–10");
+          body.gotifyPriority = n;
+        }
+        if (gotifyEnabled !== null) body.gotifyEnabled = shownGotifyEnabled;
       }
       if (announcementTouched || announcementLevelTouched) {
         if (shownAnnouncement.trim() === "") {
@@ -273,9 +308,25 @@ function AppSettings() {
       setIdleTouched(false);
       setWebhookTouched(false);
       setSeverityTouched(false);
+      setGotifyTouched(false);
+      setGotifyTokenTouched(false);
+      setGotifyPriorityTouched(false);
+      setGotifyEnabled(null);
+      setGotifyToken("");
       setPolicyTouched(false);
       void qc.invalidateQueries({ queryKey: ["settings-app"] });
       void qc.invalidateQueries({ queryKey: ["announcement"] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const testGotify = async () => {
+    setError(null);
+    setGotifyTestMsg(null);
+    try {
+      await api("/settings/gotify/test", { method: "POST", body: {} });
+      setGotifyTestMsg("Test message sent — check Gotify.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -375,6 +426,56 @@ function AppSettings() {
             <option value="low">Everything</option>
           </select>
         </div>
+      </Field>
+      <Field label="Gotify push (admin downtime alerts)" hint="Server URL + application token from your Gotify instance (e.g. http://192.168.1.28/). VM power, RDP/SSH reachability, infrastructure, and threat alerts fan out here. Token is never shown back.">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <label className="pv-checkrow">
+            <input
+              type="checkbox"
+              checked={shownGotifyEnabled}
+              onChange={(e) => setGotifyEnabled(e.target.checked)}
+            />
+            Enable Gotify push {gotifyConfigured ? "(configured)" : "(not configured)"}
+          </label>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <input
+            className="pv-input"
+            style={{ minWidth: 220, flex: 1 }}
+            placeholder="e.g. http://192.168.1.28/"
+            value={shownGotifyUrl}
+            onChange={(e) => {
+              setGotifyUrl(e.target.value);
+              setGotifyTouched(true);
+            }}
+          />
+          <input
+            type="password"
+            className="pv-input"
+            style={{ minWidth: 160, flex: 1 }}
+            placeholder="App token (saved hidden)"
+            value={gotifyToken}
+            onChange={(e) => {
+              setGotifyToken(e.target.value);
+              setGotifyTokenTouched(true);
+            }}
+          />
+          <input
+            type="number"
+            className="pv-input"
+            style={{ width: 100 }}
+            title="Gotify priority 0–10"
+            min={0}
+            max={10}
+            value={shownGotifyPriority}
+            onChange={(e) => {
+              setGotifyPriority(e.target.value);
+              setGotifyPriorityTouched(true);
+            }}
+          />
+          <Btn onClick={testGotify}>Send test</Btn>
+        </div>
+        {gotifyTestMsg && <div className="pv-notice pv-notice-ok">{gotifyTestMsg}</div>}
       </Field>
       <Field label="Provisioning ceilings (blank = no ceiling; admins exempt)" hint="Non-admin requests above these are rejected. Applies at request time and again when the worker runs.">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>

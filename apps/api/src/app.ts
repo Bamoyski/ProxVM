@@ -15,7 +15,7 @@ import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, ADMIN_AUDIENCE, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, notify, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, alertAdmins, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, listConnectionHealth, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
@@ -373,8 +373,35 @@ export function startHomelabTickers(
       let checked = 0;
       for (const vm of vms) {
         try {
-          await checkVmHealth(ctx.db, ctx.guac, vm.id);
+          // Snapshot previous reachability first: checkVmHealth overwrites
+          // the rows, so the diff (up/down transitions only) must be read
+          // before. No previous row = first sighting, store silently.
+          const prev = await listConnectionHealth(ctx.db, [vm.id]).catch(() => []);
+          const prevByProto = new Map(prev.map((p) => [p.protocol, p.reachable]));
+          const results = await checkVmHealth(ctx.db, ctx.guac, vm.id);
           checked += 1;
+          for (const r of results) {
+            const was = prevByProto.get(r.protocol);
+            if (was === undefined || was === r.reachable) continue;
+            const proto = r.protocol.toUpperCase();
+            if (!r.reachable) {
+              await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+                kind: "system",
+                title: `VM "${vm.name}" ${proto} unreachable`,
+                body: `${proto} to "${vm.name}" (node ${vm.node}, vmid ${vm.vmid}) stopped responding. ${r.detail.slice(0, 300)}`,
+                link: `/vms/${vm.id}`,
+                priority: 8,
+              });
+            } else {
+              await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+                kind: "system",
+                title: `VM "${vm.name}" ${proto} reachable (recovered)`,
+                body: `${proto} to "${vm.name}" (node ${vm.node}, vmid ${vm.vmid}) is responding again.`,
+                link: `/vms/${vm.id}`,
+                priority: 5,
+              });
+            }
+          }
         } catch (err) {
           ctx.logger.warn(
             { vmId: vm.id, error: err instanceof Error ? err.message : String(err) },
@@ -411,6 +438,26 @@ export function startHomelabTickers(
           const changed = await reconcileVmPower(ctx.db, vm.id, running);
           if (changed !== "unchanged") {
             ctx.logger.debug({ vmId: vm.id, changed }, "metering period transition");
+            // Power transitions are downtime signals: alert on every edge.
+            // reconcileVmPower already dedupes (transition-only), so a steady
+            // state never re-fires. alertAdmins never throws.
+            if (changed === "closed") {
+              await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+                kind: "system",
+                title: `VM "${vm.name}" stopped`,
+                body: `"${vm.name}" (node ${vm.node}, vmid ${vm.vmid}) is no longer running.`,
+                link: `/vms/${vm.id}`,
+                priority: 8,
+              });
+            } else {
+              await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+                kind: "system",
+                title: `VM "${vm.name}" running (recovered)`,
+                body: `"${vm.name}" (node ${vm.node}, vmid ${vm.vmid}) is running again.`,
+                link: `/vms/${vm.id}`,
+                priority: 5,
+              });
+            }
           }
         } catch (err) {
           ctx.logger.warn(
@@ -468,21 +515,14 @@ export function startHomelabTickers(
       if (result.fired > 0) {
         ctx.logger.info(result, "threat webhook alerts fired");
         // Admin delivery for the same findings (best-effort; the webhook
-        // post already happened — this only feeds the in-app bell).
-        try {
-          await notify(ctx.db, {
-            audience: ADMIN_AUDIENCE,
-            kind: "threat",
-            title: `${result.fired} threat finding${result.fired === 1 ? "" : "s"} need review`,
-            body: `${result.evaluated} finding(s) evaluated this tick.`,
-            link: "/threats",
-          });
-        } catch (err) {
-          ctx.logger.warn(
-            { error: err instanceof Error ? err.message : String(err) },
-            "threat notification failed",
-          );
-        }
+        // post already happened — this feeds the in-app bell + Gotify).
+        await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+          kind: "threat",
+          title: `${result.fired} threat finding${result.fired === 1 ? "" : "s"} need review`,
+          body: `${result.evaluated} finding(s) evaluated this tick.`,
+          link: "/threats",
+          priority: 8,
+        });
       }
     } catch (err) {
       ctx.logger.warn(
@@ -491,10 +531,62 @@ export function startHomelabTickers(
       );
     }
   };
+  // Infrastructure downtime: point-in-time health probes reduced to
+  // ONLINE/ERROR transitions. Previous states persist in Redis; the first
+  // pass only stores the baseline so boot never pages. Transition-only, so
+  // a steady outage fires once, and recovery fires once.
+  const INFRA_STATE_KEY = "proxvm:health:last";
+  const runInfra = async (): Promise<void> => {
+    try {
+      const results = await ctx.runHealthChecks();
+      let prev: Record<string, string> | null = null;
+      try {
+        const raw = await ctx.redis.get(INFRA_STATE_KEY);
+        prev = raw ? (JSON.parse(raw) as Record<string, string>) : null;
+      } catch {
+        prev = null;
+      }
+      const next: Record<string, string> = {};
+      for (const r of results) next[r.name] = r.status;
+      try {
+        await ctx.redis.set(INFRA_STATE_KEY, JSON.stringify(next));
+      } catch {
+        // state write failing must never break the pass
+      }
+      if (!prev) return;
+      for (const r of results) {
+        const old = prev[r.name];
+        if (!old || old === r.status) continue;
+        if (r.status === "ERROR") {
+          await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+            kind: "system",
+            title: `${r.name} is DOWN`,
+            body: `${r.name} health check failed: ${(r.detail ?? "no detail").slice(0, 300)}`,
+            link: "/health",
+            priority: 9,
+          });
+        } else {
+          await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+            kind: "system",
+            title: `${r.name} recovered (ONLINE)`,
+            body: `${r.name} health check is passing again.`,
+            link: "/health",
+            priority: 5,
+          });
+        }
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "infrastructure health alert pass failed",
+      );
+    }
+  };
   void runSchedules();
   void runMetering();
   void runPower();
   void runThreats();
+  void runInfra();
   const scheduleTimer = setInterval(() => {
     void runSchedules();
   }, scheduleIntervalMs);
@@ -510,7 +602,10 @@ export function startHomelabTickers(
   const threatTimer = setInterval(() => {
     void runThreats();
   }, healthIntervalMs);
-  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer]) {
+  const infraTimer = setInterval(() => {
+    void runInfra();
+  }, healthIntervalMs);
+  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer, infraTimer]) {
     (timer as unknown as { unref?: () => void }).unref?.();
   }
   app.addHook("onClose", async () => {
@@ -519,6 +614,7 @@ export function startHomelabTickers(
     clearInterval(meteringTimer);
     clearInterval(powerTimer);
     clearInterval(threatTimer);
+    clearInterval(infraTimer);
   });
 }
 

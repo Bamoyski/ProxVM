@@ -10,7 +10,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, assertSafeServerUrl, assertSafeWebhookUrl, getAnnouncement, parseCidrList, parseDbHost, normalizeHttpBaseUrl, setAnnouncement } from "@proxvm/core";
+import { AppError, assertSafeServerUrl, assertSafeWebhookUrl, getAnnouncement, getGotifyConfig, parseCidrList, parseDbHost, normalizeHttpBaseUrl, sendGotifyMessage, setAnnouncement } from "@proxvm/core";
 
 const proxmoxSchema = z.object({
   url: z.string().url(),
@@ -55,6 +55,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         idleMinutes: z.number().int().min(5).max(10080).optional(),
         threatWebhookUrl: z.string().max(512).nullable().optional(),
         threatMinSeverity: z.enum(["critical", "high", "medium", "low"]).optional(),
+        gotifyUrl: z.string().max(512).nullable().optional(),
+        gotifyToken: z.string().max(512).nullable().optional(),
+        gotifyPriority: z.number().int().min(0).max(10).optional(),
+        gotifyEnabled: z.boolean().optional(),
         maxCpu: z.number().int().min(1).max(4096).nullable().optional(),
         maxRamMb: z.number().int().min(256).max(8388608).nullable().optional(),
         maxDiskGb: z.number().min(1).max(131072).nullable().optional(),
@@ -92,6 +96,32 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     if (body.threatMinSeverity !== undefined) {
       await ctx.settings.set("threats.min_severity", body.threatMinSeverity, { category: "system" });
     }
+    if (body.gotifyUrl !== undefined) {
+      if (body.gotifyUrl === null || body.gotifyUrl.trim() === "") {
+        await ctx.db.query("DELETE FROM settings WHERE key = 'notifications.gotify_url'");
+      } else {
+        assertSafeWebhookUrl(body.gotifyUrl);
+        await ctx.settings.set("notifications.gotify_url", body.gotifyUrl.trim(), { category: "system" });
+      }
+    }
+    if (body.gotifyToken !== undefined) {
+      if (body.gotifyToken === null || body.gotifyToken.trim() === "") {
+        await ctx.db.query("DELETE FROM settings WHERE key = 'notifications.gotify_token'");
+      } else {
+        await ctx.settings.set("notifications.gotify_token", body.gotifyToken.trim(), {
+          encrypted: true,
+          category: "system",
+        });
+      }
+    }
+    if (body.gotifyPriority !== undefined) {
+      await ctx.settings.set("notifications.gotify_priority", String(body.gotifyPriority), { category: "system" });
+    }
+    if (body.gotifyEnabled !== undefined) {
+      await ctx.settings.set("notifications.gotify_enabled", body.gotifyEnabled ? "true" : "false", {
+        category: "system",
+      });
+    }
     if (body.maxCpu !== undefined) {
       if (body.maxCpu === null) await ctx.db.query("DELETE FROM settings WHERE key = 'provision.max_cpu'");
       else await ctx.settings.set("provision.max_cpu", String(body.maxCpu), { category: "system" });
@@ -124,6 +154,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         idleMinutes: body.idleMinutes,
         threatWebhookChanged: body.threatWebhookUrl !== undefined,
         threatMinSeverity: body.threatMinSeverity,
+        gotifyUrlChanged: body.gotifyUrl !== undefined,
+        gotifyTokenChanged: body.gotifyToken !== undefined,
+        gotifyPriority: body.gotifyPriority,
+        gotifyEnabled: body.gotifyEnabled,
         maxCpu: body.maxCpu,
         maxRamMb: body.maxRamMb,
         maxDiskGb: body.maxDiskGb,
@@ -241,6 +275,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     const idleMinutes = await ctx.settings.get("power.idle_minutes");
     const threatWebhookUrl = await ctx.settings.get("threats.webhook_url");
     const threatMinSeverity = await ctx.settings.get("threats.min_severity");
+    const gotify = await getGotifyConfig(ctx.settings);
     const maxCpu = await ctx.settings.get("provision.max_cpu");
     const maxRamMb = await ctx.settings.get("provision.max_ram_mb");
     const maxDiskGb = await ctx.settings.get("provision.max_disk_gb");
@@ -259,11 +294,48 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         idleMinutes: idleMinutes ? Number(idleMinutes.value) : 120,
         threatWebhookUrl: threatWebhookUrl?.value ?? null,
         threatMinSeverity: threatMinSeverity?.value ?? "high",
+        gotifyUrl: gotify.url,
+        gotifyPriority: gotify.priority,
+        gotifyEnabled: gotify.enabled,
+        gotifyConfigured: gotify.url !== null && gotify.hasToken,
         maxCpu: maxCpu ? Number(maxCpu.value) : null,
         maxRamMb: maxRamMb ? Number(maxRamMb.value) : null,
         maxDiskGb: maxDiskGb ? Number(maxDiskGb.value) : null,
         staticAllowedCidrs: staticAllowedCidrs?.value ?? null,
       },
     };
+  });
+
+  // -- Gotify test push (admin-only; ignores the enabled flag) ---------------
+  app.post("/settings/gotify/test", async (request) => {
+    const actor = await guard(request);
+    const url = await ctx.settings.getPlain("notifications.gotify_url");
+    const token = await ctx.settings.getPlain("notifications.gotify_token");
+    if (!url?.trim() || !token?.trim()) {
+      throw AppError.validation("Gotify URL and token must both be saved before testing");
+    }
+    try {
+      // Bypass the enabled flag: an explicit test always sends when a
+      // server + token are stored. Temporarily force-enable via a shim.
+      const shim = {
+        getPlain: async (key: string): Promise<string | null> => {
+          if (key === "notifications.gotify_enabled") return "true";
+          return ctx.settings.getPlain(key);
+        },
+      };
+      await sendGotifyMessage(shim, {
+        title: "ProxVM Gotify test",
+        message: "Notifications from ProxVM are working.",
+      });
+    } catch (err) {
+      throw AppError.external("Gotify", err instanceof Error ? err.message : String(err), err);
+    }
+    await app.audit(request, {
+      event: "SETTINGS_CHANGED",
+      actorUserId: actor.id,
+      actorUsername: actor.username,
+      detail: { section: "gotify-test" },
+    });
+    return { ok: true };
   });
 }
