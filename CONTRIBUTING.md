@@ -20,11 +20,14 @@ without breaking the security model. For vulnerabilities, see
 git clone https://github.com/Bamoyski/ProxVM.git
 cd ProxVM
 npm install
-cp .env.example .env   # placeholders only — never commit real values
+cp .env.example .env   # Windows: copy .env.example .env — placeholders only, never commit real values
 docker compose up -d postgres redis
-npm run db:migrate -w @proxvm/api
 npm run dev            # api + worker + web together
 ```
+
+Database migrations apply automatically when the API/worker starts — there
+is no manual migrate step. On a fresh clone, run `npm run build` once
+before `npm run dev` so the cross-workspace `dist` typings exist.
 
 Open the web UI and complete the setup wizard (creates the first admin).
 All runtime config lives in `.proxvm/config.json` (gitignored — it holds
@@ -40,6 +43,7 @@ already mocked:
 git clone https://github.com/Bamoyski/ProxVM.git
 cd ProxVM
 npm install
+npm run build                        # first: generates the cross-workspace dist typings
 npm run typecheck && npm run test && npm run build
 ```
 

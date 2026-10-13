@@ -153,16 +153,16 @@ authenticated connection presents.
 
 1. Generate a replacement: `openssl rand -hex 32` (hex avoids SQL quoting issues).
 2. Apply live without downtime:
-   `docker exec apacheproxvm-postgres-1 psql -U proxvm -d proxvm -c "ALTER USER proxvm WITH PASSWORD '<new>';"`
+   `docker compose exec postgres psql -U proxvm -d proxvm -c "ALTER USER proxvm WITH PASSWORD '<new>';"`
 3. Put the same value in `.env` as `POSTGRES_PASSWORD=<new>`.
 4. **Also update `/data/.proxvm/config.json`** — the API/worker read the
    database password from `database.password` there, not from `.env`
    (`.env` is only used at first database init). Skipping this breaks the
    API on its next restart. Update it atomically from inside the api
    container, verifying only the length afterwards:
-   `<new> | docker exec -i apacheproxvm-api-1 node -e "let s='';process.stdin.on('data',d=>{s+=d}).on('end',()=>{const fs=require('fs');const f='/data/.proxvm/config.json';const c=JSON.parse(fs.readFileSync(f,'utf8'));c.database.password=s.trim();fs.writeFileSync(f+'.tmp',JSON.stringify(c,null,2),{mode:0o600});fs.renameSync(f+'.tmp',f);console.log('pwLen='+JSON.parse(fs.readFileSync(f,'utf8')).database.password.length)})"`
+   `<new> | docker compose exec -T api node -e "let s='';process.stdin.on('data',d=>{s+=d}).on('end',()=>{const fs=require('fs');const f='/data/.proxvm/config.json';const c=JSON.parse(fs.readFileSync(f,'utf8'));c.database.password=s.trim();fs.writeFileSync(f+'.tmp',JSON.stringify(c,null,2),{mode:0o600});fs.renameSync(f+'.tmp',f);console.log('pwLen='+JSON.parse(fs.readFileSync(f,'utf8')).database.password.length)})"`
 5. `docker compose up -d api worker` (and `web` if rebuilt) and confirm
-   clean boot: `docker logs apacheproxvm-api-1` shows "ProxVM API started"
+   clean boot: `docker compose logs api` shows "ProxVM API started"
    with no auth errors, and `/api/setup/status` returns `{"mode":"ready"}`.
 6. Never commit `.env` (gitignored). The old default `changeme-postgres`
    must be considered compromised anywhere it was ever used.

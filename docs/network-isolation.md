@@ -49,7 +49,7 @@ and the guest's replies to Guacamole-initiated sessions ride conntrack.
 - **VM page → Network isolation**: toggle, live policy/rule readout, add and
   remove rules. Removing isolation deletes only `proxvm-isolation` rules and
   restores ACCEPT policies; hand-made rules are listed, never touched, and
-  cannot be deleted from ProxVM (edit those in ProxMOX directly).
+  cannot be deleted from ProxVM (edit those in Proxmox directly).
 - **VM list** tags isolated machines (`isolated`) and privacy-flagged ones
   (`private`); the detail section shows the live rule table with positions.
 - Everything is audited as `VM_FIREWALL_CHANGED` (toggle with rule counts,

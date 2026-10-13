@@ -56,5 +56,5 @@ checked, what passed, and the small list of things to do before taking money.
 - [ ] Uptime monitoring on `/api/health/live` from outside the LAN.
 - [ ] Rate-limit review for the new ticket endpoint under adversarial use
       (currently 20/hour per IP — fine, revisit if abused).
-- [ ] Incident runbook: break-glass doc exists (`docs/break-glass.md`) —
+- [ ] Incident runbook: break-glass doc exists (`break-glass.md`, same directory) —
       rehearse it once.
