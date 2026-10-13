@@ -14,6 +14,7 @@ import {
   createTicket,
   listTickets,
   setTicketStatus,
+  dailyUsage,
   getAnnouncement,
   setAnnouncement,
   type CoreContext,
@@ -92,6 +93,33 @@ describe("usage metering", () => {
     expect(rows[0]!.hours).toBeCloseTo(1.5, 5);
     expect(await monthlyUsage(pool, "2026-02")).toHaveLength(0);
     await expect(monthlyUsage(pool, "not-a-month")).rejects.toThrow(/YYYY-MM/);
+  });
+
+  it("buckets daily hours across midnight and month edges", async () => {
+    await pool.query("DELETE FROM vm_power_periods WHERE vm_id = $1", [vmId]);
+    // 23:00 Jan 10 -> 01:00 Jan 11 splits 1h / 1h across the two days.
+    await pool.query(
+      "INSERT INTO vm_power_periods (id, vm_id, started_at, ended_at) VALUES ('22222222-2222-4222-8222-222222222222', $1, '2026-01-10T23:00:00Z', '2026-01-11T01:00:00Z')",
+      [vmId],
+    );
+    // Starts in December, ends Jan 1 02:00 -> only 2h lands in January.
+    await pool.query(
+      "INSERT INTO vm_power_periods (id, vm_id, started_at, ended_at) VALUES ('33333333-3333-4333-8333-333333333333', $1, '2025-12-31T22:00:00Z', '2026-01-01T02:00:00Z')",
+      [vmId],
+    );
+    const days = await dailyUsage(pool, "2026-01");
+    expect(days).toHaveLength(31);
+    const byDay = new Map(days.map((d) => [d.day, d.hours]));
+    expect(byDay.get("2026-01-01")).toBeCloseTo(2, 5);
+    expect(byDay.get("2026-01-10")).toBeCloseTo(1, 5);
+    expect(byDay.get("2026-01-11")).toBeCloseTo(1, 5);
+    expect(byDay.get("2026-01-15")).toBe(0);
+    // Day rows sum to the monthly total.
+    const total = days.reduce((sum, d) => sum + d.hours, 0);
+    const monthly = await monthlyUsage(pool, "2026-01");
+    expect(total).toBeCloseTo(monthly[0]!.hours, 2);
+    expect(await dailyUsage(pool, "2026-02")).toHaveLength(28);
+    await expect(dailyUsage(pool, "junk")).rejects.toThrow(/YYYY-MM/);
   });
 });
 

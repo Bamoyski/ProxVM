@@ -106,6 +106,20 @@ describe("billing foundations", () => {
     expect(csv.body).toContain("vm_id,vm_name,hours");
   });
 
+  it("usage daily is admin-only, covers every day, rejects junk months", async () => {
+    const denied = await app.inject({ method: "GET", url: "/api/usage/daily?month=2026-01", headers: authU() });
+    expect(denied.statusCode).toBe(403);
+    const res = await app.inject({ method: "GET", url: "/api/usage/daily?month=2026-01", headers: authA() });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { month: string; days: Array<{ day: string; hours: number }> };
+    expect(body.month).toBe("2026-01");
+    expect(body.days).toHaveLength(31);
+    expect(body.days[0]).toMatchObject({ day: "2026-01-01", hours: 0 });
+    expect(body.days[30]).toMatchObject({ day: "2026-01-31", hours: 0 });
+    const bad = await app.inject({ method: "GET", url: "/api/usage/daily?month=junk", headers: authA() });
+    expect(bad.statusCode).toBe(400);
+  });
+
   it("quotas default unlimited and gate provisioning for non-admins", async () => {
     const current = await app.inject({ method: "GET", url: `/api/users/${userId}/quota`, headers: authA() });
     expect(current.statusCode).toBe(200);

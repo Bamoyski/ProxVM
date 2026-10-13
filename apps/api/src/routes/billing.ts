@@ -17,6 +17,7 @@ import {
   AppError,
   createTicket,
   csvCell,
+  dailyUsage,
   getAnnouncement,
   getUserQuota,
   isAdmin,
@@ -65,6 +66,12 @@ export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreConte
     const rows = await monthlyUsage(ctx.db, month);
     const totalHours = Math.round(rows.reduce((sum, r) => sum + r.hours, 0) * 100) / 100;
     return { month, totalHours, vms: rows };
+  });
+
+  app.get("/usage/daily", { preHandler: adminGuard }, async (request) => {
+    const query = monthSchema.parse(request.query);
+    const month = query.month ?? currentMonth();
+    return { month, days: await dailyUsage(ctx.db, month) };
   });
 
   app.get("/usage/export", { preHandler: adminGuard, config: { rateLimit: { max: 30, timeWindow: "1 hour" } } }, async (request, reply) => {

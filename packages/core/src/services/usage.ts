@@ -139,6 +139,52 @@ export async function monthlyUsage(db: Pool, month: string): Promise<VmMonthlyUs
     .sort((a, b) => b.hours - a.hours);
 }
 
+export interface DailyUsage {
+  day: string;
+  hours: number;
+}
+
+/** Fleet-wide powered-on VM-hours per UTC day of a calendar month
+ * (YYYY-MM). Every day of the month is returned (zeros included) so charts
+ * render continuously. Same overlap rules as monthlyUsage: open periods
+ * count up to now, periods are clipped to month bounds. */
+export async function dailyUsage(db: Pool, month: string): Promise<DailyUsage[]> {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
+  if (!match) {
+    throw AppError.validation("month must be YYYY-MM");
+  }
+  const monthStart = Date.UTC(Number(match[1]), Number(match[2]) - 1, 1);
+  const monthEnd = Date.UTC(Number(match[1]), Number(match[2]), 1);
+  const daysInMonth = Math.round((monthEnd - monthStart) / 86400000);
+  const now = Date.now();
+  const result = await db.query<{
+    started_at: Date;
+    ended_at: Date | null;
+  }>(
+    `SELECT p.started_at, p.ended_at
+     FROM vm_power_periods p
+     JOIN vms v ON v.id = p.vm_id
+     WHERE p.started_at < $2 AND (p.ended_at IS NULL OR p.ended_at > $1)
+     ORDER BY p.started_at ASC`,
+    [new Date(monthStart).toISOString(), new Date(monthEnd).toISOString()],
+  );
+  const DAY_MS = 86400000;
+  const totals = new Array<number>(daysInMonth).fill(0);
+  for (const row of result.rows) {
+    const start = new Date(row.started_at).getTime();
+    const end = row.ended_at ? new Date(row.ended_at).getTime() : now;
+    for (let d = 0; d < daysInMonth; d++) {
+      const dayStart = monthStart + d * DAY_MS;
+      const dayEnd = Math.min(dayStart + DAY_MS, monthEnd);
+      totals[d]! += Math.max(0, Math.min(end, dayEnd) - Math.max(start, dayStart)) / 1000;
+    }
+  }
+  return totals.map((total, d) => ({
+    day: `${month}-${String(d + 1).padStart(2, "0")}`,
+    hours: Math.round((total / 3600) * 100) / 100,
+  }));
+}
+
 // -- Quotas -------------------------------------------------------------------
 
 /** Quota ceiling for a user; null means unlimited (no row override). */
