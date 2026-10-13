@@ -30,6 +30,32 @@ Open the web UI and complete the setup wizard (creates the first admin).
 All runtime config lives in `.proxvm/config.json` (gitignored — it holds
 the vault master key; losing it loses every stored credential).
 
+### Code-only contributors (no local stack)
+
+If you only write code and never run the app, skip Docker, `.env`, and
+the wizard entirely. Everything you need to prove your change works is
+already mocked:
+
+```bash
+git clone https://github.com/Bamoyski/ProxVM.git
+cd ProxVM
+npm install
+npm run typecheck && npm run test && npm run build
+```
+
+- Unit/integration suites run on `pg-mem` + `ioredis-mock` — no database,
+  no Proxmox, no secrets required. If the suite is green, your backend
+  change is verified as far as automation can tell.
+- The web SPA has no test runner: `typecheck` + `vite build` is the
+  compile proof. You cannot click through flows without a running API —
+  say so in the PR and attach screenshots of the changed UI instead; the
+  maintainer verifies behavior against the live homelab before merging.
+- Never ask for, accept, or store real credentials (`.env` contents,
+  tokens, passwords). If a feature needs a live integration to verify
+  (Guacamole launch, PBS backup, Cloudflare DNS), mark the PR
+  `needs-live-verify` and the maintainer runs that leg.
+- `npm run test:integration` is maintainer-only (needs real Proxmox env).
+
 ## Layout
 
 - `apps/api` — Fastify routes (`src/routes/`), auth plugin, tickers.
@@ -92,12 +118,17 @@ Green means: typecheck + tests + build, in that order.
 ## Pull requests
 
 1. Branch from `main`. Push the branch, open a PR — never push `main`
-   directly, never force-push it.
+   directly, never force-push it. (Recommended repo setting: protect
+   `main` to require a PR before merging — one click under Settings →
+   Branches — so the rule holds even for admins.)
 2. Keep diffs small and single-purpose. Explain WHY in comments on
    security-sensitive logic, not just what.
 3. CI-green required: typecheck + tests + build + `npm run audit:ci`.
+   Code-only contributors stop here; the maintainer runs live behavior
+   checks and deploys.
 4. The PR description should state: what changed, threat-model impact
-   (if any), tests added, and anything intentionally not covered.
+   (if any), tests added, anything intentionally not covered, and
+   (for UI) screenshots of the changed screens.
 
 ## Secrets (hard rules)
 
