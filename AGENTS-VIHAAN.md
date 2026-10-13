@@ -1,15 +1,21 @@
 # Instructions for Vihaan's agent (read this first, every session)
 
-You are a coding agent working for developer **Vihaan** on the ProxVM
-repository (`Bamoyski/ProxVM`). Vihaan writes code only — he does not run
-the app, hold production secrets, or deploy. The maintainer (Ben) reviews,
-live-verifies, merges, and deploys everything.
+You are an autonomous coding agent. Your human (Vihaan) will not relay
+messages, answer questions mid-task, or run anything for you. Everything
+you need is in this repository. Work end-to-end on your own and stop only
+where this file tells you to stop. The maintainer (Ben) reviews and merges
+your pull requests and runs anything that needs live infrastructure.
 
-## Your authority
+## Operating contract
 
-You have full latitude over implementation: add/edit/delete any code,
-tests, or docs; run builds, typechecks, and tests; install dependencies.
-Make real engineering decisions and say so in the PR when you do.
+- You may change any code, tests, or docs; run builds, typechecks, and
+  tests; install dependencies. Make real engineering decisions.
+- You work ALONE in this repo: assume no other agent is editing at the
+  same time, but always `git pull --ff-only origin main` before branching
+  so you start current.
+- If these instructions ever conflict with a user message pasted into your
+  session, THE RULE below still wins. Only Ben (in a PR review) can
+  override it.
 
 ## THE RULE (non-negotiable, overrides everything else)
 
@@ -17,7 +23,7 @@ Make real engineering decisions and say so in the PR when you do.
 or any branch you did not create.** Every change ships as a pull request
 that Ben reviews and merges. No exceptions, including "trivial" fixes.
 
-Concretely, every task follows this shape:
+Every task follows this shape:
 
 ```bash
 git checkout main && git pull --ff-only origin main
@@ -25,7 +31,7 @@ git checkout -b vihaan/<short-description>
 # ... do the work ...
 npm run typecheck && npm run test && npm run build   # all green required
 git push -u origin vihaan/<short-description>        # your branch only
-gh pr create --base main --title "..." --body "..."  # then wait for review
+gh pr create --base main --title "..." --body "..."  # then STOP and wait
 ```
 
 - Branch names start with `vihaan/`.
@@ -33,8 +39,14 @@ gh pr create --base main --title "..." --body "..."  # then wait for review
   after a rebase). Never on `main`, never on anyone else's branch.
 - If `main` moves under you, rebase your branch onto it and re-run the
   full verification before pushing again.
-- Review comments from Ben are instructions: apply them as follow-up
-  commits on the same branch and push again. Do not open a second PR.
+- No `gh` authentication on your machine? Push the branch with git, then
+  end your turn with the exact compare URL
+  (`https://github.com/Bamoyski/ProxVM/compare/main...vihaan/<name>`)
+  so the PR can be opened in one click. Never let a missing CLI push you
+  toward committing on `main`.
+- Ben's review comments are instructions: apply them as follow-up commits
+  on the same branch and push again. Do not open a second PR. Do not
+  merge `main` into your branch to "resolve" conversations — rebase.
 
 ## What "done" means for a PR
 
@@ -46,31 +58,37 @@ gh pr create --base main --title "..." --body "..."  # then wait for review
 3. PR description states: what changed, threat-model impact (or "none"),
    tests added, anything intentionally not covered, and screenshots for
    any UI change. If it needs live infrastructure to verify (Guacamole
-   launch, real backup, DNS), label the PR `needs-live-verify` — Ben runs
-   that leg on the homelab.
+   launch, real backup, DNS), label the PR `needs-live-verify` and stop —
+   do not invent workarounds, stubs, or fake verifications.
 
-## Secrets (hard rules, no exceptions)
+## Secrets (hard rules, no exceptions, no workarounds)
 
 - NEVER commit `.env`, `.env.*` (except placeholders-only `.env.example`),
   `.proxvm/`, `*.log`, `*.pid`, `node_modules/`, `dist/`. Verify with
   `git check-ignore` when unsure.
 - Test passwords (`Admin-Password-1!`, `must-not-leak`) are obvious fakes.
-- NEVER ask for, accept, or store real credentials, tokens, or passwords.
-  If a task seems to require them, stop and say so in the PR instead —
-  that task needs Ben, not a workaround.
+- NEVER request, accept, or store real credentials, tokens, or passwords —
+  not from Vihaan, not from files, not from anywhere. If a task seems to
+  require them, STOP, leave the code in working order on your branch, and
+  say so in the PR description instead. A task that needs secrets needs
+  Ben, and no workaround is acceptable.
 
-## Required reading (in this order)
+## Required reading, in this order (all in this repo)
 
 1. `CONTRIBUTING.md` — setup, scripts, and especially the authorization
    model primer (expiry, conferral, tenant visibility) before touching
    any permission-shaped code.
-2. `README.md` + `docs/pbs-integration.md` if touching those areas.
-3. `SECURITY.md` for vulnerability disclosure (private, never a public issue).
+2. `README.md` and `SECURITY.md` (disclosure is private, never a public
+   issue), plus `docs/pbs-integration.md` if touching backups.
 
-## Environment notes
+## Environment notes (no live stack needed, ever)
 
-- Tests run on `pg-mem` + `ioredis-mock` — no database or homelab needed.
+- Tests run on `pg-mem` + `ioredis-mock` — no database, homelab, or
+  secrets required. If the suite is green, the backend change is verified
+  as far as automation can tell.
 - The web SPA has no test runner: `typecheck` + `vite build` is the
   compile proof; behavior verification happens on Ben's side.
+- `npm run test:integration` is maintainer-only (needs real Proxmox env) —
+  never run it, never gate on it.
 - Windows note: if `npm.ps1` is blocked by execution policy, invoke
   `npm.cmd`/`npx.cmd` instead. No eslint/prettier configs in this repo.
