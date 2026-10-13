@@ -26,4 +26,21 @@ export async function meRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       sessionExpiresAt: session?.expiresAt ?? null,
     };
   });
+
+  // Personal activity feed: the caller's own audit rows, newest first.
+  // Scoped by actor id server-side — unlike /audit this needs no
+  // audit.read permission, so non-privileged users get a dashboard feed.
+  // Sensitive fields stay server-side: detail blobs are not included.
+  app.get("/me/activity", async (request) => {
+    const user = await app.requireAuth(request);
+    const entries = await ctx.audit.list({ actorUserId: user.id, limit: 10 });
+    return {
+      activity: entries.map((e) => ({
+        id: e.id,
+        event: e.event,
+        vmId: e.vmId,
+        createdAt: e.createdAt,
+      })),
+    };
+  });
 }

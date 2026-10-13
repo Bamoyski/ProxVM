@@ -50,10 +50,11 @@ function isPrivileged(roles: string[]): boolean {
   return roles.some((r) => r === "ADMIN" || r === "OPERATOR");
 }
 
-type WidgetId = "stats" | "proxmox" | "discovery" | "events" | "jobs";
+type WidgetId = "stats" | "proxmox" | "discovery" | "events" | "jobs" | "mine";
 
 const ALL_WIDGETS: Array<{ id: WidgetId; title: string }> = [
   { id: "stats", title: "Overview" },
+  { id: "mine", title: "My activity" },
   { id: "proxmox", title: "Cluster & balance" },
   { id: "discovery", title: "Discovered services" },
   { id: "events", title: "Recent events" },
@@ -121,6 +122,11 @@ export default function Dashboard({ me }: { me: Me }) {
     queryKey: ["vm-services"],
     queryFn: () => api<{ vmServices: Array<{ vmId: string; services: Array<{ port: number; service: string }> }> }>("/vm-services"),
     refetchInterval: 60000,
+  });
+  const { data: mine } = useQuery({
+    queryKey: ["my-activity"],
+    queryFn: () => api<{ activity: Array<{ id: string; event: string; vmId: string | null; createdAt: string }> }>("/me/activity"),
+    refetchInterval: 30000,
   });
 
   const vmList = vmsData?.vms ?? [];
@@ -202,6 +208,20 @@ export default function Dashboard({ me }: { me: Me }) {
   ];
 
   const widgets: Record<WidgetId, { privilegedOnly: boolean; node: React.ReactNode }> = {
+    mine: {
+      privilegedOnly: false,
+      node: (
+        <Section title="My activity">
+          {(mine?.activity ?? []).map((a) => (
+            <div key={a.id} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+              <span className="pv-mono">{a.event}</span>
+              <span style={{ color: "var(--pv-text-3)", whiteSpace: "nowrap" }}>{new Date(a.createdAt).toLocaleString()}</span>
+            </div>
+          ))}
+          {!(mine?.activity ?? []).length && <Empty title="Nothing yet" body="Your launches, backups, and changes will appear here." />}
+        </Section>
+      ),
+    },
     stats: {
       privilegedOnly: false,
       node: (

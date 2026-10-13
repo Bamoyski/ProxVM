@@ -15,7 +15,7 @@ import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, ADMIN_AUDIENCE, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, notify, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
@@ -40,6 +40,7 @@ import { threatRoutes } from "./routes/threats.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { healthRoutes } from "./routes/health.js";
 import { iamRoutes } from "./routes/iam.js";
+import { notificationRoutes } from "./routes/notifications.js";
 
 /**
  * Parses PROXVM_TRUST_PROXY into a Fastify trustProxy value. Empty/unset —
@@ -237,6 +238,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(settingsRoutes, { prefix: "/api", ctx });
     await app.register(healthRoutes, { prefix: "/api", ctx });
     await app.register(iamRoutes, { prefix: "/api", ctx });
+    await app.register(notificationRoutes, { prefix: "/api", ctx });
     await app.register(domainRoutes, { prefix: "/api", ctx });
     await app.register(billingRoutes, { prefix: "/api", ctx });
     await app.register(firewallRoutes, { prefix: "/api", ctx });
@@ -463,7 +465,25 @@ export function startHomelabTickers(
   const runThreats = async (): Promise<void> => {
     try {
       const result = await evaluateThreatAlerts({ settings: ctx.settings, audit: ctx.audit });
-      if (result.fired > 0) ctx.logger.info(result, "threat webhook alerts fired");
+      if (result.fired > 0) {
+        ctx.logger.info(result, "threat webhook alerts fired");
+        // Admin delivery for the same findings (best-effort; the webhook
+        // post already happened — this only feeds the in-app bell).
+        try {
+          await notify(ctx.db, {
+            audience: ADMIN_AUDIENCE,
+            kind: "threat",
+            title: `${result.fired} threat finding${result.fired === 1 ? "" : "s"} need review`,
+            body: `${result.evaluated} finding(s) evaluated this tick.`,
+            link: "/threats",
+          });
+        } catch (err) {
+          ctx.logger.warn(
+            { error: err instanceof Error ? err.message : String(err) },
+            "threat notification failed",
+          );
+        }
+      }
     } catch (err) {
       ctx.logger.warn(
         { error: err instanceof Error ? err.message : String(err) },

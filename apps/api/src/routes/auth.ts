@@ -11,7 +11,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
-import { hashPassword, verifyPassword, toPublicUser } from "@proxvm/core";
+import { ADMIN_AUDIENCE, hashPassword, notify, verifyPassword, toPublicUser } from "@proxvm/core";
 import { loginSchema, passwordComplexity, registrationSchema } from "@proxvm/shared";
 import { SESSION_COOKIE } from "../plugins/auth.js";
 
@@ -160,6 +160,18 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
           ip: request.ip,
           detail: { username: body.username },
         });
+        // Best-effort admin delivery: the request row is authoritative.
+        try {
+          await notify(ctx.db, {
+            audience: ADMIN_AUDIENCE,
+            kind: "registration",
+            title: `New account request: ${body.username}`,
+            body: "Review and approve or reject it from the Users page.",
+            link: "/users",
+          });
+        } catch (err) {
+          ctx.logger.warn({ error: err instanceof Error ? err.message : String(err) }, "registration notification failed");
+        }
         return reply.status(201).send({ ok: true, id: created.id });
       } catch (err) {
         if ((err as { code?: string })?.code === "CONFLICT") {

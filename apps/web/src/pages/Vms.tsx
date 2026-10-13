@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
+import { savePref, usePref } from "../prefs.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
 import { StatusBadge, PageTitle, ErrorBox, Empty, Section, Btn, useConfirm } from "../components/ui.js";
 
@@ -99,6 +100,10 @@ export default function Vms({ me }: { me: Me }) {
   const [provisionOpen, setProvisionOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkResult, setBulkResult] = useState<string | null>(null);
+  const [grantUserId, setGrantUserId] = useState("");
+  const [granting, setGranting] = useState(false);
+  const [search, setSearch] = usePref("vms-search", "");
+  const [statusFilter, setStatusFilter] = usePref("vms-status", "all");
   const { data: healthData } = useQuery({
     queryKey: ["connection-health"],
     queryFn: () => api<{ health: Array<{ vmId: string; protocol: string; reachable: boolean; authenticated: boolean | null; detail: string }> }>("/connection-health"),
@@ -136,6 +141,40 @@ export default function Vms({ me }: { me: Me }) {
     linkedClone: true,
     protocols: ["ssh"] as string[],
   });
+  // Remember last-used infrastructure choices (never name/password/address).
+  // Loaded once when the dialog opens; saved on every change below.
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
+  useEffect(() => {
+    if (!provisionOpen || prefsLoaded) return;
+    setPrefsLoaded(true);
+    try {
+      const raw = window.localStorage.getItem("proxvm-pref:vms-provision");
+      if (!raw) return;
+      const saved = JSON.parse(raw) as Partial<typeof form>;
+      setForm((f) => ({
+        ...f,
+        node: typeof saved.node === "string" ? saved.node : f.node,
+        storage: typeof saved.storage === "string" ? saved.storage : f.storage,
+        bridge: typeof saved.bridge === "string" ? saved.bridge : f.bridge,
+        cpu: typeof saved.cpu === "number" ? saved.cpu : f.cpu,
+        ramMb: typeof saved.ramMb === "number" ? saved.ramMb : f.ramMb,
+        diskGb: typeof saved.diskGb === "number" ? saved.diskGb : f.diskGb,
+      }));
+    } catch {
+      // corrupted prefs: start fresh
+    }
+  }, [provisionOpen, prefsLoaded]);
+  useEffect(() => {
+    if (!provisionOpen) return;
+    savePref("vms-provision", {
+      node: form.node,
+      storage: form.storage,
+      bridge: form.bridge,
+      cpu: form.cpu,
+      ramMb: form.ramMb,
+      diskGb: form.diskGb,
+    });
+  }, [provisionOpen, form.node, form.storage, form.bridge, form.cpu, form.ramMb, form.diskGb]);
   const { data: nodes } = useQuery({
     queryKey: ["proxmox-nodes"],
     queryFn: () => api<{ nodes: Array<{ node: string; status: string }> }>("/proxmox/nodes"),
@@ -173,6 +212,14 @@ export default function Vms({ me }: { me: Me }) {
     queryKey: ["users"],
     queryFn: () => api<{ users: Array<{ id: string; username: string; roles: string[] }> }>("/users"),
     enabled: provisionOpen,
+    retry: false,
+  });
+  // Bulk access grants need the user directory too (admin-only endpoint;
+  // operators without users.manage simply don't get the picker).
+  const { data: grantUsers } = useQuery({
+    queryKey: ["users-grant"],
+    queryFn: () => api<{ users: Array<{ id: string; username: string; roles: string[] }> }>("/users"),
+    enabled: canEdit,
     retry: false,
   });
 
@@ -335,8 +382,7 @@ export default function Vms({ me }: { me: Me }) {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   };
 
-  const doBulk = async (action: "start" | "stop" | "restart") => {
-    setBulkResult(null);
+  const doBulk = async (action: "start" | "stop" | "restart") => {    setBulkResult(null);
     try {
       const res = await api<{ results: Array<{ vmId: string; ok: boolean; error?: string }> }>("/vms/bulk-action", {
         method: "POST",
@@ -354,6 +400,47 @@ export default function Vms({ me }: { me: Me }) {
       setBulkResult(err instanceof Error ? err.message : String(err));
     }
   };
+
+  // Bulk access grant: same managed endpoint as the per-VM picker, looped
+  // per selected VM with per-VM results (one failure never aborts the rest).
+  const doBulkGrant = async () => {
+    if (!grantUserId || granting) return;
+    setGranting(true);
+    setBulkResult(null);
+    try {
+      let ok = 0;
+      const failed: string[] = [];
+      for (const vmId of selected) {
+        try {
+          await api(`/vms/${vmId}/access`, { method: "POST", body: { userId: grantUserId } });
+          ok += 1;
+        } catch (err) {
+          failed.push(`${vmId.slice(0, 8)} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+      setBulkResult(
+        failed.length
+          ? `${ok}/${ok + failed.length} granted. Failures: ${failed.join("; ")}`
+          : `${ok} VM(s) granted successfully.`,
+      );
+      setSelected([]);
+      setGrantUserId("");
+    } finally {
+      setGranting(false);
+    }
+  };
+
+  const visibleRows = (data?.vms ?? []).filter((row) => {
+    if (statusFilter !== "all" && row.status !== statusFilter) return false;
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      row.name.toLowerCase().includes(q) ||
+      row.node.toLowerCase().includes(q) ||
+      String(row.vmid).includes(q) ||
+      (row.ip ?? "").toLowerCase().includes(q)
+    );
+  });
 
   const del = (row: VmRow) => {
     confirm(`Delete VM ${row.name} (Proxmox VM ${row.vmid} on ${row.node}) and its Guacamole connection.`, `DELETE ${row.name}`, async () => {
@@ -389,7 +476,40 @@ export default function Vms({ me }: { me: Me }) {
           <Btn size="sm" kind="link" onClick={() => setSelected([])}>Clear</Btn>
         </div>
       )}
+      {canEdit && selected.length > 0 && (grantUsers?.users?.length ?? 0) > 0 && (
+        <div className="pv-notice" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+          <span>Grant access to {selected.length} selected:</span>
+          <select className="pv-select" style={{ fontSize: "0.8rem" }} value={grantUserId} onChange={(e) => setGrantUserId(e.target.value)} aria-label="User to grant">
+            <option value="">Select user…</option>
+            {(grantUsers?.users ?? [])
+              .filter((u) => !u.roles.includes("ADMIN") && !u.roles.includes("OPERATOR"))
+              .map((u) => (
+                <option key={u.id} value={u.id}>{u.username}</option>
+              ))}
+          </select>
+          <Btn size="sm" kind="primary" disabled={!grantUserId || granting} onClick={() => void doBulkGrant()}>
+            {granting ? "Granting…" : "Grant"}
+          </Btn>
+        </div>
+      )}
       {bulkResult && <div className="pv-notice">{bulkResult}</div>}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <input
+          className="pv-input"
+          style={{ maxWidth: 280 }}
+          placeholder="Search name, node, IP, ID…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          aria-label="Search VMs"
+        />
+        <select className="pv-select" style={{ maxWidth: 160 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
+          <option value="all">All statuses</option>
+          <option value="running">Running</option>
+          <option value="stopped">Stopped</option>
+          <option value="failed">Failed</option>
+        </select>
+      </div>
 
       {provisionOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-40 p-4">
@@ -593,7 +713,7 @@ export default function Vms({ me }: { me: Me }) {
             </tr>
           </thead>
           <tbody>
-            {(data?.vms ?? []).map((row) => (
+            {visibleRows.map((row) => (
               <tr key={`${row.vmid}@${row.node}`}>
                 {canManage && (
                   <td>

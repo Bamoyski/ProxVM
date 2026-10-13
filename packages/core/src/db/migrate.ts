@@ -33,6 +33,7 @@ import { vmClassMigration } from "./migrations/014_vm_class.js";
 import { startOnBootMigration } from "./migrations/015_start_on_boot.js";
 import { vmIpUniqueMigration } from "./migrations/016_vm_ip_unique.js";
 import { pbsBackupsMigration } from "./migrations/017_pbs_backups.js";
+import { notificationsMigration } from "./migrations/020_notifications.js";
 import { sshHostKeysMigration } from "./migrations/018_ssh_host_keys.js";
 import { csrfTokenDerivationMigration } from "./migrations/019_csrf_token_derivation.js";
 
@@ -56,6 +57,7 @@ export const MIGRATIONS: Migration[] = [
   { id: "017", name: "pbs_backups", sql: pbsBackupsMigration },
   { id: "018", name: "ssh_host_keys", sql: sshHostKeysMigration },
   { id: "019", name: "csrf_token_derivation", sql: csrfTokenDerivationMigration },
+  { id: "020", name: "notifications", sql: notificationsMigration },
 ];
 
 // --- Runner ----------------------------------------------------------------

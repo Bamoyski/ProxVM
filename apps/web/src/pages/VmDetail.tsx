@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, explainDenial, jobEventSource } from "../api.js";
+import { usePref } from "../prefs.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
 import { StatusBadge, PageTitle, ErrorBox, Section, Empty, Btn, useConfirm } from "../components/ui.js";
 import VmFirewallSection from "./VmFirewallSection.js";
@@ -75,7 +76,7 @@ export default function VmDetail({ me }: { me: Me }) {
   } | null>(null);
   const [templateName, setTemplateName] = useState("");
   const [templateOpen, setTemplateOpen] = useState(false);
-  const [timeframe, setTimeframe] = useState("day");
+  const [timeframe, setTimeframe] = usePref("vmdetail-stats-range", "day");
   const [shareProtocol, setShareProtocol] = useState("");
   const [shareExpiry, setShareExpiry] = useState("60");
   const [shareMaxUses, setShareMaxUses] = useState("");

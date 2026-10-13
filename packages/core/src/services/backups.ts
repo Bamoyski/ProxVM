@@ -14,6 +14,7 @@ import type { Queryable } from "../db/pool.js";
 import { AppError } from "../util/errors.js";
 import { hasPermission } from "./rbac.js";
 import { resolveEffectiveAccess } from "./iam.js";
+import { notify, ADMIN_AUDIENCE } from "./notifications.js";
 import { parseScheduleDays, scheduleDueNow } from "./homelab.js";
 import type { UsersService } from "./users.js";
 import type { VmsRepository } from "./vms.js";
@@ -520,6 +521,24 @@ export async function finalizeBackupRuns(deps: BackupTickerDeps): Promise<{ fini
           detail: { runId: run.id, scheduleId: run.scheduleId, kind: run.kind, result: "failed", error: message },
         })
         .catch(() => undefined);
+      // Failed backups page admins and the owner: silent backup rot is how
+      // data loss happens. Best-effort — the FAILED row is the record.
+      try {
+        const audiences =
+          run.createdBy && run.createdBy !== ADMIN_AUDIENCE ? [ADMIN_AUDIENCE, run.createdBy] : [ADMIN_AUDIENCE];
+        await notify(
+          deps.db,
+          audiences,
+          {
+            kind: "backup",
+            title: `Backup ${run.kind} failed`,
+            body: message.slice(0, 300),
+            link: "/backups",
+          },
+        );
+      } catch {
+        // notification must never break the ticker loop
+      }
     }
   }
   return { finished, failed };

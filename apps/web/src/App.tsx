@@ -18,6 +18,7 @@ import UserPermissions from "./pages/UserPermissions.js";
 import Audit from "./pages/Audit.js";
 import Threats from "./pages/Threats.js";
 import ThreatBell from "./components/ThreatBell.js";
+import NotificationBell from "./components/NotificationBell.js";
 import Jobs from "./pages/Jobs.js";
 import Settings from "./pages/Settings.js";
 import Health from "./pages/Health.js";
@@ -273,6 +274,7 @@ export default function App() {
           Menu
         </button>
         {canNav("audit.read", hasAuditRead) && <ThreatBell />}
+        <NotificationBell />
       </div>
       {menuOpen && (
         <div className="pv-scrim" onClick={() => setMenuOpen(false)} />

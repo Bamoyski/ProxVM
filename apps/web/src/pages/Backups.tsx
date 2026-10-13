@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
+import { usePref } from "../prefs.js";
 import { PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
 
 interface OverviewRow {
@@ -102,7 +103,9 @@ export default function Backups() {
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState<string[]>([]);
   const [focusId, setFocusId] = useState("");
-  const [form, setForm] = useState({ mode: "snapshot", storage: "", hour: "02", minute: "00", frequency: "Every day", keepLast: "7" });
+  const [backupSearch, setBackupSearch] = usePref("backups-search", "");
+  // Last-used timetable survives reloads (server still validates everything).
+  const [form, setForm] = usePref("backups-form", { mode: "snapshot", storage: "", hour: "02", minute: "00", frequency: "Every day", keepLast: "7" });
 
   const { data: overviewData } = useQuery({
     queryKey: ["backup-overview"],
@@ -114,6 +117,10 @@ export default function Backups() {
     queryFn: () => api<{ schedules: BackupSchedule[] }>("/backups/schedules"),
   });
   const rows = overviewData?.overview ?? [];
+  const q = backupSearch.trim().toLowerCase();
+  const fleet = q
+    ? rows.filter((r) => r.name.toLowerCase().includes(q) || r.node.toLowerCase().includes(q) || String(r.vmid).includes(q))
+    : rows;
 
   // Backup-capable Proxmox storages on the selected VMs' nodes, for the
   // destination dropdown (no guessing storage IDs).
@@ -233,14 +240,22 @@ export default function Backups() {
         hint={`${rows.length} VMs · ${checked.length} selected`}
       >
         <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-          <Btn size="sm" onClick={() => setChecked(rows.map((r) => r.vmId))} disabled={!rows.length}>Select all</Btn>
+          <input
+            className="pv-input"
+            style={{ maxWidth: 260 }}
+            placeholder="Search name, node, ID…"
+            value={backupSearch}
+            onChange={(e) => setBackupSearch(e.target.value)}
+            aria-label="Search fleet"
+          />
+          <Btn size="sm" onClick={() => setChecked(fleet.map((r) => r.vmId))} disabled={!fleet.length}>Select all</Btn>
           <Btn size="sm" kind="link" onClick={() => setChecked([])} disabled={!checked.length}>Clear</Btn>
           <span style={{ flex: 1 }} />
           <Btn size="sm" kind="primary" disabled={!checked.length || !storageValue.trim()} onClick={() => void runBulk()}>
             Back up selected now{checked.length ? ` (${checked.length})` : ""}
           </Btn>
         </div>
-        {rows.map((r) => (
+        {fleet.map((r) => (
           <div
             key={r.vmId}
             onClick={() => setFocusId(r.vmId)}
@@ -266,7 +281,7 @@ export default function Backups() {
               : pill("no snapshots", "idle")}
           </div>
         ))}
-        {!rows.length && <Empty title="No VMs visible" body="VMs you can manage appear here." />}
+        {!fleet.length && <Empty title={rows.length ? "No matches" : "No VMs visible"} body={rows.length ? "Try a different search." : "VMs you can manage appear here."} />}
       </Section>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-10">

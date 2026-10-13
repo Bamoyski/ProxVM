@@ -240,6 +240,24 @@ describe("PBS backup service", () => {
     await ctx.db.query("DELETE FROM pbs_backups WHERE vm_id = $1", [vmId]);
   });
 
+  it("notifies admins and the owner when a run fails", async () => {
+    taskResult = { status: "stopped", exitstatus: "ERROR" };
+    const run = await createBackupRun(ctx.db, {
+      vmId, kind: "backup", mode: "snapshot", storage: "pbs-store", createdBy: creatorId,
+    });
+    await ctx.db.query("UPDATE pbs_backups SET status = 'RUNNING', upid = 'UPID:backup:bad', started_at = NOW() WHERE id = $1", [run.id]);
+    await finalizeBackupRuns(deps());
+    const notes = await ctx.db.query<{ audience: string; kind: string }>(
+      "SELECT audience, kind FROM notifications WHERE title LIKE 'Backup % failed'",
+    );
+    const audiences = notes.rows.map((r) => r.audience).sort();
+    expect(audiences).toEqual(["admins", creatorId].sort());
+    expect(notes.rows.every((r) => r.kind === "backup")).toBe(true);
+    taskResult = { status: "stopped", exitstatus: "OK" };
+    await ctx.db.query("DELETE FROM pbs_backups WHERE vm_id = $1", [vmId]);
+    await ctx.db.query("DELETE FROM notifications");
+  });
+
   it("finalizes failed tasks and failed prunes honestly", async () => {
     taskResult = { status: "stopped", exitstatus: "ERROR" };
     const run = await createBackupRun(ctx.db, {
