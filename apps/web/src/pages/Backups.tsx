@@ -82,6 +82,14 @@ function fmtTime(hour: number, minute: number): string {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+/** What a server-UTC wall time feels like in this browser's timezone,
+ *  e.g. "02:00 UTC" -> "09:00 PM" for a CDT viewer. Schedules fire on
+ *  server time, so this keeps the preview honest across timezones. */
+function localTime(hour: string, minute: string): string {
+  const d = new Date(Date.UTC(2020, 0, 1, Number(hour), Number(minute)));
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 function pill(text: string, tone: "ok" | "warn" | "bad" | "idle"): React.ReactNode {
   const color =
     tone === "ok" ? "var(--pv-ok, #3a3)" : tone === "warn" ? "var(--pv-warn, #b80)" : tone === "bad" ? "var(--pv-danger, #c00)" : "var(--pv-text-3)";
@@ -204,7 +212,7 @@ export default function Backups() {
   // Plain-language preview of what the buttons below will do.
   const summary = checked.length === 0
     ? "Tick one or more VMs above first."
-    : `${checked.length} VM${checked.length === 1 ? "" : "s"} · ${form.frequency.toLowerCase()} at ${form.hour}:${form.minute} server time · ${form.mode} backups to “${storageValue || "…" }”${keepValue ? ` · keeps newest ${keepValue}, deletes older` : " · keeps everything"}`;
+    : `${checked.length} VM${checked.length === 1 ? "" : "s"} · ${form.frequency.toLowerCase()} at ${form.hour}:${form.minute} server time (UTC — ${localTime(form.hour, form.minute)} your time) · ${form.mode} backups to “${storageValue || "…" }”${keepValue ? ` · keeps newest ${keepValue}, deletes older` : " · keeps everything"}`;
 
   const schedulePayload = () => ({
     mode: form.mode,
@@ -358,7 +366,7 @@ export default function Backups() {
               </select>
             </div>
             <div className="pv-field">
-              <label className="pv-label">At hour</label>
+              <label className="pv-label">At hour (UTC)</label>
               <select className="pv-select" value={form.hour} onChange={(e) => setForm({ ...form, hour: e.target.value })}>
                 {HOURS.map((h) => (
                   <option key={h} value={h}>{h}:00</option>
@@ -393,7 +401,7 @@ export default function Backups() {
               <div key={s.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
                 <span className="pv-mono" style={{ textTransform: "uppercase" }}>{s.mode}</span>
                 <span>{rows.find((r) => r.vmId === s.vmId)?.name ?? s.vmId.slice(0, 8)}</span>
-                <span style={{ color: "var(--pv-text-3)", fontSize: "0.78rem" }}>{fmtTime(s.hour, s.minute)} · {s.days === "*" ? "daily" : s.days}{s.keepLast ? ` · keep ${s.keepLast}` : ""}</span>
+                <span style={{ color: "var(--pv-text-3)", fontSize: "0.78rem" }}>{fmtTime(s.hour, s.minute)} UTC · {s.days === "*" ? "daily" : s.days}{s.keepLast ? ` · keep ${s.keepLast}` : ""}</span>
                 {!s.enabled && <span style={{ color: "var(--pv-text-3)", fontSize: "0.78rem" }}>(disabled)</span>}
                 <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                   <Btn size="sm" kind="link" onClick={() => void call(() => api(`/backups/schedules/${s.id}`, { method: "PATCH", body: { enabled: !s.enabled } }))}>
