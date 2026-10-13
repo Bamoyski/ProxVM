@@ -34,6 +34,10 @@ git push -u origin vihaan/<short-description>        # your branch only
 gh pr create --base main --title "..." --body "..."  # then STOP and wait
 ```
 
+`main` is branch-protected server-side (direct pushes rejected for
+everyone including admins; one approving review required), so following
+the shape above is not just policy — it is the only path that works.
+
 - Branch names start with `vihaan/`.
 - Force-push is allowed **only** on your own `vihaan/*` branches (e.g.
   after a rebase). Never on `main`, never on anyone else's branch.
