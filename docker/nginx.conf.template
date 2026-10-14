@@ -27,15 +27,10 @@ server {
     ${PROXVM_HSTS_HEADER}
     add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'self'; object-src 'none'" always;
 
-    # Upstream error responses pass through untouched: the API already
-    # answers every failure with safe, user-actionable JSON (auth, validation,
-    # Proxmox/Gotify upstream errors), and the UI renders server messages
-    # verbatim. Do NOT add proxy_intercept_errors / error_page here — an
-    # earlier revision converted every 502 into a generic "briefly
-    # unavailable", which masked real errors (e.g. a down Gotify server
-    # reported as a ProxVM outage). A truly dead backend still yields
-    # nginx's HTML 502, which the UI's friendlyHttpMessage() already
-    # translates to the same "briefly unavailable" wording.
+    # API backends return JSON, so proxy failures must too: intercept
+    # nginx's HTML error pages (502/504/524-shaped) and answer with a
+    # ProxVM-shaped JSON body the UI renders as a friendly message.
+    # Without this, users see raw "HTTP 502" text and browser error pages.
     location /api/ {
         set $upstream_api http://api:4000;
         proxy_pass $upstream_api;
@@ -46,6 +41,16 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
         proxy_read_timeout 3600s;
+        proxy_intercept_errors on;
+        error_page 500 502 503 504 = @api_unavailable;
+    }
+
+    location @api_unavailable {
+        internal;
+        default_type application/json;
+        # 503 either way: the wording covers restarting, crashed, or
+        # unreachable backends without leaking internals.
+        return 503 '{"code":"BAD_GATEWAY","message":"ProxVM is briefly unavailable — retry in a few seconds."}';
     }
 
     location / {
