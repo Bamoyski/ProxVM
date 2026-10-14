@@ -1,3 +1,9 @@
+# Fixed project name (NOT the directory basename): prod lives in /opt/proxvm/app
+# (project "app") while dev lives in C:\ApacheProxVM (project "apacheproxvm").
+# Without this, container/volume names diverge per host and every script,
+# doc, and tunnel target that names a container breaks on one side.
+name: apacheproxvm
+
 services:
   web:
     build:
