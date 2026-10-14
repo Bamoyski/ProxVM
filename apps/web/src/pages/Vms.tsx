@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
 import { savePref, usePref } from "../prefs.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
 import { StatusBadge, PageTitle, ErrorBox, Empty, Section, Btn, useConfirm } from "../components/ui.js";
+import Templates from "./Templates.js";
 
 interface VmRow {
   id: string | null;
@@ -85,6 +86,11 @@ export default function Vms({ me }: { me: Me }) {
   const canEdit = can("vm.edit");
   const canDelete = can("vm.delete");
   const canLaunch = can("guac.launch");
+  // Templates live here as a tab (not a separate page): the provision flow
+  // already picks from the same template registry.
+  const canTemplates = can("templates.manage");
+  const [params, setParams] = useSearchParams();
+  const view = params.get("tab") === "templates" && canTemplates ? "templates" : "vms";
   const { data, error } = useQuery({
     queryKey: ["vms"],
     queryFn: () => api<{ vms: VmRow[]; proxmoxConnected: boolean; proxmoxError: string | null }>("/vms"),
@@ -459,12 +465,36 @@ export default function Vms({ me }: { me: Me }) {
         )}
       </PageTitle>
       {dialog}
-      {data && !data.proxmoxConnected && (
+      {data && !data.proxmoxConnected && view === "vms" && (
         <div className="pv-notice pv-notice-warn">
           Proxmox API unreachable — showing stored data only. Error: {data.proxmoxError}
         </div>
       )}
 
+      {canTemplates && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }} role="tablist" aria-label="Virtual machines views">
+          <button
+            role="tab"
+            aria-selected={view === "vms"}
+            onClick={() => setParams({})}
+            className={view === "vms" ? "pv-btn pv-btn-primary pv-btn-sm" : "pv-btn pv-btn-sm"}
+          >
+            Virtual machines
+          </button>
+          <button
+            role="tab"
+            aria-selected={view === "templates"}
+            onClick={() => setParams({ tab: "templates" })}
+            className={view === "templates" ? "pv-btn pv-btn-primary pv-btn-sm" : "pv-btn pv-btn-sm"}
+          >
+            Templates
+          </button>
+        </div>
+      )}
+      {view === "templates" ? (
+        <Templates />
+      ) : (
+      <>
       {canManage && selected.length > 0 && (
         <div className="pv-notice" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
           <span>{selected.length} selected</span>
@@ -534,7 +564,7 @@ export default function Vms({ me }: { me: Me }) {
             </div>
             {!templates?.templates.length ? (
               <div className="pv-notice pv-notice-warn">
-                No templates registered. Register one on the <Link to="/templates">Templates</Link> page first.
+                No templates registered. Register one on the <Link to="/vms?tab=templates">Templates</Link> tab first.
               </div>
             ) : provisionMode === "basic" ? (
               <BasicProvisionForm
@@ -804,12 +834,14 @@ export default function Vms({ me }: { me: Me }) {
           </tbody>
         </table>
       </div>
-      {!data?.vms.length && (
+      {!data?.vms.length && view === "vms" && (
         <Empty
           title="No virtual machines"
           body="Nothing in the Proxmox cluster is visible to you yet. Provision one, or ask an administrator for access."
           action={canCreate ? <Btn kind="primary" size="sm" onClick={() => setProvisionOpen(true)}>Provision VM</Btn> : undefined}
         />
+      )}
+      </>
       )}
     </div>
   );

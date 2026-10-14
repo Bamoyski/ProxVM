@@ -7,29 +7,17 @@ import Login from "./pages/Login.js";
 import Dashboard from "./pages/Dashboard.js";
 import Vms from "./pages/Vms.js";
 import VmDetail from "./pages/VmDetail.js";
-import Templates from "./pages/Templates.js";
 import Guacamole from "./pages/Guacamole.js";
 import Credentials from "./pages/Credentials.js";
 import Users from "./pages/Users.js";
-import Roles from "./pages/Roles.js";
-import Groups from "./pages/Groups.js";
-import Matrix from "./pages/Matrix.js";
+import Access from "./pages/Access.js";
 import UserPermissions from "./pages/UserPermissions.js";
-import Audit from "./pages/Audit.js";
-import Threats from "./pages/Threats.js";
+import System from "./pages/System.js";
 import ThreatBell from "./components/ThreatBell.js";
 import NotificationBell from "./components/NotificationBell.js";
-import Jobs from "./pages/Jobs.js";
-import Settings from "./pages/Settings.js";
-import Health from "./pages/Health.js";
-import Help from "./pages/Help.js";
-import Legal from "./pages/Legal.js";
-import Schedules from "./pages/Schedules.js";
-import Backups from "./pages/Backups.js";
-import Domains from "./pages/Domains.js";
-import Contact from "./pages/Contact.js";
-import Donate from "./pages/Donate.js";
-import Content from "./pages/Content.js";
+import Automations from "./pages/Automations.js";
+import Configuration from "./pages/Configuration.js";
+import About from "./pages/About.js";
 import Usage from "./pages/Usage.js";
 import Tickets from "./pages/Tickets.js";
 import CommandPalette from "./components/CommandPalette.js";
@@ -59,28 +47,16 @@ export function useMe() {
 const NAV = [
   { to: "/", label: "Dashboard" },
   { to: "/vms", label: "Virtual Machines" },
-  { to: "/templates", label: "Templates" },
+  { to: "/automations", label: "Automations" },
   { to: "/guacamole", label: "Guacamole" },
   { to: "/credentials", label: "Credentials" },
   { to: "/users", label: "Users" },
-  { to: "/roles", label: "Roles" },
-  { to: "/groups", label: "Groups" },
-  { to: "/matrix", label: "Permission Matrix" },
-  { to: "/audit", label: "Audit Log" },
-  { to: "/threats", label: "Threat Detection" },
-  { to: "/jobs", label: "Jobs" },
-  { to: "/settings", label: "Settings" },
-  { to: "/domains", label: "Domains" },
-  { to: "/health", label: "Health" },
-  { to: "/schedules", label: "Schedules" },
-  { to: "/backups", label: "Backups" },
-  { to: "/help", label: "Help" },
-  { to: "/content", label: "Content" },
-  { to: "/tickets", label: "Support" },
+  { to: "/access", label: "Access control" },
+  { to: "/system", label: "System & security" },
+  { to: "/configuration", label: "Configuration" },
   { to: "/usage", label: "Usage" },
-  { to: "/legal", label: "Legal" },
-  { to: "/contact", label: "Contact" },
-  { to: "/donate", label: "Donate" },
+  { to: "/tickets", label: "Support" },
+  { to: "/about", label: "About & help" },
 ];
 
 function initialTheme(): "dark" | "light" {
@@ -235,30 +211,31 @@ export default function App() {
 
   const visibleNav = NAV.filter((n) => {
     if (n.to === "/users") return canNav("users.manage", isAdmin);
-    if (n.to === "/content") return canNav("settings.manage", isAdmin);
     if (n.to === "/usage") return canNav("users.manage", isAdmin);
-            if (n.to === "/settings") return canNav("settings.manage", isAdmin);
-            if (n.to === "/domains") return canNav("settings.manage", isAdmin);
-    if (n.to === "/roles") return canNav("roles.manage", isAdmin);
-    if (n.to === "/groups") return canNav("groups.manage", isAdmin);
-    if (n.to === "/matrix") return canNav("users.manage", isAdmin);
+    if (n.to === "/configuration") return canNav("settings.manage", isAdmin);
+    if (n.to === "/access") {
+      return (
+        canNav("roles.manage", isAdmin) ||
+        canNav("groups.manage", isAdmin) ||
+        canNav("users.manage", isAdmin)
+      );
+    }
     if (n.to === "/credentials") return canNav("cred.reveal", isAdmin);
-    if (n.to === "/jobs") return canNav("jobs.read", privileged);
-    if (n.to === "/templates") return canNav("templates.manage", privileged);
-    if (n.to === "/audit") return canNav("audit.read", hasAuditRead);
-    if (n.to === "/threats") return canNav("audit.read", hasAuditRead);
-    if (n.to === "/schedules") return canNav("vm.manage", privileged);
-    if (n.to === "/backups") return canNav("vm.manage", privileged);
+    if (n.to === "/automations") return canNav("vm.manage", privileged);
+    if (n.to === "/system") return true;
+    if (n.to === "/about") return true;
     return true;
   });
 
   // Grouped by operator intent, not alphabet: infrastructure first,
-  // identity second, system last. Help-adjacent pages stay ungrouped.
+  // automation and identity next, system last. Help-adjacent pages live
+  // under About & help.
   const NAV_GROUPS: Array<{ label: string | null; paths: string[] }> = [
-    { label: "Infrastructure", paths: ["/", "/vms", "/templates", "/jobs", "/schedules", "/backups", "/guacamole"] },
-    { label: "Access", paths: ["/users", "/roles", "/groups", "/matrix", "/credentials"] },
-    { label: "System", paths: ["/settings", "/domains", "/content", "/health", "/audit", "/threats", "/usage"] },
-    { label: null, paths: ["/tickets", "/help", "/contact", "/donate", "/legal"] },
+    { label: "Infrastructure", paths: ["/", "/vms", "/guacamole", "/credentials"] },
+    { label: "Automations", paths: ["/automations"] },
+    { label: "Access", paths: ["/users", "/access"] },
+    { label: "System", paths: ["/system", "/configuration", "/usage"] },
+    { label: null, paths: ["/tickets", "/about"] },
   ];
   const navByPath = new Map(visibleNav.map((n) => [n.to, n]));
 
@@ -376,30 +353,38 @@ export default function App() {
           <Route path="/" element={<Dashboard me={me} />} />
           <Route path="/vms" element={<Vms me={me} />} />
           <Route path="/vms/:id" element={<VmDetail me={me} />} />
-          <Route path="/templates" element={<Templates />} />
+          <Route path="/automations" element={<Automations can={(perm) => canNav(perm, helpLegacy(perm))} />} />
           <Route path="/guacamole" element={<Guacamole />} />
           <Route path="/credentials" element={<Credentials />} />
           <Route path="/users" element={<Users />} />
           <Route path="/users/:id/permissions" element={<UserPermissions />} />
-          <Route path="/roles" element={<Roles />} />
-          <Route path="/groups" element={<Groups />} />
-          <Route path="/matrix" element={<Matrix />} />
-          <Route path="/audit" element={<Audit />} />
-          <Route path="/threats" element={<Threats />} />
-          <Route path="/jobs" element={<Jobs me={me} />} />
-          <Route path="/jobs/:jobId" element={<Jobs me={me} />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/health" element={<Health />} />
-          <Route path="/schedules" element={<Schedules />} />
-          <Route path="/backups" element={<Backups />} />
-          <Route path="/domains" element={<Domains />} />
-          <Route path="/legal" element={<Legal />} />
-          <Route path="/contact" element={<Contact />} />
-          <Route path="/donate" element={<Donate />} />
-          <Route path="/content" element={<Content />} />
+          <Route path="/access" element={<Access can={(perm) => canNav(perm, helpLegacy(perm))} />} />
+          <Route path="/system" element={<System can={(perm) => canNav(perm, helpLegacy(perm))} />} />
+          <Route path="/configuration" element={<Configuration can={(perm) => canNav(perm, helpLegacy(perm))} />} />
+          <Route path="/about" element={<About can={(perm) => canNav(perm, helpLegacy(perm))} />} />
           <Route path="/usage" element={<Usage />} />
           <Route path="/tickets" element={<Tickets isAdmin={canNav("users.manage", isAdmin)} />} />
-          <Route path="/help" element={<Help can={(perm) => canNav(perm, helpLegacy(perm))} />} />
+          {/* Consolidated pages: old per-section paths redirect to the
+            matching tab so bookmarks, notification links, and in-app links
+            keep working. Backend routes are unchanged. */}
+          <Route path="/templates" element={<Navigate to="/vms?tab=templates" replace />} />
+          <Route path="/roles" element={<Navigate to="/access?tab=roles" replace />} />
+          <Route path="/groups" element={<Navigate to="/access?tab=groups" replace />} />
+          <Route path="/matrix" element={<Navigate to="/access?tab=matrix" replace />} />
+          <Route path="/health" element={<Navigate to="/system?tab=health" replace />} />
+          <Route path="/threats" element={<Navigate to="/system?tab=threats" replace />} />
+          <Route path="/audit" element={<Navigate to="/system?tab=audit" replace />} />
+          <Route path="/jobs" element={<Navigate to="/" replace />} />
+          <Route path="/jobs/:jobId" element={<Navigate to="/" replace />} />
+          <Route path="/schedules" element={<Navigate to="/automations?tab=schedules" replace />} />
+          <Route path="/backups" element={<Navigate to="/automations?tab=backups" replace />} />
+          <Route path="/settings" element={<Navigate to="/configuration?tab=settings" replace />} />
+          <Route path="/domains" element={<Navigate to="/configuration?tab=domains" replace />} />
+          <Route path="/content" element={<Navigate to="/configuration?tab=content" replace />} />
+          <Route path="/help" element={<Navigate to="/about?tab=help" replace />} />
+          <Route path="/contact" element={<Navigate to="/about?tab=contact" replace />} />
+          <Route path="/donate" element={<Navigate to="/about?tab=donate" replace />} />
+          <Route path="/legal" element={<Navigate to="/about?tab=legal" replace />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

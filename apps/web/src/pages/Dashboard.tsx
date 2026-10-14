@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
+import Jobs from "./Jobs.js";
 import { StatusBadge, PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
 
 interface Me {
@@ -320,15 +321,8 @@ export default function Dashboard({ me }: { me: Me }) {
     jobs: {
       privilegedOnly: false,
       node: (
-        <Section title="Recent provisioning jobs">
-          {(jobs?.jobs ?? []).map((j) => (
-            <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
-              <span className="pv-mono">{j.id.slice(0, 8)}</span>
-              <StatusBadge status={j.status} />
-              <span style={{ marginLeft: "auto", color: "var(--pv-text-3)" }}>{new Date(j.createdAt).toLocaleString()}</span>
-            </div>
-          ))}
-          {!jobs?.jobs.length && <Empty title="No provisioning jobs yet" body="Provisioning a VM from a template creates a tracked job here." />}
+        <Section title="Provisioning jobs">
+          <Jobs me={me} bare />
         </Section>
       ),
     },

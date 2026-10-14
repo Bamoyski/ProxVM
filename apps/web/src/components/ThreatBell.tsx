@@ -113,7 +113,7 @@ export default function ThreatBell() {
               </div>
             ))
           )}
-          <Link to="/threats" onClick={() => setOpen(false)} className="pv-btn pv-btn-sm" style={{ width: "100%", marginTop: 8, textAlign: "center" }}>
+          <Link to="/system?tab=threats" onClick={() => setOpen(false)} className="pv-btn pv-btn-sm" style={{ width: "100%", marginTop: 8, textAlign: "center" }}>
             Open threat detection
           </Link>
         </div>

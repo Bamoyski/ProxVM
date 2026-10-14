@@ -30,7 +30,7 @@ function hasPermission(me: Me, perm: string): boolean {
   return me.roles.some((r) => rolePerms[r]?.includes(perm));
 }
 
-export default function Jobs({ me }: { me: Me }) {
+export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
   const { jobId } = useParams();
   const can = makeCan(useEffectivePermissions(), (perm) => hasPermission(me, perm));
   const canRetry = can("jobs.retry");
@@ -84,12 +84,10 @@ export default function Jobs({ me }: { me: Me }) {
     }
   };
 
-  return (
-    <div className="pv-page">
-      <PageTitle
-        title="Provisioning jobs"
-        description="Each provisioning run is a tracked job. Watch live progress, retry failures, or roll back."
-      />
+  // `bare` embeds the full list (with watch/retry/cancel/rollback) inside
+  // another page — e.g. the Dashboard — without the page chrome.
+  const body = (
+    <>
       {progress && <div className="pv-notice pv-mono" style={{ fontSize: "0.8rem" }}>{progress}</div>}
       <div className="pv-table-wrap">
         <table className="pv-table">
@@ -144,6 +142,18 @@ export default function Jobs({ me }: { me: Me }) {
       {!jobs?.jobs.length && (
         <Empty title="No jobs yet" body="Provisioning a VM from a template creates a tracked job here." />
       )}
+    </>
+  );
+
+  if (bare) return <>{body}</>;
+
+  return (
+    <div className="pv-page">
+      <PageTitle
+        title="Provisioning jobs"
+        description="Each provisioning run is a tracked job. Watch live progress, retry failures, or roll back."
+      />
+      {body}
     </div>
   );
 }
