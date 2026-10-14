@@ -67,6 +67,9 @@ describe("gotify service", () => {
   it("normalizes base URLs and clamps priorities", () => {
     expect(normalizeGotifyBase("http://192.168.1.28///")).toBe("http://192.168.1.28");
     expect(normalizeGotifyBase("  http://192.168.1.28/ ")).toBe("http://192.168.1.28");
+    // Adversarial slash run: must stay correct (and linear-time — no regex).
+    expect(normalizeGotifyBase(`http://192.168.1.28/${"/".repeat(50000)}`)).toBe("http://192.168.1.28");
+    expect(normalizeGotifyBase("http://192.168.1.28//path//")).toBe("http://192.168.1.28//path");
     expect(clampGotifyPriority(8)).toBe(8);
     expect(clampGotifyPriority(0)).toBe(0);
     expect(clampGotifyPriority(10)).toBe(10);

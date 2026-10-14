@@ -40,9 +40,16 @@ export interface GotifyMessage {
   priority?: number;
 }
 
-/** Strip trailing slashes so `${base}/message` never doubles up. */
+/**
+ * Strip trailing slashes so `${base}/message` never doubles up. Deliberately
+ * a manual loop, not `/\/+$/`: the regex is flagged polynomial-ReDoS
+ * (CodeQL js/polynomial-redos) on long slash runs, and a loop is trivially
+ * linear-time on any input.
+ */
 export function normalizeGotifyBase(raw: string): string {
-  return raw.trim().replace(/\/+$/, "");
+  let out = raw.trim();
+  while (out.endsWith("/")) out = out.slice(0, -1);
+  return out;
 }
 
 /** Clamp to Gotify's 0-10 range; garbage falls back to the default. */
