@@ -40,6 +40,16 @@ export default function Health() {
         ))}
         {!data && <Empty title="Running checks…" />}
       </Section>
+      <Section title="Public status" hint="Independent uptime tracking (Uptime Kuma), including history ProxVM itself can't see while down.">
+        <a
+          className="pv-btn"
+          href="https://uptime.benmoyer.org/status/home"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open status page
+        </a>
+      </Section>
     </div>
   );
 }
