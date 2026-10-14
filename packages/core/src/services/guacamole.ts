@@ -213,6 +213,55 @@ export class GuacamoleService {
     return result.rows[0] as GuacUserRow;
   }
 
+  /**
+   * Opt a user into direct Guacamole logins with an admin-chosen password.
+   * The Guac-side hash is rewritten AND the local ciphertext updated together,
+   * so ProxVM's token-minting launch flow keeps working with the same value.
+   * Creates the Guac account first when the user never launched (same path as
+   * ensureGuacUser). Complexity is enforced by callers (shared schema).
+   */
+  async setGuacDirectLoginPassword(
+    userId: string,
+    appUsername: string,
+    newPassword: string,
+    guacDb: GuacamoleDbClient,
+  ): Promise<GuacUserRow> {
+    if (!newPassword) throw AppError.validation("password must not be empty");
+    let record = await this.findUserRecord(userId);
+    if (!record) {
+      record = await this.ensureGuacUser(userId, appUsername, guacDb);
+    }
+    await guacDb.setUserPassword(record.guac_username, newPassword);
+    const ciphertext = this.deps.encrypt(newPassword);
+    const result = await this.db.query<GuacUserRow>(
+      `UPDATE guacamole_users SET password_ciphertext = $2, key_id = $3,
+        direct_login_enabled = TRUE, direct_login_set_at = NOW(), updated_at = NOW()
+       WHERE user_id = $1 RETURNING *`,
+      [userId, ciphertext, keyIdOf(ciphertext)],
+    );
+    return result.rows[0] as GuacUserRow;
+  }
+
+  /**
+   * Revoke direct Guacamole logins by rotating back to a fresh random unknown
+   * password (Guac-side + local ciphertext together). ProxVM launch flow is
+   * unaffected — it always reads the stored value.
+   */
+  async disableGuacDirectLogin(userId: string, guacDb: GuacamoleDbClient): Promise<GuacUserRow | null> {
+    const record = await this.findUserRecord(userId);
+    if (!record) return null;
+    const password = generatePassword();
+    await guacDb.setUserPassword(record.guac_username, password);
+    const ciphertext = this.deps.encrypt(password);
+    const result = await this.db.query<GuacUserRow>(
+      `UPDATE guacamole_users SET password_ciphertext = $2, key_id = $3,
+        direct_login_enabled = FALSE, direct_login_set_at = NULL, updated_at = NOW()
+       WHERE user_id = $1 RETURNING *`,
+      [userId, ciphertext, keyIdOf(ciphertext)],
+    );
+    return result.rows[0] as GuacUserRow;
+  }
+
   async grantVmAccess(vmId: string, appUserId: string, guacDb: GuacamoleDbClient): Promise<void> {
     const connections = await this.listConnectionRecords(vmId);
     const userRecord = await this.findUserRecord(appUserId);

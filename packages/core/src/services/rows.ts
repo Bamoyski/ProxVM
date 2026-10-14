@@ -131,6 +131,8 @@ export interface GuacUserRow {
   key_id: string;
   status: "PENDING" | "ACTIVE" | "FAILED";
   sync_state: string | null;
+  direct_login_enabled: boolean;
+  direct_login_set_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }

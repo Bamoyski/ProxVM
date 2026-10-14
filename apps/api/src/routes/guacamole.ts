@@ -12,7 +12,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
+import { passwordComplexity } from "@proxvm/shared";
 import {
+  alertAdmins,
   allowedProtocols,
   AppError,
   checkAccess,
@@ -213,6 +215,77 @@ export async function guacamoleRoutes(app: FastifyInstance, opts: { ctx: CoreCon
       actorUsername: user.username,
       vmId: vm.id,
       detail: { vmName: vm.name },
+    });
+    return { ok: true };
+  });
+
+  // -- Direct Guacamole logins (opt-in per user, admin-managed) --------------
+  // Most users only enter Guacamole through ProxVM's token-minting launch
+  // with a random unknown password. These endpoints let an admin give a
+  // specific user a KNOWN password so they can sign in at the Guacamole web
+  // UI directly (scaling = repeat per user). Write-only: the password is
+  // never returned or logged. Disabling rotates back to random unknown.
+  // Direct sessions bypass ProxVM launch audit/policies, so every change is
+  // audited AND paged to admins; Guac-side connection permissions still apply.
+  app.get("/guacamole/users/:id/direct-login", async (request) => {
+    await app.requirePermission("users.manage")(request);
+    const { id } = request.params as { id: string };
+    const target = await ctx.users.findById(id);
+    if (!target) throw AppError.notFound("User not found");
+    const record = await ctx.guac.findUserRecord(id);
+    return {
+      userId: id,
+      username: target.username,
+      guacUsername: record?.guac_username ?? null,
+      directLoginEnabled: record?.direct_login_enabled ?? false,
+      directLoginSetAt: record?.direct_login_set_at ?? null,
+    };
+  });
+
+  app.post(
+    "/guacamole/users/:id/direct-login",
+    { config: { rateLimit: { max: 10, timeWindow: "1 hour" } } },
+    async (request) => {
+      const actor = await app.requirePermission("users.manage")(request);
+      const { id } = request.params as { id: string };
+      const target = await ctx.users.findById(id);
+      if (!target) throw AppError.notFound("User not found");
+      const body = z.object({ password: passwordComplexity }).parse(request.body);
+      const record = await ctx.guac.setGuacDirectLoginPassword(id, target.username, body.password, await ctx.getGuacDb());
+      await app.audit(request, {
+        event: "GUAC_DIRECT_LOGIN_ENABLED",
+        actorUserId: actor.id,
+        actorUsername: actor.username,
+        detail: { targetUserId: id, targetUsername: target.username, guacUsername: record.guac_username },
+      });
+      await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+        kind: "user",
+        title: `Direct Guacamole login enabled for ${target.username}`,
+        body: `${actor.username} set a known Guacamole password for ${target.username} (${record.guac_username}). Their direct sessions bypass ProxVM launch audit.`,
+        link: "/users",
+      });
+      return { ok: true, guacUsername: record.guac_username };
+    },
+  );
+
+  app.delete("/guacamole/users/:id/direct-login", async (request) => {
+    const actor = await app.requirePermission("users.manage")(request);
+    const { id } = request.params as { id: string };
+    const target = await ctx.users.findById(id);
+    if (!target) throw AppError.notFound("User not found");
+    const record = await ctx.guac.disableGuacDirectLogin(id, await ctx.getGuacDb());
+    if (!record) throw AppError.notFound("User has no Guacamole account yet");
+    await app.audit(request, {
+      event: "GUAC_DIRECT_LOGIN_DISABLED",
+      actorUserId: actor.id,
+      actorUsername: actor.username,
+      detail: { targetUserId: id, targetUsername: target.username, guacUsername: record.guac_username },
+    });
+    await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+      kind: "user",
+      title: `Direct Guacamole login disabled for ${target.username}`,
+      body: `${actor.username} rotated ${target.username} (${record.guac_username}) back to a random unknown password.`,
+      link: "/users",
     });
     return { ok: true };
   });

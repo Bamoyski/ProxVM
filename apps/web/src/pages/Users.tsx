@@ -20,6 +20,9 @@ export default function Users() {
   const [quotaId, setQuotaId] = useState<string | null>(null);
   const [quotaVal, setQuotaVal] = useState("");
   const [quotaCurrent, setQuotaCurrent] = useState<string | null>(null);
+  const [guacId, setGuacId] = useState<string | null>(null);
+  const [guacPw, setGuacPw] = useState({ a: "", b: "" });
+  const [guacStatus, setGuacStatus] = useState<{ guacUsername: string | null; directLoginEnabled: boolean; directLoginSetAt: string | null } | null>(null);
   const [approveRole, setApproveRole] = useState<Record<string, string>>({});
   const { data: requestsData } = useQuery({
     queryKey: ["registration-requests"],
@@ -145,8 +148,50 @@ export default function Users() {
     }
   };
 
-  const del = (username: string, id: string) => {
-    if (window.confirm(`Delete user ${username}? Their Guacamole account will also be removed.`)) {
+  const openGuac = async (id: string) => {
+    setGuacId(guacId === id ? null : id);
+    setGuacPw({ a: "", b: "" });
+    setGuacStatus(null);
+    if (guacId !== id) {
+      try {
+        const res = await api<{ guacUsername: string | null; directLoginEnabled: boolean; directLoginSetAt: string | null }>(`/guacamole/users/${id}/direct-login`);
+        setGuacStatus(res);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  };
+
+  const saveGuac = async (id: string, username: string) => {
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api<{ guacUsername: string }>(`/guacamole/users/${id}/direct-login`, {
+        method: "POST",
+        body: { password: guacPw.a },
+      });
+      setGuacId(null);
+      setGuacPw({ a: "", b: "" });
+      setNotice(`Direct Guacamole login enabled for ${username} (${res.guacUsername}). Share the password with them out-of-band — it is never shown again.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const disableGuac = async (id: string, username: string) => {
+    if (!window.confirm(`Disable direct Guacamole login for ${username}? Their password rotates to a random unknown value (ProxVM launch keeps working).`)) return;
+    setError(null);
+    setNotice(null);
+    try {
+      await api(`/guacamole/users/${id}/direct-login`, { method: "DELETE" });
+      setGuacId(null);
+      setNotice(`Direct Guacamole login disabled for ${username}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const del = (username: string, id: string) => {    if (window.confirm(`Delete user ${username}? Their Guacamole account will also be removed.`)) {
       api(`/users/${id}`, { method: "DELETE" })
         .then(() => qc.invalidateQueries({ queryKey: ["users"] }))
         .catch((err) => alert(err instanceof Error ? err.message : String(err)));
@@ -301,6 +346,13 @@ export default function Users() {
                       <Btn
                         size="sm"
                         kind="link"
+                        onClick={() => void openGuac(u.id)}
+                      >
+                        Guac login
+                      </Btn>
+                      <Btn
+                        size="sm"
+                        kind="link"
                         disabled={u.id === undefined || u.isInitialAdmin || (onlyAdmin && u.active)}
                         title={
                           u.isInitialAdmin
@@ -383,6 +435,50 @@ export default function Users() {
                         >
                           Clear
                         </Btn>
+                      </div>
+                    )}
+                    {guacId === u.id && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 8 }}>
+                        <span className="pv-hint">
+                          {guacStatus
+                            ? guacStatus.guacUsername
+                              ? `${guacStatus.guacUsername}: direct login ${guacStatus.directLoginEnabled ? `ON${guacStatus.directLoginSetAt ? ` (set ${new Date(guacStatus.directLoginSetAt).toLocaleString()})` : ""}` : "off"}`
+                              : "No Guacamole account yet (created on enable)."
+                            : "…"}
+                        </span>
+                        <input
+                          type="password"
+                          className="pv-input"
+                          style={{ width: 176 }}
+                          placeholder="New Guac password"
+                          title="Min 12, mixed case, number, symbol"
+                          value={guacPw.a}
+                          onChange={(e) => setGuacPw({ ...guacPw, a: e.target.value })}
+                        />
+                        <input
+                          type="password"
+                          className="pv-input"
+                          style={{ width: 176 }}
+                          placeholder="Confirm Guac password"
+                          value={guacPw.b}
+                          onChange={(e) => setGuacPw({ ...guacPw, b: e.target.value })}
+                        />
+                        <Btn
+                          size="sm"
+                          kind="primary"
+                          disabled={!guacPw.a || guacPw.a !== guacPw.b}
+                          title={guacPw.a && guacPw.a !== guacPw.b ? "Passwords do not match" : undefined}
+                          onClick={() => void saveGuac(u.id, u.username)}
+                        >
+                          Enable direct login
+                        </Btn>
+                        <Btn
+                          size="sm"
+                          onClick={() => void disableGuac(u.id, u.username)}
+                        >
+                          Disable
+                        </Btn>
+                        <span className="pv-hint">Write-only: share it out-of-band, it is never shown again. Direct sessions bypass ProxVM launch audit.</span>
                       </div>
                     )}
                   </td>
