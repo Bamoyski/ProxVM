@@ -107,6 +107,23 @@ Each request becomes exactly one branch and one PR:
    launch, real backup, DNS), label the PR `needs-live-verify` and stop —
    do not invent workarounds, stubs, or fake verifications.
 
+## Releases & production (how your merged work goes live)
+
+- Merged PRs ride weekly release tags to prod: Ben cuts `prod-YYYY-MM-DD`
+  on `main` when the week's work is green, and the production box (a Proxmox
+  LXC you never touch) deploys that exact tag. Immutable tags = the release
+  can always be re-read and rolled back.
+- Cadence implication: small PRs merged early in the week ship sooner; a PR
+  merged Friday waits for next week's tag. Plan accordingly, don't lobby to
+  skip the tag.
+- You never deploy, never touch production infrastructure, deploy scripts,
+  tunnel routes, or the private ops repo (`Bamoyski/ProxVM-ops` — encrypted
+  secrets and prod tooling; you have no access and must never request it).
+  Live verification stays Ben's job via the `needs-live-verify` label.
+- CI may appear on PRs (automatic typecheck/test/build runs). It changes
+  nothing for you: local gates stay mandatory, and green CI never substitutes
+  for the required review.
+
 ## Secrets (hard rules, no exceptions, no workarounds)
 
 - NEVER commit `.env`, `.env.*` (except placeholders-only `.env.example`),
