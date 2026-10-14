@@ -15,6 +15,7 @@ import { AppError } from "../util/errors.js";
 import { hasPermission } from "./rbac.js";
 import { resolveEffectiveAccess } from "./iam.js";
 import { notify, ADMIN_AUDIENCE } from "./notifications.js";
+import { sendGotifyMessage } from "./gotify.js";
 import { parseScheduleDays, scheduleDueNow } from "./homelab.js";
 import type { UsersService } from "./users.js";
 import type { VmsRepository } from "./vms.js";
@@ -543,6 +544,16 @@ export async function finalizeBackupRuns(deps: BackupTickerDeps): Promise<{ fini
         );
       } catch {
         // notification must never break the ticker loop
+      }
+      // Same failure to Gotify (admin push): best-effort, never breaks loop.
+      try {
+        await sendGotifyMessage(deps.settings, {
+          title: `Backup ${run.kind} failed`,
+          message: message.slice(0, 300),
+          priority: 8,
+        });
+      } catch {
+        // delivery must never break the ticker loop
       }
     }
   }

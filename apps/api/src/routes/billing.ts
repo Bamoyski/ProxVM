@@ -13,8 +13,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import {
-  ADMIN_AUDIENCE,
   AppError,
+  alertAdmins,
   createTicket,
   csvCell,
   dailyUsage,
@@ -23,7 +23,6 @@ import {
   isAdmin,
   listTickets,
   monthlyUsage,
-  notify,
   setTicketStatus,
   setUserQuota,
   type TicketStatus,
@@ -122,17 +121,14 @@ export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreConte
       });
       // Admin queue delivery is best-effort: the ticket row is the record;
       // a notification failure must never fail the filing itself.
-      try {
-        await notify(ctx.db, {
-          audience: ADMIN_AUDIENCE,
-          kind: "ticket",
-          title: `New support ticket from ${user.username}`,
-          body: body.title.slice(0, 160),
-          link: "/tickets",
-        });
-      } catch (err) {
-        ctx.logger.warn({ error: err instanceof Error ? err.message : String(err) }, "ticket notification failed");
-      }
+      // alertAdmins writes the in-app bell row and pushes to Gotify,
+      // and never throws.
+      await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+        kind: "ticket",
+        title: `New support ticket from ${user.username}`,
+        body: body.title.slice(0, 160),
+        link: "/tickets",
+      });
       return reply.status(201).send({ ticket });
     },
   );

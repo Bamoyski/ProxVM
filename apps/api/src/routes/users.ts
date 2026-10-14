@@ -11,11 +11,10 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import {
-  ADMIN_AUDIENCE,
+  alertAdmins,
   assertCanAdministerTarget,
   assertMayConfer,
   hashPassword,
-  notify,
   ROLE_IDS,
   roleEffectivePermissions,
   toPublicUser,
@@ -101,17 +100,14 @@ export async function usersRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       detail: { username: body.username, role: body.role, guacSynced, ...(guacError ? { guacError } : {}) },
     });
     // Best-effort: tell other admins a privileged account just appeared.
-    try {
-      await notify(ctx.db, {
-        audience: ADMIN_AUDIENCE,
-        kind: "user",
-        title: `User created: ${body.username} (${body.role})`,
-        body: `Created by ${actor.username}.`,
-        link: "/users",
-      });
-    } catch (err) {
-      ctx.logger.warn({ error: err instanceof Error ? err.message : String(err) }, "user-created notification failed");
-    }
+    // alertAdmins writes the in-app bell row and pushes to Gotify,
+    // and never throws.
+    await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+      kind: "user",
+      title: `User created: ${body.username} (${body.role})`,
+      body: `Created by ${actor.username}.`,
+      link: "/users",
+    });
     return { user: toPublicUser(user), guacSynced };
   });
 
