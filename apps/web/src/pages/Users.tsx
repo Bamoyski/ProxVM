@@ -478,7 +478,7 @@ export default function Users() {
                         >
                           Disable
                         </Btn>
-                        <span className="pv-hint">Write-only: share it out-of-band, it is never shown again. Direct sessions bypass ProxVM launch audit.</span>
+                        <span className="pv-hint">Write-only: share it out-of-band, it is never shown again. Direct sessions bypass ProxVM launch audit. If changed inside Guacamole itself, ProxVM launch breaks until re-set here.</span>
                       </div>
                     )}
                   </td>
