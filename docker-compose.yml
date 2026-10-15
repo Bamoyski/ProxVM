@@ -53,8 +53,14 @@ services:
       # the nginx container itself. LAN (192.168.x) clients reach the API
       # exclusively through nginx, so they are NOT trusted to supply their
       # own X-Forwarded-For — spoofed headers from the LAN are ignored.
-      # Override in .env only if your topology differs.
-      PROXVM_TRUST_PROXY: "${PROXVM_TRUST_PROXY:-172.16.0.0/12,10.0.0.0/8,127.0.0.1/32,::1/128}"
+      # Plus the Cloudflare Tunnel egress below: cloudflared appends its own
+      # IP last, and Cloudflare appends the true visitor IP just inside it,
+      # so trusting the egress hop resolves audit/rate-limit identity to the
+      # real client while attacker-forged entries (further left) stay ignored.
+      # The egress IP MUST have a DHCP reservation — if it drifts, tunneled
+      # traffic silently reverts to the tunnel IP. Override in .env only if
+      # your topology differs.
+      PROXVM_TRUST_PROXY: "${PROXVM_TRUST_PROXY:-172.16.0.0/12,10.0.0.0/8,127.0.0.1/32,::1/128,192.168.1.138}"
       NODE_ENV: production
       # Cloudflare domain automation. Values come from the local .env file
       # (gitignored, never committed); empty means "use the UI settings".

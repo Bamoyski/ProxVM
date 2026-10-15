@@ -76,7 +76,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // client. PROXVM_TRUST_PROXY=1 trusts every hop (legacy; only behind a
     // proxy you fully control). Direct connections from untrusted addresses
     // always fall back to the socket IP, so exposing :4000 directly stays
-    // spoof-proof either way.
+    // spoof-proof either way. Tunnel note: the Cloudflare edge appends the
+    // true visitor IP inside cloudflared's own appended hop, so trusting the
+    // tunnel egress resolves tunneled traffic to real clients while forged
+    // outer entries stay ignored. That egress IP needs a DHCP reservation.
     trustProxy: parseTrustProxy(process.env.PROXVM_TRUST_PROXY),
     bodyLimit: 1024 * 1024,
   });
