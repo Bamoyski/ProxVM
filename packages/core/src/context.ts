@@ -245,6 +245,7 @@ export async function createCore(
         getProxmoxClient: ctx.getProxmoxClient,
         getGuacDb: ctx.getGuacDb,
         getGuacApi: ctx.getGuacApi,
+        getPbsClient: ctx.getPbsClient,
       }),
     rotateCredential: (vmId, opts, actor) =>
       rotateVmCredential(

@@ -310,7 +310,10 @@ export const jobsQuerySchema = z.object({
 
 export const healthCheckResult = z.object({
   name: z.string(),
-  status: z.enum(["ONLINE", "OFFLINE", "ERROR"]),
+  // UNCONFIGURED = optional service exists but was never set up (PBS,
+  // Gotify, tunnels). Not an outage and never alerts; surfaces in the UI as
+  // a muted "not configured" tile so gaps stay visible without going red.
+  status: z.enum(["ONLINE", "OFFLINE", "ERROR", "UNCONFIGURED"]),
   latencyMs: z.number().nullable(),
   lastChecked: z.string(),
   detail: z.string().nullable().optional(),

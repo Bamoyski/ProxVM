@@ -11,7 +11,7 @@ import Audit from "./Audit.js";
 export default function System({ can }: { can: (perm: string) => boolean }) {
   const [params, setParams] = useSearchParams();
   const tabs = [
-    { id: "health", label: "Health", perm: "", panel: <Health /> },
+    { id: "health", label: "Health", perm: "", panel: <Health can={can} /> },
     { id: "threats", label: "Threats", perm: "audit.read", panel: <Threats /> },
     { id: "audit", label: "Audit log", perm: "audit.read", panel: <Audit /> },
   ].filter((t) => !t.perm || can(t.perm));

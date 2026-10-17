@@ -11,7 +11,7 @@ export function StatusBadge({ status }: { status: string | null | undefined }) {
       ? "pv-status-ok"
       : s === "FAILED" || s === "OFFLINE" || s === "ERROR" || s === "ROTATING" || s === "failed" || s === "disconnected"
         ? "pv-status-err"
-        : s === "unknown" || s === "stopped" || s === "PENDING" || s === "PROVISIONED" || s === "ENCRYPTED" || s === "CANCELLED"
+        : s === "unknown" || s === "stopped" || s === "PENDING" || s === "PROVISIONED" || s === "ENCRYPTED" || s === "CANCELLED" || s === "UNCONFIGURED"
           ? ""
           : "pv-status-warn";
   return <span className={`pv-status ${tone}`}>{s}</span>;
