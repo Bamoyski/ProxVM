@@ -170,6 +170,9 @@ function AppSettings() {
           maxRamMb: number | null;
           maxDiskGb: number | null;
           staticAllowedCidrs: string | null;
+          selfServeMode: "closed" | "approval" | "auto";
+          turnstileSiteKey: string | null;
+          turnstileSecretConfigured: boolean;
         };
       }>("/settings/app"),
   });
@@ -226,6 +229,16 @@ function AppSettings() {
   const shownMaxDisk = policyTouched ? maxDiskGb : (data?.settings?.maxDiskGb ?? null)?.toString() ?? "";
   const shownCidrs = policyTouched ? cidrs : (data?.settings?.staticAllowedCidrs ?? "");
 
+  const [selfServeMode, setSelfServeMode] = useState<"closed" | "approval" | "auto" | null>(null);
+  const [modeTouched, setModeTouched] = useState(false);
+  const [siteKey, setSiteKey] = useState("");
+  const [siteKeyTouched, setSiteKeyTouched] = useState(false);
+  const [tsSecret, setTsSecret] = useState("");
+  const [tsSecretTouched, setTsSecretTouched] = useState(false);
+  const shownMode = modeTouched ? (selfServeMode ?? "approval") : (data?.settings?.selfServeMode ?? "approval");
+  const shownSiteKey = siteKeyTouched ? siteKey : (data?.settings?.turnstileSiteKey ?? "");
+  const tsSecretConfigured = data?.settings?.turnstileSecretConfigured ?? false;
+
   const save = async () => {
     setError(null);
     setSaved(null);
@@ -250,6 +263,9 @@ function AppSettings() {
         maxRamMb?: number | null;
         maxDiskGb?: number | null;
         staticAllowedCidrs?: string | null;
+        selfServeMode?: "closed" | "approval" | "auto";
+        turnstileSiteKey?: string | null;
+        turnstileSecret?: string | null;
       } = {
         retentionDays: value,
       };
@@ -300,6 +316,14 @@ function AppSettings() {
         body.idleShutdownEnabled = shownIdleEnabled;
         body.idleMinutes = minutes;
       }
+      if (modeTouched) body.selfServeMode = shownMode;
+      if (siteKeyTouched) {
+        if (shownSiteKey.trim() !== "" && shownSiteKey.trim().length > 512) {
+          throw new Error("Turnstile site key must be 512 characters or fewer");
+        }
+        body.turnstileSiteKey = shownSiteKey.trim() === "" ? null : shownSiteKey.trim();
+      }
+      if (tsSecretTouched) body.turnstileSecret = tsSecret.trim() === "" ? null : tsSecret.trim();
       await api("/settings/app", { method: "PUT", body });
       setSaved("Application settings saved");
       setTouched(false);
@@ -314,6 +338,11 @@ function AppSettings() {
       setGotifyEnabled(null);
       setGotifyToken("");
       setPolicyTouched(false);
+      setModeTouched(false);
+      setSelfServeMode(null);
+      setSiteKeyTouched(false);
+      setTsSecretTouched(false);
+      setTsSecret("");
       void qc.invalidateQueries({ queryKey: ["settings-app"] });
       void qc.invalidateQueries({ queryKey: ["announcement"] });
     } catch (err) {
@@ -492,6 +521,57 @@ function AppSettings() {
           value={shownCidrs}
           onChange={(e) => { setCidrs(e.target.value); setPolicyTouched(true); }}
         />
+      </Field>
+      <Field
+        label="Self-serve signups"
+        hint="closed: the public register form is refused. approval: requests queue for your review (Users page). auto: accounts are created instantly with the zero-permission GUEST role — you grant VM access later. auto without a Turnstile secret behaves as approval."
+      >
+        <select
+          className="pv-select"
+          value={shownMode}
+          onChange={(e) => {
+            const value = e.target.value as "closed" | "approval" | "auto";
+            setSelfServeMode(value);
+            setModeTouched(true);
+          }}
+        >
+          <option value="closed">Closed (accounts created by admins only)</option>
+          <option value="approval">Approval queue (default)</option>
+          <option value="auto">Instant — GUEST role, you grant access later</option>
+        </select>
+        {shownMode === "auto" && !tsSecretConfigured && tsSecret.trim() === "" && (
+          <div className="pv-notice pv-notice-warn" style={{ marginTop: 6, fontSize: "0.8rem" }}>
+            Instant signups need a Turnstile secret — save one below, or this behaves as the approval queue.
+          </div>
+        )}
+      </Field>
+      <Field
+        label="Turnstile keys (Cloudflare bot gate for signups)"
+        hint={`From Cloudflare dashboard → Turnstile → Add site (your signup hostname). Site key is public; the secret key is stored encrypted and never shown back${tsSecretConfigured ? " (configured)" : ""}.`}
+      >
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <input
+            className="pv-input"
+            style={{ minWidth: 240, flex: 1 }}
+            placeholder="Site key, e.g. 0x4AAAAAAA…"
+            value={shownSiteKey}
+            onChange={(e) => {
+              setSiteKey(e.target.value);
+              setSiteKeyTouched(true);
+            }}
+          />
+          <input
+            type="password"
+            className="pv-input"
+            style={{ minWidth: 200, flex: 1 }}
+            placeholder={tsSecretConfigured ? "Secret key (saved hidden)" : "Secret key"}
+            value={tsSecret}
+            onChange={(e) => {
+              setTsSecret(e.target.value);
+              setTsSecretTouched(true);
+            }}
+          />
+        </div>
       </Field>
       <Btn kind="primary" onClick={save}>Save</Btn>
     </div>

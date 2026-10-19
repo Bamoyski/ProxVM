@@ -59,6 +59,9 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         gotifyToken: z.string().max(512).nullable().optional(),
         gotifyPriority: z.number().int().min(0).max(10).optional(),
         gotifyEnabled: z.boolean().optional(),
+        selfServeMode: z.enum(["closed", "approval", "auto"]).optional(),
+        turnstileSiteKey: z.string().max(512).nullable().optional(),
+        turnstileSecret: z.string().max(512).nullable().optional(),
         maxCpu: z.number().int().min(1).max(4096).nullable().optional(),
         maxRamMb: z.number().int().min(256).max(8388608).nullable().optional(),
         maxDiskGb: z.number().min(1).max(131072).nullable().optional(),
@@ -122,6 +125,26 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         category: "system",
       });
     }
+    if (body.selfServeMode !== undefined) {
+      await ctx.settings.set("selfserve.mode", body.selfServeMode, { category: "system" });
+    }
+    if (body.turnstileSiteKey !== undefined) {
+      if (body.turnstileSiteKey === null || body.turnstileSiteKey.trim() === "") {
+        await ctx.db.query("DELETE FROM settings WHERE key = 'selfserve.turnstile_site_key'");
+      } else {
+        await ctx.settings.set("selfserve.turnstile_site_key", body.turnstileSiteKey.trim(), { category: "system" });
+      }
+    }
+    if (body.turnstileSecret !== undefined) {
+      if (body.turnstileSecret === null || body.turnstileSecret.trim() === "") {
+        await ctx.db.query("DELETE FROM settings WHERE key = 'selfserve.turnstile_secret'");
+      } else {
+        await ctx.settings.set("selfserve.turnstile_secret", body.turnstileSecret.trim(), {
+          encrypted: true,
+          category: "system",
+        });
+      }
+    }
     if (body.maxCpu !== undefined) {
       if (body.maxCpu === null) await ctx.db.query("DELETE FROM settings WHERE key = 'provision.max_cpu'");
       else await ctx.settings.set("provision.max_cpu", String(body.maxCpu), { category: "system" });
@@ -158,6 +181,9 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         gotifyTokenChanged: body.gotifyToken !== undefined,
         gotifyPriority: body.gotifyPriority,
         gotifyEnabled: body.gotifyEnabled,
+        selfServeMode: body.selfServeMode,
+        turnstileSiteKeyChanged: body.turnstileSiteKey !== undefined,
+        turnstileSecretChanged: body.turnstileSecret !== undefined,
         maxCpu: body.maxCpu,
         maxRamMb: body.maxRamMb,
         maxDiskGb: body.maxDiskGb,
@@ -280,6 +306,11 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     const maxRamMb = await ctx.settings.get("provision.max_ram_mb");
     const maxDiskGb = await ctx.settings.get("provision.max_disk_gb");
     const staticAllowedCidrs = await ctx.settings.get("network.static_allowed_cidrs");
+    const [selfServeMode, turnstileSiteKey, turnstileSecret] = await Promise.all([
+      ctx.settings.getPlain("selfserve.mode"),
+      ctx.settings.get("selfserve.turnstile_site_key"),
+      ctx.settings.get("selfserve.turnstile_secret"),
+    ]);
     return {
       app: {
         cookieSecure: ctx.localConfig.app.cookieSecure,
@@ -302,6 +333,11 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         maxRamMb: maxRamMb ? Number(maxRamMb.value) : null,
         maxDiskGb: maxDiskGb ? Number(maxDiskGb.value) : null,
         staticAllowedCidrs: staticAllowedCidrs?.value ?? null,
+        selfServeMode: (["closed", "approval", "auto"] as const).includes(selfServeMode as "closed" | "approval" | "auto")
+          ? (selfServeMode as "closed" | "approval" | "auto")
+          : "approval",
+        turnstileSiteKey: turnstileSiteKey?.value ?? null,
+        turnstileSecretConfigured: !!turnstileSecret?.value,
       },
     };
   });

@@ -20,6 +20,7 @@ export const ROLE_IDS: Record<Role, string> = {
   ADMIN: "00000000-0000-0000-0000-000000000001",
   OPERATOR: "00000000-0000-0000-0000-000000000002",
   USER: "00000000-0000-0000-0000-000000000003",
+  GUEST: "00000000-0000-0000-0000-000000000004",
 };
 
 export const PERMISSIONS = [
@@ -86,6 +87,10 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
     "jobs.read",
     "health.read",
   ]),
+  // Self-serve default: NOTHING. A GUEST can authenticate (sessions,
+  // notifications, own profile) and nothing else — no VM visibility at all.
+  // Escalation is always a deliberate human action (roles granted in the UI).
+  GUEST: new Set<Permission>([]),
 };
 
 export function permissionsForRole(role: Role): ReadonlySet<Permission> {

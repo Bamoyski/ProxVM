@@ -52,6 +52,7 @@ export * from "./services/start-on-boot.js";
 export * from "./services/filtercheck.js";
 export * from "./services/notifications.js";
 export * from "./services/gotify.js";
+export * from "./services/turnstile.js";
 export * from "./services/threats.js";
 export * from "./provisioning/pipeline.js";
 export * from "./provisioning/defaults.js";

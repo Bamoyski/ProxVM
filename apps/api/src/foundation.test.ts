@@ -69,6 +69,7 @@ describe("api foundation", () => {
     const roles = await ctx.db.query("SELECT name FROM roles ORDER BY name");
     expect(roles.rows.map((r) => r.name)).toEqual([
       "ADMIN",
+      "GUEST",
       "OPERATOR",
       "Provisioner",
       "USER",

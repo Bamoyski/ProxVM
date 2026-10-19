@@ -1,7 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, setCsrfToken } from "../api.js";
 import { PASSWORD_RULES } from "@proxvm/shared";
+
+// The public signup shape: mode + the Turnstile SITE key (public by design;
+// the server's secret never reaches the browser).
+interface RegisterConfig {
+  mode: "closed" | "approval" | "auto";
+  turnstileSiteKey: string | null;
+}
+
+declare global {
+  interface Window {
+    turnstile?: {
+      getResponse: (widgetId?: string) => string;
+      reset: (widgetId?: string) => void;
+    };
+  }
+}
 
 function ruleMet(rule: (typeof PASSWORD_RULES)[number], password: string): boolean {
   if (rule.minLength !== null) return password.length >= rule.minLength;
@@ -19,6 +35,25 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [confirm, setConfirm] = useState("");
   const [registered, setRegistered] = useState(false);
+  const [cfg, setCfg] = useState<RegisterConfig | null>(null);
+
+  // Public fetch; fail-open (form as before, backend still enforces authoritatively).
+  useEffect(() => {
+    api<RegisterConfig>("/auth/register-config")
+      .then(setCfg)
+      .catch(() => setCfg(null));
+  }, []);
+
+  // Load the Turnstile script once the register form (may) need it.
+  useEffect(() => {
+    if (!cfg?.turnstileSiteKey) return;
+    if (document.getElementById("cf-turnstile-api")) return;
+    const script = document.createElement("script");
+    script.id = "cf-turnstile-api";
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+    script.async = true;
+    document.head.appendChild(script);
+  }, [cfg?.turnstileSiteKey]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,11 +75,29 @@ export default function Login() {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    // Serve-side demand (bot gate): if the widget exists, the implicit token
+    // is mandatory before we even hit the network.
+    let token: string | undefined;
+    if (cfg?.turnstileSiteKey) {
+      token = window.turnstile?.getResponse?.() || undefined;
+      if (!token) {
+        setBusy(false);
+        setError("Please complete the verification challenge.");
+        return;
+      }
+    }
     try {
-      await api("/auth/register", { method: "POST", body: { username, email: email || undefined, password } });
+      await api("/auth/register", { method: "POST", body: { username, email: email || undefined, password, turnstileToken: token } });
       setRegistered(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      // Turnstile tokens are single-use: a failed attempt must start over,
+      // or every retry would re-post the spent token and forever fail.
+      try {
+        window.turnstile?.reset?.();
+      } catch {
+        // widget not loaded; nothing to reset
+      }
     } finally {
       setBusy(false);
     }
@@ -58,6 +111,8 @@ export default function Login() {
   };
 
   const rulesOk = PASSWORD_RULES.every((r) => ruleMet(r, password)) && password === confirm && password.length > 0;
+  const registrationClosed = cfg?.mode === "closed";
+  const autoApprove = cfg?.mode === "auto";
 
   return (
     <div className="pv-shell" style={{ alignItems: "center", justifyContent: "center" }}>
@@ -66,7 +121,9 @@ export default function Login() {
         <p className="pv-sub" style={{ marginBottom: 18 }}>
           {mode === "login"
             ? "Sign in to manage virtual machines."
-            : "Request an account. An administrator approves every request."}
+            : autoApprove
+              ? "Create an account and get in. An administrator grants VM access."
+              : "Request an account. An administrator approves every request."}
         </p>
         <div className="pv-field">
           <label className="pv-label" htmlFor="login-username">Username</label>
@@ -127,22 +184,38 @@ export default function Login() {
                 {password && password === confirm ? "✓" : "○"} Passwords match
               </div>
             </div>
+            {cfg?.turnstileSiteKey && (
+              <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}>
+                <div className="cf-turnstile" data-sitekey={cfg.turnstileSiteKey} />
+              </div>
+            )}
           </>
         )}
         {error && <div className="pv-error">{error}</div>}
         {registered && (
-          <div className="pv-notice pv-notice-ok">Request sent. An administrator must approve it before you can sign in.</div>
+          <div className="pv-notice pv-notice-ok">
+            {autoApprove
+              ? "Account created! Sign in to get started — VM access is granted by an administrator."
+              : "Request sent. An administrator must approve it before you can sign in."}
+          </div>
         )}
         <button
           disabled={busy || (mode === "register" && (!username || !rulesOk))}
           className="pv-btn pv-btn-primary"
           style={{ width: "100%", marginBottom: 10 }}
         >
-          {busy ? (mode === "login" ? "Signing in…" : "Sending…") : mode === "login" ? "Sign in" : "Request account"}
+          {busy ? (mode === "login" ? "Signing in…" : "Sending…") : mode === "login" ? "Sign in" : autoApprove ? "Create account" : "Request account"}
         </button>
-        <button type="button" onClick={() => switchMode(mode === "login" ? "register" : "login")} className="pv-btn pv-btn-link" style={{ width: "100%", fontSize: "0.8rem" }}>
-          {mode === "login" ? "No account? Request one" : "Have an account? Sign in"}
-        </button>
+        {!registrationClosed && (
+          <button type="button" onClick={() => switchMode(mode === "login" ? "register" : "login")} className="pv-btn pv-btn-link" style={{ width: "100%", fontSize: "0.8rem" }}>
+            {mode === "login" ? "No account? Request one" : "Have an account? Sign in"}
+          </button>
+        )}
+        {registrationClosed && mode === "register" && (
+          <button type="button" onClick={() => switchMode("login")} className="pv-btn pv-btn-link" style={{ width: "100%", fontSize: "0.8rem" }}>
+            Have an account? Sign in
+          </button>
+        )}
         <div style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginTop: 16, textAlign: "center" }}>
           <a href="https://github.com/Bamoyski/ProxVM" target="_blank" rel="noopener noreferrer">
             GitHub repository &amp; documentation

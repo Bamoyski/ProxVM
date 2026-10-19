@@ -350,7 +350,7 @@ export default function App() {
           </div>
         )}
         <Routes>
-          <Route path="/" element={<Dashboard me={me} />} />
+          <Route path="/" element={<Dashboard me={me} can={(perm) => canNav(perm, true)} />} />
           <Route path="/vms" element={<Vms me={me} />} />
           <Route path="/vms/:id" element={<VmDetail me={me} />} />
           <Route path="/automations" element={<Automations can={(perm) => canNav(perm, helpLegacy(perm))} />} />

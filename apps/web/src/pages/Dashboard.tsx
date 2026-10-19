@@ -82,9 +82,14 @@ function loadLayout(): Layout {
   }
 }
 
-export default function Dashboard({ me }: { me: Me }) {
+export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) => boolean }) {
   const qc = useQueryClient();
   const privileged = isPrivileged(me.roles);
+  // Self-serve GUEST accounts hold zero permissions: without vm.list there
+  // is no dashboard to show — every widget would just be a 403 error box.
+  // The explicit "awaiting access" state replaces all of it until an admin
+  // grants roles.
+  const canList = can ? can("vm.list") : true;
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [customizing, setCustomizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,11 +113,13 @@ export default function Dashboard({ me }: { me: Me }) {
     queryKey: ["vms"],
     queryFn: () => api<{ vms: Array<VmRow & { guacamole: { created: boolean } | null; credentialStatus: string | null }> }>("/vms"),
     refetchInterval: 15000,
+    enabled: canList,
   });
   const { data: jobs } = useQuery({
     queryKey: ["jobs"],
     queryFn: () => api<{ jobs: Array<{ id: string; status: string; error: string | null; createdAt: string }> }>("/jobs?limit=5"),
     refetchInterval: 10000,
+    enabled: canList,
   });
   const { data: audit } = useQuery({
     queryKey: ["audit-recent"],
@@ -123,6 +130,7 @@ export default function Dashboard({ me }: { me: Me }) {
     queryKey: ["vm-services"],
     queryFn: () => api<{ vmServices: Array<{ vmId: string; services: Array<{ port: number; service: string }> }> }>("/vm-services"),
     refetchInterval: 60000,
+    enabled: canList,
   });
   const { data: mine } = useQuery({
     queryKey: ["my-activity"],
@@ -327,6 +335,20 @@ export default function Dashboard({ me }: { me: Me }) {
       ),
     },
   };
+
+  if (!canList) {
+    return (
+      <div className="pv-page pv-page-narrow">
+        <PageTitle title="Dashboard" description="Your account is active but has no VM access yet." />
+        <Section title="Welcome">
+          <Empty
+            title="Awaiting VM access"
+            body="Your account was created with no permissions. An administrator will grant access — once VMs are assigned to you, they appear here along with remote-access buttons and credentials."
+          />
+        </Section>
+      </div>
+    );
+  }
 
   return (
     <div className="pv-page">

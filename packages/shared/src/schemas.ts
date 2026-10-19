@@ -65,6 +65,8 @@ export const roleSchema = z.enum(ROLES);
 
 // Self-service account request. Same identity/password rules as admin
 // creation; approval (by an administrator) is a separate, authenticated step.
+// turnstileToken: the Cloudflare Turnstile widget's token, verified
+// server-side only when the server has a Turnstile secret configured.
 export const registrationSchema = z.object({
   username: z
     .string()
@@ -73,6 +75,7 @@ export const registrationSchema = z.object({
     .regex(/^[a-zA-Z0-9._-]+$/, "Username may contain letters, numbers, dots, dashes, underscores"),
   email: z.string().email().optional().or(z.literal("").transform(() => undefined)),
   password: passwordComplexity,
+  turnstileToken: z.string().min(1).max(4096).optional(),
 });
 
 // Client-side checklist mirror of passwordComplexity (backend authoritative).

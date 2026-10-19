@@ -3,15 +3,20 @@
 // Permissions: mostly unauthenticated by design (login/register) or any
 //   authenticated session (logout/change-password); no named permission gates.
 // Rate limits: login 20/min/IP + 10/min/username, register 5/min/IP,
-//   change-password 10/min/IP + 10/min/account (brute-force throttles).
+//   register-config 30/min/IP, change-password 10/min/IP + 10/min/account
+//   (brute-force throttles). Register-config keys on request.ip, which the
+//   trust-proxy chain resolves to the true visitor behind the tunnel, so the
+//   buckets are per-client rather than one shared internet-wide pool.
 // Security: uniform 401s hide user existence; dummy Argon2 equalizes timing;
 //   sessions are httpOnly SameSite=strict; password changes revoke all
-//   sessions + Guacamole tokens. Every outcome is audited.
+//   sessions + Guacamole tokens. Registration honors the self-serve mode
+//   dial (closed/approval/auto) and verifies a Turnstile token whenever the
+//   server has a Turnstile secret configured. Every outcome is audited.
 // ---------------------------------------------------------------------------
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
-import { alertAdmins, hashPassword, verifyPassword, toPublicUser } from "@proxvm/core";
+import { alertAdmins, getSelfServeConfig, hashPassword, verifyPassword, verifyTurnstileToken, toPublicUser } from "@proxvm/core";
 import { loginSchema, passwordComplexity, registrationSchema } from "@proxvm/shared";
 import { SESSION_COOKIE } from "../plugins/auth.js";
 
@@ -138,6 +143,22 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
     },
   );
 
+  // Public signup configuration for the login page. Unauthenticated by
+  // design; only shapes that are already public on their own (the mode
+  // choice, the Turnstile SITE key — public as part of the widget). The
+  // secret never appears here.
+  app.get(
+    "/auth/register-config",
+    { config: { csrf: "skip", rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async () => {
+      const cfg = await getSelfServeConfig(ctx.settings);
+      return {
+        mode: cfg.mode,
+        turnstileSiteKey: cfg.turnstileSiteKey,
+      };
+    },
+  );
+
   // Self-service account request. Unauthenticated by design; tightly
   // rate-limited (bots) and inert until an administrator approves it.
   // Duplicate usernames (accounts or pending requests) get a 409.
@@ -148,11 +169,70 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
     },
     async (request, reply) => {
       const body = registrationSchema.parse(request.body);
+      const selfServe = await getSelfServeConfig(ctx.settings);
+      if (selfServe.mode === "closed") {
+        return reply.status(403).send({
+          code: "REGISTRATION_CLOSED",
+          message: "Registration is closed. Ask an administrator to create an account.",
+        });
+      }
+      // Fail closed on the bot gate: a configured secret makes the token
+      // mandatory, and a missing/misused token is a 4xx, never a queue entry.
+      if (selfServe.turnstileSecret) {
+        if (!body.turnstileToken) {
+          return reply.status(400).send({
+            code: "TURNSTILE_REQUIRED",
+            message: "Please complete the verification challenge.",
+          });
+        }
+        const human = await verifyTurnstileToken(selfServe.turnstileSecret, body.turnstileToken, request.ip);
+        if (!human) {
+          return reply.status(400).send({
+            code: "TURNSTILE_FAILED",
+            message: "Verification failed. Please try the challenge again.",
+          });
+        }
+      }
+      const passwordHash = await hashPassword(body.password);
+
+      // AUTO: create instantly with the zero-permission GUEST role. The
+      // handler computed the effective mode (auto degrades to approval
+      // without a Turnstile secret) and every user just created here is
+      // audited + announced so escalation stays a human decision.
+      if (selfServe.mode === "auto") {
+        try {
+          const user = await ctx.users.create({
+            username: body.username,
+            email: body.email,
+            passwordHash,
+            roles: ["GUEST"],
+          });
+          await app.audit(request, {
+            event: "USER_CREATED",
+            actorUsername: body.username,
+            ip: request.ip,
+            detail: { selfServe: true, roles: ["GUEST"], username: body.username },
+          });
+          await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+            kind: "user",
+            title: `New self-serve account: ${body.username}`,
+            body: "Auto-approved into GUEST (no VM access). Grant roles from the Users page when you vet them.",
+            link: "/users",
+          });
+          return reply.status(201).send({ ok: true, autoApproved: true });
+        } catch (err) {
+          if ((err as { code?: string })?.code === "23505" || (err as { code?: string })?.code === "CONFLICT") {
+            return reply.status(409).send({ code: "CONFLICT", message: "Username already exists or has a pending request" });
+          }
+          throw err;
+        }
+      }
+
       try {
         const created = await ctx.registration.request({
           username: body.username,
           email: body.email,
-          passwordHash: await hashPassword(body.password),
+          passwordHash,
         });
         await app.audit(request, {
           event: "REGISTRATION_REQUESTED",

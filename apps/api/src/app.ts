@@ -66,6 +66,14 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
+  // Parsed once, used twice: Fastify resolves client IPs with it, and
+  // threat detection reuses the list as "shared egress" addresses — an
+  // address trusted as a proxy hop can never identify a client (every
+  // tunneled user arrives as the hop), so IP-correlation rules must not
+  // attribute findings to it. The legacy trust-everything values
+  // ("1"/"true") cannot be enumerated and suppress nothing.
+  const trustProxy = parseTrustProxy(process.env.PROXVM_TRUST_PROXY);
+  const sharedEgressIps = Array.isArray(trustProxy) ? trustProxy : [];
   const app = Fastify({
     logger: false,
     // Client-IP handling: derive request.ip from the socket by default and
@@ -80,7 +88,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // true visitor IP inside cloudflared's own appended hop, so trusting the
     // tunnel egress resolves tunneled traffic to real clients while forged
     // outer entries stay ignored. That egress IP needs a DHCP reservation.
-    trustProxy: parseTrustProxy(process.env.PROXVM_TRUST_PROXY),
+    // The same list also feeds threat detection's shared-egress handling
+    // (rows carrying a hop address are treated as IP-less there).
+    trustProxy,
     bodyLimit: 1024 * 1024,
   });
 
@@ -237,7 +247,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(guacamoleRoutes, { prefix: "/api", ctx });
     await app.register(jobRoutes, { prefix: "/api", ctx });
     await app.register(auditRoutes, { prefix: "/api", ctx });
-    await app.register(threatRoutes, { prefix: "/api", ctx });
+    await app.register(threatRoutes, { prefix: "/api", ctx, sharedEgressIps });
     await app.register(settingsRoutes, { prefix: "/api", ctx });
     await app.register(healthRoutes, { prefix: "/api", ctx });
     await app.register(iamRoutes, { prefix: "/api", ctx });
@@ -250,7 +260,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(backupRoutes, { prefix: "/api", ctx });
     startSessionCleanup(app, ctx);
     startIamSweep(app, ctx);
-    startHomelabTickers(app, ctx);
+    startHomelabTickers(app, ctx, SCHEDULE_TICK_MS, HEALTH_TICK_MS, sharedEgressIps);
   } else {
     await app.register(setupRoutes, { prefix: "/api", setupMode: true });
   }
@@ -321,13 +331,17 @@ export function startScanDetection(
 /**
  * Background homelab tickers: scheduled power actions every minute,
  * connection-health snapshots every 5 minutes (first health pass starts on
- * the first tick to avoid hammering Guacamole at boot). Exported for testing.
+ * the first tick to avoid hammering Guacamole at boot), threat webhook
+ * alerts, and infrastructure health probes. `sharedEgressIps` is the
+ * trusted-proxy list (see buildApp) so threat alerts skip hop addresses.
+ * Exported for testing.
  */
 export function startHomelabTickers(
   app: FastifyInstance,
   ctx: CoreContext,
   scheduleIntervalMs = SCHEDULE_TICK_MS,
   healthIntervalMs = HEALTH_TICK_MS,
+  sharedEgressIps: string[] = [],
 ): void {
   const runSchedules = async (): Promise<void> => {
     try {
@@ -514,7 +528,7 @@ export function startHomelabTickers(
   // configured means this is a cheap no-op.
   const runThreats = async (): Promise<void> => {
     try {
-      const result = await evaluateThreatAlerts({ settings: ctx.settings, audit: ctx.audit });
+      const result = await evaluateThreatAlerts({ settings: ctx.settings, audit: ctx.audit, sharedEgressIps });
       if (result.fired > 0) {
         ctx.logger.info(result, "threat webhook alerts fired");
         // Admin delivery for the same findings (best-effort; the webhook

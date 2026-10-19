@@ -35,6 +35,7 @@ import { vmIpUniqueMigration } from "./migrations/016_vm_ip_unique.js";
 import { pbsBackupsMigration } from "./migrations/017_pbs_backups.js";
 import { notificationsMigration } from "./migrations/020_notifications.js";
 import { guacDirectLoginMigration } from "./migrations/021_guac_direct_login.js";
+import { guestRoleMigration } from "./migrations/022_guest_role.js";
 import { sshHostKeysMigration } from "./migrations/018_ssh_host_keys.js";
 import { csrfTokenDerivationMigration } from "./migrations/019_csrf_token_derivation.js";
 
@@ -60,6 +61,7 @@ export const MIGRATIONS: Migration[] = [
   { id: "019", name: "csrf_token_derivation", sql: csrfTokenDerivationMigration },
   { id: "020", name: "notifications", sql: notificationsMigration },
   { id: "021", name: "guac_direct_login", sql: guacDirectLoginMigration },
+  { id: "022", name: "guest_role", sql: guestRoleMigration },
 ];
 
 // --- Runner ----------------------------------------------------------------

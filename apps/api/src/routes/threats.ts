@@ -16,14 +16,19 @@ import { detectOutOfBand, detectThreats, findNewIpLogins, type LiveVmPower } fro
 // Threat detection: point-in-time findings recomputed from the audit trail
 // on every request. Same visibility as the audit log itself (audit.read);
 // findings carry no VM names/ids so privacy-flagged entries need no extra
-// filtering.
+// filtering. Shared egress hops (PROXVM_TRUST_PROXY) are passed in from the
+// app so IP-based rules never blame the tunnel/docker hop for one client.
 /**
  * Register the threat-findings endpoint.
  * WHY recompute per request: findings are a view over the audit trail, not
  * stored state, so they can never go stale or desync from retention prunes.
  */
-export async function threatRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
+export async function threatRoutes(
+  app: FastifyInstance,
+  opts: { ctx: CoreContext; sharedEgressIps?: string[] },
+): Promise<void> {
   const ctx = opts.ctx;
+  const sharedEgressIps = opts.sharedEgressIps ?? [];
 
   app.get(
     "/threats",
@@ -34,9 +39,9 @@ export async function threatRoutes(app: FastifyInstance, opts: { ctx: CoreContex
         .parse(request.query);
       const since = new Date(Date.now() - query.days * 86400000);
       const rows = await ctx.audit.list({ limit: 5000, since });
-      const findings = detectThreats(rows, Date.now(), { windowDays: query.days });
+      const findings = detectThreats(rows, Date.now(), { windowDays: query.days, sharedEgressIps });
       if (query.days >= 2) {
-        findings.push(...(await findNewIpLogins(ctx.db, query.days)));
+        findings.push(...(await findNewIpLogins(ctx.db, query.days, { sharedEgressIps })));
       }
       // Out-of-band power changes: guests running in Proxmox with no
       // ProxVM-recorded start. Best-effort — a down Proxmox API skips the

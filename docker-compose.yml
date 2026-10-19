@@ -60,6 +60,10 @@ services:
       # The egress IP MUST have a DHCP reservation — if it drifts, tunneled
       # traffic silently reverts to the tunnel IP. Override in .env only if
       # your topology differs.
+      # These entries double as "shared egress" for threat detection: rows
+      # carrying a trusted hop address (attribution fell back to the hop)
+      # never identify a client, so per-IP findings skip them while
+      # per-account rules still run.
       PROXVM_TRUST_PROXY: "${PROXVM_TRUST_PROXY:-172.16.0.0/12,10.0.0.0/8,127.0.0.1/32,::1/128,192.168.1.138}"
       NODE_ENV: production
       # Cloudflare domain automation. Values come from the local .env file

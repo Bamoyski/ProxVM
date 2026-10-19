@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { newDb } from "pg-mem";
+import { Pool } from "pg";
 import {
   assertSafeWebhookUrl,
   detectOutOfBand,
   detectThreats,
   evaluateThreatAlerts,
+  findNewIpLogins,
+  isSharedEgressIp,
   type ThreatFinding,
 } from "./services/threats.js";
 import type { AuditRecord } from "@proxvm/shared";
@@ -223,5 +227,130 @@ describe("detectThreats", () => {
       evaluated: 0,
       fired: 0,
     });
+  });
+});
+
+describe("shared egress addresses", () => {
+  const EGRESS = ["172.16.0.0/12", "192.168.1.138"];
+
+  it("matches hosts, IPv4 CIDRs, and IPv6 host routes; ignores malformed entries", () => {
+    expect(isSharedEgressIp("192.168.1.138", EGRESS)).toBe(true);
+    expect(isSharedEgressIp("172.20.1.1", ["172.16.0.0/12"])).toBe(true);
+    expect(isSharedEgressIp("172.32.0.1", ["172.16.0.0/12"])).toBe(false);
+    expect(isSharedEgressIp("10.0.0.5", ["10.0.0.5"])).toBe(true);
+    expect(isSharedEgressIp("::1", ["::1/128"])).toBe(true);
+    expect(isSharedEgressIp("10.0.0.7", ["not-an-ip", "10.0.0.0/33", ""])).toBe(false);
+  });
+
+  it("suppresses per-IP rules but keeps per-account bursts for the tunnel hop", () => {
+    // The production pattern: several users' failures plus a success, all
+    // recorded as one cloudflared egress hop.
+    const rows = [
+      ...[1, 2, 3, 4, 5, 6].map((m) => row("LOGIN_FAILED", { actor: "spray-a", ip: "192.168.1.138", minutesAgo: m })),
+      ...[1, 2, 3, 4, 5, 6].map((m) => row("LOGIN_FAILED", { actor: "spray-b", ip: "192.168.1.138", minutesAgo: m })),
+      ...[1, 2, 3, 4, 5, 6].map((m) => row("LOGIN_FAILED", { actor: "spray-c", ip: "192.168.1.138", minutesAgo: m })),
+      row("LOGIN", { actor: "admin", ip: "192.168.1.138", minutesAgo: 0 }),
+      row("SCAN_DETECTED", { ip: "192.168.1.138", detail: { count: 25, method: "GET", path: "/api/x" } }),
+    ];
+    const findings = detectThreats(rows, NOW, { sharedEgressIps: EGRESS });
+
+    // No spray, no "compromised" critical, no recon scan from the hop...
+    expect(findings.some((f) => f.id.startsWith("password-spray-"))).toBe(false);
+    expect(findings.some((f) => f.id.startsWith("compromised-login-"))).toBe(false);
+    expect(findings.some((f) => f.id.startsWith("recon-scan-"))).toBe(false);
+    expect(findings.some((f) => f.severity === "critical")).toBe(false);
+
+    // ...but the account-scoped burst still fires, with the hop scrubbed.
+    const burst = byId(findings, "brute-force-account-spray-a");
+    expect(burst?.severity).toBe("high");
+    expect(burst?.ip).toBeNull();
+    expect(burst?.summary).not.toContain("192.168.1.138");
+
+    // Control: without the egress list the same rows fire spray + critical.
+    const raw = detectThreats(rows, NOW);
+    expect(byId(raw, "password-spray-192-168-1-138")).toBeTruthy();
+    expect(byId(raw, "compromised-login-admin-192-168-1-138")?.severity).toBe("critical");
+  });
+
+  it("matches CIDR entries and leaves real client IPs on the hook", () => {
+    const rows = [
+      ...[1, 2, 3, 4, 5].map((m) => row("LOGIN_FAILED", { actor: "bob", ip: "172.20.4.7", minutesAgo: m })),
+      row("LOGIN", { actor: "bob", ip: "172.20.4.7", minutesAgo: 0 }),
+      ...[11, 12, 13, 14, 15].map((m) => row("LOGIN_FAILED", { actor: "eve", ip: "203.0.113.9", minutesAgo: m })),
+      row("LOGIN", { actor: "eve", ip: "203.0.113.9", minutesAgo: 0 }),
+    ];
+    const findings = detectThreats(rows, NOW, { sharedEgressIps: EGRESS });
+    expect(findings.some((f) => f.ip === "172.20.4.7")).toBe(false);
+    expect(byId(findings, "compromised-login-eve-203-0-113-9")?.severity).toBe("critical");
+  });
+
+  it("never webhook-alerts on shared-egress-only correlations", async () => {
+    const posted: unknown[] = [];
+    const store = new Map<string, string>([
+      ["threats.webhook_url", "https://hooks.example.com/x"],
+      ["threats.min_severity", "high"],
+    ]);
+    const rows = [
+      ...[1, 2].flatMap((i) =>
+        [1, 2].map((k) => row("LOGIN_FAILED", { actor: `u${i}${k}`, ip: "192.168.1.138", minutesAgo: i * 2 + k })),
+      ),
+      row("LOGIN_FAILED", { actor: "u30", ip: "192.168.1.138", minutesAgo: 6 }),
+      row("LOGIN", { actor: "u11", ip: "192.168.1.138", minutesAgo: 0 }),
+    ];
+    const deps = {
+      settings: {
+        getPlain: async (k: string) => store.get(k) ?? null,
+        set: async (k: string, v: string) => {
+          store.set(k, v);
+        },
+      },
+      audit: { list: async () => rows },
+      sharedEgressIps: ["192.168.1.138"],
+    };
+    // Spray/critical would fire on these rows without the egress list; with
+    // it, no per-account rule reaches 5 failures, so nothing is posted.
+    const result = await evaluateThreatAlerts(deps as never, async (_u, b) => void posted.push(b), NOW);
+    expect(result).toEqual({ evaluated: 0, fired: 0 });
+    expect(posted).toHaveLength(0);
+  });
+});
+
+describe("findNewIpLogins with shared egress", () => {
+  let pool: Pool;
+  let cleanup: () => Promise<void>;
+
+  beforeAll(async () => {
+    const mem = newDb();
+    mem.public.none("CREATE TABLE audit_logs (event text, actor_username text, ip text, created_at timestamptz)");
+    const { Pool: MemPool } = mem.adapters.createPg();
+    pool = new MemPool() as unknown as Pool;
+    cleanup = async () => {
+      await pool.end().catch(() => undefined);
+    };
+    const at = new Date(Date.now() - 3600000);
+    const insert = (actor: string, ip: string) =>
+      pool.query("INSERT INTO audit_logs (event, actor_username, ip, created_at) VALUES ('LOGIN', $1, $2, $3)", [
+        actor,
+        ip,
+        at,
+      ]);
+    await insert("admin", "192.168.1.138");
+    await insert("carol", "203.0.113.5");
+  });
+
+  afterAll(async () => {
+    await cleanup();
+  });
+
+  it("skips egress hops but still flags first logins from real addresses", async () => {
+    const unfiltered = await findNewIpLogins(pool, 7);
+    expect(unfiltered.map((f) => f.id)).toEqual(
+      expect.arrayContaining(["new-ip-admin-192-168-1-138", "new-ip-carol-203-0-113-5"]),
+    );
+
+    const filtered = await findNewIpLogins(pool, 7, { sharedEgressIps: ["172.16.0.0/12", "192.168.1.138"] });
+    const ids = filtered.map((f) => f.id);
+    expect(ids).not.toContain("new-ip-admin-192-168-1-138");
+    expect(ids).toContain("new-ip-carol-203-0-113-5");
   });
 });

@@ -6,7 +6,10 @@
 //   validation (z.enum) and compile-time narrowing, so adding a value is a
 //   single deliberate edit. AUDIT_EVENTS is append-only — history depends it.
 // ---------------------------------------------------------------------------
-export const ROLES = ["ADMIN", "OPERATOR", "USER"] as const;
+// GUEST: granted by self-serve signup. Deliberately carries NO permission
+// (rbac.ts) — the account can authenticate and see its own profile/notifications
+// only, until an administrator grants VM access or assigns roles.
+export const ROLES = ["ADMIN", "OPERATOR", "USER", "GUEST"] as const;
 export type Role = (typeof ROLES)[number];
 
 export const OS_TYPES = ["linux", "windows"] as const;

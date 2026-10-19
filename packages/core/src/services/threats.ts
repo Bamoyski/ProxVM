@@ -8,6 +8,12 @@
 //   the webhook URL is SSRF-guarded with resolve-and-pin + manual redirects.
 // - findNewIpLogins is the one stateful rule: it queries history beyond the
 //   window to spot first-seen (actor, ip) logins.
+// - Shared egress addresses (trusted proxy hops — e.g. the Cloudflare Tunnel
+//   box — from PROXVM_TRUST_PROXY): rows carrying one of them identify the
+//   hop, never the client, because every tunneled user shows the same
+//   address. Such rows count as ip-less here, so per-IP rules (spray,
+//   compromised-login, recon scans) cannot fire on them while per-account
+//   rules still see every event.
 // ---------------------------------------------------------------------------
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { Pool } from "pg";
@@ -48,6 +54,16 @@ export interface ThreatFinding {
 export interface ThreatDetectOptions {
   /** Lookback window in days. Default 7, capped at 30 by the API route. */
   windowDays?: number;
+  /**
+   * Addresses (plain IPs or IPv4 CIDRs — the PROXVM_TRUST_PROXY list works
+   * verbatim) that are shared proxy hops, not clients. Rows carrying one of
+   * them are treated as ip-less: every user behind a single hop (Cloudflare
+   * Tunnel egress, docker network) shows the same address, so per-IP
+   * correlation on it is meaningless. Per-account rules still run.
+   * Consumed by detectThreats and findNewIpLogins; detectOutOfBand ignores
+   * it (no IP dimension).
+   */
+  sharedEgressIps?: string[];
 }
 
 const DAY_MS = 86400000;
@@ -87,6 +103,67 @@ function span(rows: AuditRecord[]): { firstSeen: Date; lastSeen: Date } {
   return { firstSeen: first, lastSeen: last };
 }
 
+/** Strict dotted-quad IPv4 to unsigned int; null for anything else. */
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = Number(part);
+    if (octet > 255) return null;
+    n = ((n << 8) | octet) >>> 0;
+  }
+  return n;
+}
+
+/**
+ * True when `ip` is one of the deployment's shared egress addresses.
+ * Entries are plain hosts ("192.168.1.138") or CIDRs ("10.0.0.0/8",
+ * "::1/128" as a host route); malformed entries simply never match.
+ * WHY this exists: a shared hop address says nothing about WHICH client a
+ * request came from (all tunneled users look identical), so per-IP rules
+ * must not treat it as an attacker identity.
+ */
+export function isSharedEgressIp(ip: string, sharedEgressIps: readonly string[]): boolean {
+  const value = ip.trim().toLowerCase();
+  if (!value) return false;
+  for (const raw of sharedEgressIps) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry) continue;
+    const slash = entry.indexOf("/");
+    if (slash === -1) {
+      if (value === entry) return true;
+      continue;
+    }
+    const base = entry.slice(0, slash);
+    const prefix = Number(entry.slice(slash + 1));
+    if (!Number.isInteger(prefix) || prefix < 0) continue;
+    const ipNum = ipv4ToInt(value);
+    const baseNum = ipv4ToInt(base);
+    if (ipNum === null || baseNum === null) {
+      // Non-IPv4 entries can only ever match as a host route (e.g. ::1/128).
+      if (prefix === 128 && value === base) return true;
+      continue;
+    }
+    if (prefix > 32) continue;
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    if (((ipNum & mask) >>> 0) === ((baseNum & mask) >>> 0)) return true;
+  }
+  return false;
+}
+
+/**
+ * Demote shared-egress rows to ip-less before the rules run: the address
+ * names the hop, never the client, so IP correlation on it would fire on
+ * every user of the tunnel at once (spray, compromised-login, recon). The
+ * events themselves survive for per-account rules.
+ */
+function stripSharedEgress(rows: AuditRecord[], sharedEgressIps?: readonly string[]): AuditRecord[] {
+  if (!sharedEgressIps?.length) return rows;
+  return rows.map((r) => (r.ip && isSharedEgressIp(r.ip, sharedEgressIps) ? { ...r, ip: null } : r));
+}
+
   // -- Auth rules: brute-force, spray, compromised-login, lockout probes
 /** N or more failed logins against one account inside 15 minutes. */
 function bruteForceAccounts(rows: AuditRecord[]): ThreatFinding[] {
@@ -105,12 +182,13 @@ function bruteForceAccounts(rows: AuditRecord[]): ThreatFinding[] {
     }
     if (!fires) continue;
     const ips = [...new Set(attempts.map((r) => r.ip).filter((ip): ip is string => !!ip))];
+    const source = ips.length ? ` from ${ips.length === 1 ? ips[0] : `${ips.length} IPs`}` : "";
     out.push({
       id: `brute-force-account-${slug(username)}`,
       category: "brute-force",
       severity: "high",
       title: `Possible brute force on account "${username}"`,
-      summary: `${attempts.length} failed logins in 15 minutes${ips.length ? ` from ${ips.length === 1 ? ips[0] : `${ips.length} IPs`}` : ""}. If this is not the account owner, lock the account and block the source.`,
+      summary: `${attempts.length} failed logins in 15 minutes${source}. If this is not the account owner, lock the account${ips.length ? " and block the source" : ""}.`,
       actorUsername: username,
       ip: ips.length === 1 ? ips[0]! : null,
       count: attempts.length,
@@ -455,7 +533,7 @@ export const SEVERITY_RANK: Record<ThreatSeverity, number> = { critical: 0, high
 
 /** Runs every rule over windowed rows. Pure: same rows + now = same findings. */
 export function detectThreats(rows: AuditRecord[], nowMs = Date.now(), opts?: ThreatDetectOptions): ThreatFinding[] {
-  const windowed = windowStart(rows, nowMs, opts?.windowDays ?? 7);
+  const windowed = stripSharedEgress(windowStart(rows, nowMs, opts?.windowDays ?? 7), opts?.sharedEgressIps);
   const findings = [
     ...bruteForceAccounts(windowed),
     ...passwordSpray(windowed),
@@ -600,6 +678,8 @@ export function assertSafeWebhookUrl(raw: string): string {
 export interface ThreatAlertDeps {
   settings: Pick<SettingsService, "getPlain" | "set">;
   audit: Pick<AuditService, "list">;
+  /** Shared egress hops (the PROXVM_TRUST_PROXY list); see ThreatDetectOptions. */
+  sharedEgressIps?: string[];
 }
 
 async function defaultPost(url: string, body: unknown): Promise<void> {
@@ -656,8 +736,9 @@ async function defaultPost(url: string, body: unknown): Promise<void> {
 /**
  * Evaluates the last day of audit events and POSTs fresh findings at or
  * above the configured minimum severity. Finding ids are deterministic, so
- * already-alerted ids stored in settings dedupe across ticks. Fail-open:
- * throws on transport errors (the ticker logs and continues).
+ * already-alerted ids stored in settings dedupe across ticks. Shared egress
+ * hops are supplied via deps and never count as attacker identities.
+ * Fail-open: throws on transport errors (the ticker logs and continues).
  */
 export async function evaluateThreatAlerts(
   deps: ThreatAlertDeps,
@@ -670,7 +751,7 @@ export async function evaluateThreatAlerts(
   const minSev = ((await deps.settings.getPlain(THREAT_MIN_SEVERITY_KEY)) ?? "high").trim().toLowerCase();
   const minRank = SEVERITY_RANK[minSev as ThreatSeverity] ?? SEVERITY_RANK.high;
   const rows = await deps.audit.list({ limit: 5000, since: new Date(nowMs - DAY_MS) });
-  const findings = detectThreats(rows, nowMs, { windowDays: 1 }).filter(
+  const findings = detectThreats(rows, nowMs, { windowDays: 1, sharedEgressIps: deps.sharedEgressIps }).filter(
     (f) => SEVERITY_RANK[f.severity] <= minRank,
   );
   if (!findings.length) return { evaluated: 0, fired: 0 };
@@ -710,9 +791,15 @@ export async function evaluateThreatAlerts(
 /**
  * Logins from an (actor, ip) pair with no earlier login on record: a new
  * device, network, or credential-stuffing success from an unfamiliar egress.
- * Needs history beyond the findings window, so it queries directly.
+ * Needs history beyond the findings window, so it queries directly. Pairs
+ * whose ip is a shared egress address are skipped — the hop is not a device,
+ * and every tunneled user would otherwise read as "first login".
  */
-export async function findNewIpLogins(db: Pool, sinceDays: number): Promise<ThreatFinding[]> {
+export async function findNewIpLogins(
+  db: Pool,
+  sinceDays: number,
+  opts?: Pick<ThreatDetectOptions, "sharedEgressIps">,
+): Promise<ThreatFinding[]> {
   const since = new Date(Date.now() - sinceDays * DAY_MS);
   const recent = await db.query<{ actor_username: string; ip: string; last_seen: Date; logins: string }>(
     `SELECT actor_username, ip, MAX(created_at) AS last_seen, COUNT(*)::text AS logins
@@ -724,6 +811,7 @@ export async function findNewIpLogins(db: Pool, sinceDays: number): Promise<Thre
   );
   const out: ThreatFinding[] = [];
   for (const row of recent.rows) {
+    if (opts?.sharedEgressIps?.length && isSharedEgressIp(row.ip, opts.sharedEgressIps)) continue;
     const older = await db.query<{ c: string }>(
       `SELECT COUNT(*)::text AS c FROM audit_logs
         WHERE event = 'LOGIN' AND actor_username = $1 AND ip = $2 AND created_at < $3`,
