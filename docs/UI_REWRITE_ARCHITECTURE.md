@@ -113,6 +113,35 @@ apps/web/src/
 - Live behavior verification against the dev stack (vite + api) in a real
   browser for core flows.
 
+## Verification performed
+
+Browser verification ran against the dev server with a fixture API (a
+temporary mock on :4000 that mirrors the shapes the frontend declares — no
+live infrastructure was touched, and the mock lives only in the temp
+directory).
+
+| Check | Result |
+| --- | --- |
+| `npm.cmd run typecheck` | pass |
+| `npm.cmd run test` | pass — 605 tests (core 323, api 215 + 1 skipped, web 67) |
+| `npm.cmd run build` | pass — route-level chunks, no bundle warnings |
+| All 21 routes, both themes | no console errors, no failed requests |
+| All 20 legacy redirects | every one lands on the right page and content |
+| Lighthouse accessibility (12 pages × 2 themes) | 1.00, zero failures |
+| Lighthouse best-practices / SEO | 1.00 / 1.00 |
+| Layout at 390 / 768 / 1024 / 1440 px | no horizontal overflow anywhere |
+| Headings | exactly one visible `h1` per page (incl. Login and setup) |
+| Form controls | every input/select/textarea has an accessible name |
+| Pointer targets | no standalone control below 24 px |
+| Keyboard | Ctrl+K palette, focus trap + focus return in dialogs, Escape closes the topmost layer only |
+
+Defects found and fixed during this pass (all caught by the browser, not by
+the compiler): the mobile nav opener was hidden exactly when the sidebar
+becomes off-canvas; tab pages mounted their panel twice; several form
+controls had no accessible name; the tertiary text and link colours missed
+4.5:1 in light mode; and some standalone controls were under the 24 px
+minimum target size.
+
 ## Migration constraints
 
 - Route map and redirects are frozen: every old URL keeps working.
