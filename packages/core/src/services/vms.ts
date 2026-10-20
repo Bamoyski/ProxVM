@@ -353,7 +353,7 @@ export class VmsRepository {
     for (const vmId of [...new Set(vmIds)]) {
       try {
         const vm = await this.requireById(vmId);
-        if (enabled !== !vm.privacyFlag) {
+        if (enabled !== vm.privacyFlag) {
           await this.setPrivacyFlag(vm.id, enabled);
         }
         const vis = await this.visibleTo(userId, roles, vmId);

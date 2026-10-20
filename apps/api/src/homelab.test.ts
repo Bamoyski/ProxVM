@@ -101,11 +101,30 @@ describe("homelab endpoints", () => {
       return [{ time: 123, cpu: 0.1, mem: 100 }];
     },
     waitForTask: async () => undefined,
+    clusterFirewallOptions: async () => ({ enable: clusterFirewallOn ? 1 : 0 }),
+    setGuestFirewallOptions: async (_n: string, _v: number, opts: unknown) => {
+      calls.push(`setGuestFirewallOptions:${JSON.stringify(opts)}`);
+      return "";
+    },
+    guestFirewallRules: async () => guestRules,
+    createGuestFirewallRule: async (_n: string, _v: number, rule: Record<string, unknown>) => {
+      calls.push("createGuestFirewallRule");
+      guestRules.unshift({ pos: 0, ...rule });
+      return {};
+    },
+    deleteGuestFirewallRule: async (_n: string, _v: number, pos: number) => {
+      calls.push(`deleteGuestFirewallRule:${pos}`);
+      const i = guestRules.findIndex((r) => r.pos === pos);
+      if (i >= 0) guestRules.splice(i, 1);
+      return {};
+    },
     taskStatus: async (...args: unknown[]) => {
       calls.push(`taskStatus:${JSON.stringify(args)}`);
       return taskStatusResult;
     },
   };
+  let clusterFirewallOn = true;
+  const guestRules: Record<string, unknown>[] = [];
 
   beforeAll(async () => {
     const mem = newDb();
@@ -280,6 +299,178 @@ describe("homelab endpoints", () => {
     const results = (res.json() as { results: Array<{ vmId: string; ok: boolean; error?: string }> }).results;
     expect(results.find((r) => r.vmId === vmId)?.ok).toBe(true);
     expect(results.find((r) => r.vmId === "55555555-5555-4555-8555-555555555555")?.ok).toBe(false);
+  });
+
+  it("rejects malformed bulk actions and empty id lists up front", async () => {
+    const badAction = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "shutdown-all" },
+    });
+    expect(badAction.statusCode).toBe(400);
+    const emptyIds = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [], action: "privacy" },
+    });
+    expect(emptyIds.statusCode).toBe(400);
+  });
+
+  it("bulk privacy toggles with per-item visibility re-check", async () => {
+    // Alice holds no vm.manage: the privacy action is denied up front for her.
+    const denied = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authU(),
+      payload: { ids: [vmId], action: "privacy" },
+    });
+    expect(denied.statusCode).toBe(403);
+    // Admin flips privacy on while the VM is still visible to him.
+    const on = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "privacy" },
+    });
+    expect(on.statusCode).toBe(200);
+    expect((on.json() as { results: Array<{ ok: boolean; private: boolean }> }).results[0]).toMatchObject({ ok: true, private: true });
+    // A granted USER still sees the flagged VM, but the no-grant admin does not.
+    const grantedView = await app.inject({ method: "GET", url: `/api/vms/${vmId}`, headers: authU() });
+    expect(grantedView.statusCode).toBe(200);
+    const adminView = await app.inject({ method: "GET", url: `/api/vms/${vmId}`, headers: authA() });
+    expect(adminView.statusCode).toBeGreaterThanOrEqual(400);
+    // Re-authorization at execution: the same privacy bulk toggle now fails
+    // per item (flag on, admin has no grant) — the entry permission alone
+    // must not be enough.
+    const again = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "privacy" },
+    });
+    expect(again.statusCode).toBe(200);
+    const retried = (again.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
+    expect(retried.ok).toBe(false);
+    expect(retried.error).toBe("No access to this VM");
+    // The flip was still audited while it succeeded.
+    const audits = await ctx.db.query<{ event: string }>("SELECT event FROM audit_logs WHERE vm_id = $1 ORDER BY created_at DESC", [vmId]);
+    expect(audits.rows.map((r) => r.event)).toContain("PRIVACY_ENABLED");
+    // Restore the flag so later tests see the VM.
+    await ctx.vms.setPrivacyFlag(vmId, false);
+  });
+
+  it("bulk class switch is guarded by enabled schedules", async () => {
+    // No schedules: server -> user is allowed, and flipping back is too.
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "class" },
+    });
+    expect(first.statusCode).toBe(200);
+    expect((first.json() as { results: Array<{ ok: boolean; vmClass?: string }> }).results[0]).toMatchObject({ ok: true, vmClass: "user" });
+    const back = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "class" },
+    });
+    expect((back.json() as { results: Array<{ ok: boolean; vmClass?: string }> }).results[0]).toMatchObject({ ok: true, vmClass: "server" });
+    // With an enabled schedule, server -> user is refused per item: idle
+    // auto-shutdown would fight the scheduled power action.
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/schedules",
+      headers: authA(),
+      payload: { vmId, action: "stop", hour: 1, minute: 30, days: "1,2,3,4,5" },
+    });
+    expect(created.statusCode).toBe(200);
+    const guarded = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "class" },
+    });
+    expect(guarded.statusCode).toBe(200);
+    const guardedItem = (guarded.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
+    expect(guardedItem.ok).toBe(false);
+    expect(guardedItem.error).toMatch(/enabled schedules/);
+    // Once the schedule is gone the switch works again.
+    const schedule = (created.json() as { schedule: { id: string } }).schedule;
+    await app.inject({ method: "DELETE", url: `/api/schedules/${schedule.id}`, headers: authA() });
+    const after = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "class" },
+    });
+    expect((after.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
+    // Flip back to server for the start-on-boot/isolation tests below.
+    await ctx.vms.setVmClass(vmId, "server");
+  });
+
+  it("bulk start-on-boot writes the Proxmox onboot flag first", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "start-on-boot" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
+    // Proxmox-first: the onboot config write precedes the DB desired-state write.
+    expect(calls).toContain('updateConfig:{"onboot":1}');
+    expect((await ctx.vms.requireById(vmId)).startOnBoot).toBe(true);
+    const off = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "start-on-boot" },
+    });
+    expect((off.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
+    expect(calls).toContain('updateConfig:{"onboot":0}');
+    expect((await ctx.vms.requireById(vmId)).startOnBoot).toBe(false);
+  });
+
+  it("bulk isolation applies and removes the guest firewall ruleset", async () => {
+    const on = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "isolation" },
+    });
+    expect(on.statusCode).toBe(200);
+    expect((on.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
+    expect(calls).toContain('setGuestFirewallOptions:{"enable":true,"policy_in":"DROP","policy_out":"DROP"}');
+    expect(calls).toContain("createGuestFirewallRule");
+    expect((await ctx.vms.requireById(vmId)).firewallIsolated).toBe(true);
+    const off = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "isolation" },
+    });
+    expect((off.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
+    expect(calls).toContain('setGuestFirewallOptions:{"policy_in":"ACCEPT","policy_out":"ACCEPT"}');
+    expect((await ctx.vms.requireById(vmId)).firewallIsolated).toBe(false);
+    // Guard: with the cluster firewall disabled, guest rules would be silently
+    // ignored — the item must fail instead of lying about success.
+    clusterFirewallOn = false;
+    try {
+      const blocked = await app.inject({
+        method: "POST",
+        url: "/api/vms/bulk-action",
+        headers: authA(),
+        payload: { ids: [vmId], action: "isolation" },
+      });
+      const blockedItem = (blocked.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
+      expect(blockedItem.ok).toBe(false);
+      expect(blockedItem.error).toMatch(/cluster firewall is disabled/);
+    } finally {
+      clusterFirewallOn = true;
+    }
   });
 
   it("manages schedules with validation and guards", async () => {
