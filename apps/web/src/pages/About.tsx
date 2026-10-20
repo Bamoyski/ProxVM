@@ -1,4 +1,5 @@
 import { useSearchParams } from "react-router-dom";
+import { Tabs } from "../ui/index.js";
 import Help from "./Help.js";
 import Contact from "./Contact.js";
 import Donate from "./Donate.js";
@@ -20,19 +21,12 @@ export default function About({ can }: { can: (perm: string) => boolean }) {
 
   return (
     <div className="pv-page">
-      <div style={{ display: "flex", gap: 6, marginBottom: 12 }} role="tablist" aria-label="About views">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            aria-selected={t.id === active}
-            onClick={() => setParams({ tab: t.id })}
-            className={t.id === active ? "pv-btn pv-btn-primary pv-btn-sm" : "pv-btn pv-btn-sm"}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        tabs={tabs}
+        active={active}
+        onChange={(t) => setParams({ tab: t }, { replace: true })}
+        label="About views"
+      />
       {current.panel}
     </div>
   );

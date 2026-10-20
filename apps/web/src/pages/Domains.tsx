@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
+import { PageHeader, Section, EmptyState, Btn, Alert, errText } from "../ui/index.js";
 
 interface DomainConfig {
   canonical: string | null;
@@ -94,7 +94,7 @@ export default function Domains() {
     void qc.invalidateQueries({ queryKey: ["domains-filter-check"] });
   };
 
-  const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
+  const fail = (err: unknown) => setError(errText(err));
 
   const applyCopyFrom = (id: string): void => {
     setCopyFrom(id);
@@ -178,9 +178,9 @@ export default function Domains() {
 
   return (
     <div className="pv-page pv-page-narrow">
-      <PageTitle title="Domains" description="Canonical hostname, DNS, tunnel ingress, and filter watch." />
-      {error && <ErrorBox error={error} />}
-      {status && <div className="pv-notice pv-notice-ok">{status}</div>}
+      <PageHeader title="Domains" description="Canonical hostname, DNS, tunnel ingress, and filter watch." />
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
+      {status && <Alert kind="ok" title="Done">{status}</Alert>}
 
       <Section title="Status">
         <dl className="pv-kv">
@@ -237,7 +237,7 @@ export default function Domains() {
       </Section>
 
       <Section title="Switch domain">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" style={{ marginBottom: 8 }}>
+        <div className="pv-grid-2" style={{ marginBottom: 8 }}>
           <input
             className={input}
             placeholder="proxvm3"
@@ -321,8 +321,8 @@ export default function Domains() {
               )}
             </div>
           ))}
-          {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <Empty title="No records match" />}
-          {!config?.cloudflare.zoneId && <Empty title="No Zone ID wired" body="See .env.example on the server." />}
+          {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <EmptyState title="No records match" />}
+          {!config?.cloudflare.zoneId && <EmptyState title="No Zone ID wired" body="See .env.example on the server." />}
         </div>
         <div className="pv-field">
           <label className={label}>School user email</label>

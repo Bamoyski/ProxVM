@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
+import { PageHeader, Section, EmptyState, Btn, Alert, errText } from "../ui/index.js";
 
 interface CatalogEntry {
   code: string;
@@ -65,7 +65,7 @@ export default function UserPermissions() {
       setStatus(okMsg);
       reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
@@ -82,13 +82,13 @@ export default function UserPermissions() {
       <div style={{ marginBottom: 4 }}>
         <Link to="/users" style={{ fontSize: "0.8rem" }}>← Users</Link>
       </div>
-      <PageTitle title={`Permissions — ${data?.user.username ?? "…"}`} description="Direct assignments plus everything inherited from groups. The right column is the computed result." />
-      {error && <ErrorBox error={error} />}
-      {status && <div className="pv-notice pv-notice-ok">{status}</div>}
+      <PageHeader title={`Permissions — ${data?.user.username ?? "…"}`} description="Direct assignments plus everything inherited from groups. The right column is the computed result." />
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
+      {status && <Alert kind="ok" title="Done">{status}</Alert>}
       {!data ? (
         <div style={{ color: "var(--pv-text-3)" }}>Loading…</div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-10">
+        <div className="pv-grid-2">
           <div>
             <Section title="Roles" hint="Direct assignments with expiry and removal; group roles appear below.">
               <div style={{ marginBottom: 12 }}>
@@ -109,7 +109,7 @@ export default function UserPermissions() {
                     </Btn>
                   </div>
                 ))}
-                {!(data.roleAssignments ?? []).length && <Empty title="No direct role assignments" />}
+                {!(data.roleAssignments ?? []).length && <EmptyState title="No direct role assignments" />}
               </div>
               <div style={{ marginBottom: 12 }}>
                 {data.roles
@@ -203,7 +203,7 @@ export default function UserPermissions() {
               {(data.groups ?? []).map((g) => (
                 <div key={g.id} style={{ fontSize: "0.85rem", padding: "2px 0" }}>• {g.name}</div>
               ))}
-              {!data.groups.length && <Empty title="No group memberships" body="Manage them on the Groups page." />}
+              {!data.groups.length && <EmptyState title="No group memberships" body="Manage them on the Groups page." />}
             </Section>
           </div>
           <Section title="Effective permissions" hint="✓ granted (hover for source) · — denied. Inherited grants look the same as explicit ones by design; the tooltip names the source.">
@@ -234,7 +234,7 @@ export default function UserPermissions() {
                 <div style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }}>{v.sources.join("; ")}</div>
               </div>
             ))}
-            {!data.vmAccess.length && <Empty title="No VM access" />}
+            {!data.vmAccess.length && <EmptyState title="No VM access" />}
           </Section>
         </div>
       )}

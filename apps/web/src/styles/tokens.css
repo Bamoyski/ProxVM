@@ -1,0 +1,149 @@
+/* =====================================================================
+ * ProxVM design tokens.
+ * Dark-first, restrained, technical. Every surface, text, border, status
+ * and motion value in the app derives from these variables. Light theme
+ * remaps the same names — components never carry per-theme overrides.
+ * ===================================================================== */
+
+:root {
+  /* ---- neutral surfaces (dark) ---- */
+  --pv-bg: #0a0d12;          /* application background */
+  --pv-surface: #0f1319;     /* sidebar, panels, table body */
+  --pv-surface-2: #141a23;   /* raised: hover rows, menus, dialogs */
+  --pv-surface-3: #1a212c;   /* pressed / active raised */
+  --pv-inset: #0c1015;       /* inputs, table headers, code blocks */
+  --pv-overlay: rgba(4, 6, 9, 0.66); /* modal scrim */
+
+  /* ---- borders ---- */
+  --pv-border: #222b37;
+  --pv-border-soft: #19212b;
+  --pv-border-strong: #2e3a49;
+
+  /* ---- text ---- */
+  --pv-text: #e3e9f0;        /* primary */
+  --pv-text-2: #9aa7b6;      /* secondary */
+  --pv-text-3: #64717f;      /* tertiary / labels */
+  --pv-text-invert: #0a0d12; /* text on accent fills */
+
+  /* ---- accent (action · selection · links — never decoration) ---- */
+  --pv-accent: #5b82f6;
+  --pv-accent-hover: #6f92f8;
+  --pv-accent-press: #4c72e8;
+  --pv-accent-ink: #ffffff;
+  --pv-accent-soft: rgba(91, 130, 246, 0.14);
+  --pv-accent-soft-strong: rgba(91, 130, 246, 0.22);
+  --pv-accent-border: rgba(91, 130, 246, 0.45);
+
+  /* ---- semantic status ---- */
+  --pv-ok: #45c07e;          /* healthy, running, completed */
+  --pv-ok-soft: rgba(69, 192, 126, 0.13);
+  --pv-ok-border: rgba(69, 192, 126, 0.4);
+  --pv-warn: #d9a445;        /* attention, pending, degraded */
+  --pv-warn-soft: rgba(217, 164, 69, 0.13);
+  --pv-warn-border: rgba(217, 164, 69, 0.42);
+  --pv-err: #e2635e;         /* failure, destructive */
+  --pv-err-soft: rgba(226, 99, 94, 0.13);
+  --pv-err-border: rgba(226, 99, 94, 0.42);
+  --pv-err-solid: #c94340;   /* destructive button fill */
+  --pv-err-solid-hover: #d5524e;
+  --pv-info: #58a4e8;        /* informational */
+  --pv-info-soft: rgba(88, 164, 232, 0.13);
+
+  /* ---- focus ---- */
+  --pv-focus: rgba(91, 130, 246, 0.38);
+  --pv-focus-ring: 0 0 0 2px var(--pv-focus);
+
+  /* ---- spacing scale ---- */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 20px;
+  --sp-8: 24px;
+  --sp-9: 32px;
+  --sp-10: 40px;
+  --sp-11: 48px;
+
+  /* ---- radii ---- */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
+
+  /* ---- elevation (floating layers only) ---- */
+  --pv-shadow-menu: 0 6px 24px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --pv-shadow-dialog: 0 18px 60px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+
+  /* ---- typography ---- */
+  --pv-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --pv-mono-font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  /* ---- motion ---- */
+  --pv-t-fast: 110ms ease;
+  --pv-t-med: 160ms ease;
+
+  /* ---- layout ---- */
+  --pv-sidebar-w: 232px;
+  --pv-sidebar-w-collapsed: 56px;
+  --pv-header-h: 52px;
+  --pv-content-max: 1240px;
+
+  /* ---- layering ---- */
+  --z-sticky: 10;
+  --z-sidebar: 30;
+  --z-header: 30;
+  --z-scrim: 40;
+  --z-dropdown: 50;
+  --z-dialog: 60;
+  --z-toast: 70;
+  --z-palette: 80;
+}
+
+html.light {
+  /* ---- neutral surfaces (light) ---- */
+  --pv-bg: #f1f3f7;
+  --pv-surface: #ffffff;
+  --pv-surface-2: #f5f7fa;
+  --pv-surface-3: #e9edf3;
+  --pv-inset: #f2f4f8;
+  --pv-overlay: rgba(16, 22, 30, 0.42);
+
+  --pv-border: #d7dde6;
+  --pv-border-soft: #e5eaf0;
+  --pv-border-strong: #c3ccd8;
+
+  --pv-text: #18212c;
+  --pv-text-2: #4d5b6b;
+  --pv-text-3: #7e8b9a;
+  --pv-text-invert: #ffffff;
+
+  --pv-accent: #356ae6;
+  --pv-accent-hover: #2f61d6;
+  --pv-accent-press: #2957c2;
+  --pv-accent-soft: rgba(53, 106, 230, 0.09);
+  --pv-accent-soft-strong: rgba(53, 106, 230, 0.16);
+  --pv-accent-border: rgba(53, 106, 230, 0.4);
+
+  --pv-ok: #1d8a50;
+  --pv-ok-soft: rgba(29, 138, 80, 0.1);
+  --pv-ok-border: rgba(29, 138, 80, 0.35);
+  --pv-warn: #9a6a06;
+  --pv-warn-soft: rgba(154, 106, 6, 0.1);
+  --pv-warn-border: rgba(154, 106, 6, 0.35);
+  --pv-err: #c23c38;
+  --pv-err-soft: rgba(194, 60, 56, 0.09);
+  --pv-err-border: rgba(194, 60, 56, 0.35);
+  --pv-err-solid: #c23c38;
+  --pv-err-solid-hover: #ad3330;
+  --pv-info: #2563b8;
+  --pv-info-soft: rgba(37, 99, 184, 0.09);
+
+  --pv-focus: rgba(53, 106, 230, 0.32);
+
+  --pv-shadow-menu: 0 6px 24px rgba(23, 32, 44, 0.12), 0 1px 3px rgba(23, 32, 44, 0.1);
+  --pv-shadow-dialog: 0 18px 60px rgba(23, 32, 44, 0.18), 0 2px 8px rgba(23, 32, 44, 0.1);
+}

@@ -1,5 +1,5 @@
 import { useSearchParams } from "react-router-dom";
-import { Empty } from "../components/ui.js";
+import { EmptyState, Tabs } from "../ui/index.js";
 import Roles from "./Roles.js";
 import Groups from "./Groups.js";
 import Matrix from "./Matrix.js";
@@ -10,32 +10,31 @@ import Matrix from "./Matrix.js";
  *  Old routes (/roles, /groups, /matrix) redirect here — see App.tsx. */
 export default function Access({ can }: { can: (perm: string) => boolean }) {
   const [params, setParams] = useSearchParams();
-  const tabs = [
+  const all = [
     { id: "roles", label: "Roles", perm: "roles.manage", panel: <Roles /> },
     { id: "groups", label: "Groups", perm: "groups.manage", panel: <Groups /> },
     { id: "matrix", label: "Permission Matrix", perm: "users.manage", panel: <Matrix /> },
-  ].filter((t) => can(t.perm));
+  ];
+  const tabs = all.filter((t) => can(t.perm));
   const active = tabs.some((t) => t.id === params.get("tab")) ? params.get("tab")! : (tabs[0]?.id ?? "");
   const current = tabs.find((t) => t.id === active);
 
   return (
     <div className="pv-page">
       {tabs.length > 1 && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }} role="tablist" aria-label="Access control views">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              role="tab"
-              aria-selected={t.id === active}
-              onClick={() => setParams({ tab: t.id })}
-              className={t.id === active ? "pv-btn pv-btn-primary pv-btn-sm" : "pv-btn pv-btn-sm"}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          tabs={tabs}
+          active={active}
+          onChange={(t) => setParams({ tab: t }, { replace: true })}
+          label="Access control views"
+        />
       )}
-      {current ? current.panel : <Empty title="No access" body="You don't have permission to view any access control section." />}
+      {current ? current.panel : (
+        <EmptyState
+          title="No access"
+          body="You don't have permission to view any access control section."
+        />
+      )}
     </div>
   );
 }

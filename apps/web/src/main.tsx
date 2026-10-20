@@ -3,7 +3,10 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App.js";
-import "./index.css";
+import { ToastProvider, ConfirmProvider } from "./ui/index.js";
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/components.css";
 
 /** Last-resort render guard: a single crashing component must never blank the whole app. */
 class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -16,24 +19,35 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
   render(): ReactNode {
     if (this.state.error) {
       return (
-        <div className="pv-shell" style={{ alignItems: "center", justifyContent: "center" }}>
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div className="pv-panel pv-page-narrow" style={{ textAlign: "center" }}>
-            <h1 className="pv-title" style={{ marginBottom: 8 }}>Something broke rendering this page</h1>
-            <p className="pv-sub">
+            <h1 className="pv-page-title" style={{ justifyContent: "center", marginBottom: 8 }}>
+              Something broke rendering this page
+            </h1>
+            <p className="pv-muted">
               ProxVM hit an unexpected interface error. Your data is safe — this is display-only.
             </p>
             {this.state.error?.message && (
-              <details style={{ textAlign: "left", fontSize: "0.76rem", color: "var(--pv-text-3)", marginBottom: 16 }}>
+              <details style={{ textAlign: "left", fontSize: "0.78rem", color: "var(--pv-text-3)", margin: "12px 0 16px" }}>
                 <summary style={{ cursor: "pointer" }}>Technical details (for the administrator)</summary>
-                <code className="pv-mono" style={{ display: "block", marginTop: 8, padding: 8, background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6, wordBreak: "break-all", userSelect: "all" }}>
+                <code
+                  className="pv-mono"
+                  style={{
+                    display: "block",
+                    marginTop: 8,
+                    padding: 8,
+                    background: "var(--pv-inset)",
+                    border: "1px solid var(--pv-border-soft)",
+                    borderRadius: 6,
+                    wordBreak: "break-all",
+                    userSelect: "all",
+                  }}
+                >
                   {this.state.error.message}
                 </code>
               </details>
             )}
-            <button
-              className="pv-btn pv-btn-primary"
-              onClick={() => window.location.reload()}
-            >
+            <button className="pv-btn pv-btn-primary" onClick={() => window.location.reload()}>
               Reload the page
             </button>
           </div>
@@ -70,7 +84,11 @@ createRoot(document.getElementById("root") as HTMLElement).render(
     <RootErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
-          <App />
+          <ToastProvider>
+            <ConfirmProvider>
+              <App />
+            </ConfirmProvider>
+          </ToastProvider>
         </BrowserRouter>
       </QueryClientProvider>
     </RootErrorBoundary>

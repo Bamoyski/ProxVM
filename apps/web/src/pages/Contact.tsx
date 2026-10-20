@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { PageTitle, Section } from "../components/ui.js";
+import { PageHeader, Section } from "../ui/index.js";
 import { useSiteContent } from "../content.js";
 
 export const CONTACT_EMAIL = "bamoyskistudios@gmail.com";
@@ -26,7 +26,7 @@ export default function Contact() {
   ];
   return (
     <div className="pv-page pv-page-narrow">
-      <PageTitle
+      <PageHeader
         title="Contact"
         description="ProxVM is built and maintained by bamoyskistudios. For questions, bug reports, access requests, or anything else, reach out:"
       />

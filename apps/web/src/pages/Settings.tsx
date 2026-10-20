@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, Section, Btn } from "../components/ui.js";
+import { PageHeader, Section, Btn, Alert, errText } from "../ui/index.js";
 
 const input = "pv-input";
 const label = "pv-label";
@@ -52,7 +52,7 @@ export default function Settings() {
       setSaved("Proxmox settings saved");
       void qc.invalidateQueries({ queryKey: ["settings-proxmox"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
@@ -76,7 +76,7 @@ export default function Settings() {
       setSaved("Guacamole settings saved");
       void qc.invalidateQueries({ queryKey: ["settings-guacamole"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
@@ -85,10 +85,10 @@ export default function Settings() {
 
   return (
     <div className="pv-page">
-      <PageTitle title="Settings" description="Connection details and instance behavior. Secrets stay masked." />
-      {error && <ErrorBox error={error} />}
-      {saved && <div className="pv-notice pv-notice-ok">{saved}</div>}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-10">
+      <PageHeader title="Settings" description="Connection details and instance behavior. Secrets stay masked." />
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
+      {saved && <Alert kind="ok" title="Saved">{saved}</Alert>}
+      <div className="pv-grid-2">
         <Section title="Proxmox">
           <Field label="URL"><input className={input} value={pxField("url", s.url)} onChange={(e) => setPx({ ...px, url: e.target.value })} /></Field>
           <Field label="Token ID"><input className={input} value={pxField("tokenId", s.tokenId)} onChange={(e) => setPx({ ...px, tokenId: e.target.value })} /></Field>
@@ -103,7 +103,7 @@ export default function Settings() {
             />
             Verify SSL
           </label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="pv-grid-3">
             <Field label="Default node"><input className={input} value={pxField("defaultNode", s.defaultNode)} onChange={(e) => setPx({ ...px, defaultNode: e.target.value })} /></Field>
             <Field label="Default storage"><input className={input} value={pxField("defaultStorage", s.defaultStorage)} onChange={(e) => setPx({ ...px, defaultStorage: e.target.value })} /></Field>
             <Field label="Default bridge"><input className={input} value={pxField("defaultNetwork", s.defaultNetwork)} onChange={(e) => setPx({ ...px, defaultNetwork: e.target.value })} /></Field>
@@ -126,7 +126,7 @@ export default function Settings() {
           <Field label="Public URL" hint="For the browser, e.g. https://guacamole.example.com/. Leave empty to use the URL above.">
             <input className={input} value={gacField("publicUrl", g.publicUrl ?? "")} onChange={(e) => setGac({ ...gac, publicUrl: e.target.value })} placeholder="Leave empty to use the URL above" />
           </Field>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="pv-grid-2">
             <Field label="DB host"><input className={input} value={gacField("dbHost", g.dbHost)} onChange={(e) => setGac({ ...gac, dbHost: e.target.value })} /></Field>
             <Field label="DB port"><input type="number" className={input} value={gacField("dbPort", String(g.dbPort ?? ""))} onChange={(e) => setGac({ ...gac, dbPort: e.target.value })} /></Field>
           </div>
@@ -346,7 +346,7 @@ function AppSettings() {
       void qc.invalidateQueries({ queryKey: ["settings-app"] });
       void qc.invalidateQueries({ queryKey: ["announcement"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
@@ -357,14 +357,14 @@ function AppSettings() {
       await api("/settings/gotify/test", { method: "POST", body: {} });
       setGotifyTestMsg("Test message sent — check Gotify.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
   return (
     <div>
-      {error && <ErrorBox error={error} />}
-      {saved && <div className="pv-notice pv-notice-ok">{saved}</div>}
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
+      {saved && <Alert kind="ok" title="Saved">{saved}</Alert>}
       <Field label="Audit retention (days, blank = keep forever)" hint="Entries older than this are pruned hourly.">
         <input
           type="number"
@@ -504,7 +504,7 @@ function AppSettings() {
           />
           <Btn onClick={testGotify}>Send test</Btn>
         </div>
-        {gotifyTestMsg && <div className="pv-notice pv-notice-ok">{gotifyTestMsg}</div>}
+        {gotifyTestMsg && <div className="pv-alert pv-alert-ok">{gotifyTestMsg}</div>}
       </Field>
       <Field label="Provisioning ceilings (blank = no ceiling; admins exempt)" hint="Non-admin requests above these are rejected. Applies at request time and again when the worker runs.">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
@@ -540,7 +540,7 @@ function AppSettings() {
           <option value="auto">Instant — GUEST role, you grant access later</option>
         </select>
         {shownMode === "auto" && !tsSecretConfigured && tsSecret.trim() === "" && (
-          <div className="pv-notice pv-notice-warn" style={{ marginTop: 6, fontSize: "0.8rem" }}>
+          <div className="pv-alert pv-alert-warn" style={{ marginTop: 6, fontSize: "0.8rem" }}>
             Instant signups need a Turnstile secret — save one below, or this behaves as the approval queue.
           </div>
         )}

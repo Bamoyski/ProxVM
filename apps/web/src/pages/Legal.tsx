@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PageTitle, Section, Btn } from "../components/ui.js";
+import { PageHeader, Section, Alert } from "../ui/index.js";
 
 const TABS = ["Privacy Policy", "Terms of Use"] as const;
 
@@ -10,23 +10,22 @@ export default function Legal() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Privacy Policy");
   return (
     <div className="pv-page pv-page-narrow">
-      <PageTitle title="Legal notices" />
-      <div className="pv-notice pv-notice-warn" style={{ marginBottom: 20 }}>
-        <b>No expectation of privacy for users: </b>
-        administrators of this instance can see your username, assigned VMs, jobs, and login history,
+      <PageHeader title="Legal notices" />
+      <Alert kind="warn" title="No expectation of privacy for users">
+        Administrators of this instance can see your username, assigned VMs, jobs, and login history,
         and every credential reveal or copy is recorded in the audit log with their name on it. Assume
         anything you do here is visible to administrators.
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+      </Alert>
+      <div className="pv-seg" role="group" aria-label="Legal document" style={{ marginBottom: 4 }}>
         {TABS.map((t) => (
-          <Btn
+          <button
             key={t}
-            size="sm"
-            kind={tab === t ? "primary" : undefined}
+            className={`pv-seg-btn${tab === t ? " pv-seg-btn-active" : ""}`}
+            aria-pressed={tab === t}
             onClick={() => setTab(t)}
           >
             {t}
-          </Btn>
+          </button>
         ))}
       </div>
       {tab === "Privacy Policy" && (

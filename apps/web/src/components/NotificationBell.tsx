@@ -1,9 +1,11 @@
-import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { Bell, Check, CheckCheck } from "lucide-react";
 import { api } from "../api.js";
+import { Popover } from "../ui/index.js";
+import { fmtRelative } from "../lib/format.js";
 
-interface NotificationItem {
+interface Notification {
   id: string;
   kind: string;
   title: string;
@@ -13,12 +15,9 @@ interface NotificationItem {
   createdAt: string;
 }
 
-/** Topbar bell: server-side unread count, dropdown with mark-read. The
- *  server scopes rows (admin queue + own), so this renders for everyone
- *  and simply shows an empty state when there is nothing. */
+/** Global notifications (job outcomes, admin queue). Server-scoped rows. */
 export default function NotificationBell() {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
   const { data: countData } = useQuery({
     queryKey: ["notifications-unread"],
     queryFn: () => api<{ count: number }>("/notifications/unread-count"),
@@ -27,83 +26,105 @@ export default function NotificationBell() {
   });
   const { data: listData } = useQuery({
     queryKey: ["notifications"],
-    queryFn: () => api<{ notifications: NotificationItem[] }>("/notifications?limit=10"),
-    enabled: open,
+    queryFn: () => api<{ notifications: Notification[] }>("/notifications?limit=10"),
     retry: false,
   });
-  const unread = countData?.count ?? 0;
+
+  const count = countData?.count ?? 0;
+  const items = listData?.notifications ?? [];
 
   const markRead = async (ids?: string[], all?: boolean) => {
     try {
-      await api("/notifications/read", { method: "POST", body: { ids, all } });
-      void qc.invalidateQueries({ queryKey: ["notifications-unread"] });
+      await api("/notifications/read", { method: "POST", body: ids ? { ids } : { all: !!all } });
       void qc.invalidateQueries({ queryKey: ["notifications"] });
+      void qc.invalidateQueries({ queryKey: ["notifications-unread"] });
     } catch {
-      // read-state loss is cosmetic; the rows remain
+      // read-marking is best-effort; the list stays usable
     }
   };
 
   return (
-    <div style={{ position: "relative" }}>
-      <button
-        type="button"
-        className="pv-btn pv-btn-sm"
-        onClick={() => setOpen((v) => !v)}
-        aria-label={unread ? `${unread} unread notifications` : "No unread notifications"}
-        aria-expanded={open}
-        title="Notifications"
-      >
-        <span aria-hidden="true">✉️</span>
-        {unread > 0 && (
-          <span
-            className="pv-mono"
-            style={{ marginLeft: 6, fontSize: "0.72rem", fontWeight: 700, color: "#fff", background: "#3aa0ff", padding: "1px 7px", borderRadius: 10 }}
-          >
-            {unread > 99 ? "99+" : unread}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div
-          className="pv-panel"
-          style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", width: 360, maxWidth: "calc(100vw - 32px)", zIndex: 60, padding: 8 }}
-          role="dialog"
-          aria-label="Notifications"
+    <Popover
+      label="Notifications"
+      width={340}
+      trigger={({ open, toggle, ref }) => (
+        <button
+          ref={ref}
+          className="pv-btn pv-btn-ghost pv-btn-icon"
+          style={{ position: "relative" }}
+          aria-label={`Notifications${count ? ` (${count} unread)` : ""}`}
+          aria-expanded={open}
+          onClick={toggle}
         >
-          {(listData?.notifications ?? []).map((n) => (
-            <div key={n.id} style={{ padding: "8px 10px", borderBottom: "1px solid var(--pv-border, #2a2f3a)", opacity: n.readAt ? 0.6 : 1 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 2 }}>
-                <span className="pv-mono" style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--pv-text-2)" }}>
-                  {n.kind.toUpperCase()}
-                </span>
-                <span className="pv-mono" style={{ fontSize: "0.7rem", color: "var(--pv-text-3)" }}>
-                  {new Date(n.createdAt).toLocaleString()}
-                </span>
+          <Bell size={15} aria-hidden="true" />
+          {count > 0 && <span className="pv-btn-badge">{count > 99 ? "99+" : count}</span>}
+        </button>
+      )}
+    >
+      {() => (
+        <>
+          <div style={{ display: "flex", alignItems: "center", padding: "6px 10px 8px", borderBottom: "1px solid var(--pv-border-soft)" }}>
+            <span style={{ fontWeight: 650, fontSize: "0.85rem" }}>Notifications</span>
+            {count > 0 && (
+              <button
+                className="pv-btn pv-btn-link"
+                style={{ marginLeft: "auto", fontSize: "0.76rem" }}
+                onClick={() => void markRead(undefined, true)}
+              >
+                <CheckCheck size={12} aria-hidden="true" /> Mark all read
+              </button>
+            )}
+          </div>
+          <div style={{ maxHeight: 340, overflowY: "auto" }}>
+            {items.map((n) => (
+              <div
+                key={n.id}
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  padding: "9px 10px",
+                  borderBottom: "1px solid var(--pv-border-soft)",
+                  background: n.readAt ? "transparent" : "var(--pv-accent-soft)",
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: "0.82rem", fontWeight: n.readAt ? 500 : 650 }}>{n.title}</div>
+                  {n.body && (
+                    <div style={{ fontSize: "0.76rem", color: "var(--pv-text-2)", marginTop: 1 }}>{n.body}</div>
+                  )}
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 3 }}>
+                    <span style={{ fontSize: "0.7rem", color: "var(--pv-text-3)" }}>{fmtRelative(n.createdAt)}</span>
+                    {n.link && (
+                      <Link
+                        to={n.link}
+                        style={{ fontSize: "0.72rem" }}
+                        onClick={() => void markRead([n.id])}
+                      >
+                        Open
+                      </Link>
+                    )}
+                  </div>
+                </div>
                 {!n.readAt && (
-                  <button className="pv-btn pv-btn-link" style={{ fontSize: "0.7rem", marginLeft: "auto" }} onClick={() => void markRead([n.id])}>
-                    Mark read
+                  <button
+                    className="pv-btn pv-btn-ghost pv-btn-icon pv-btn-sm"
+                    aria-label={`Mark “${n.title}” read`}
+                    title="Mark read"
+                    onClick={() => void markRead([n.id])}
+                  >
+                    <Check size={12} aria-hidden="true" />
                   </button>
                 )}
               </div>
-              <div style={{ fontSize: "0.85rem", fontWeight: n.readAt ? 400 : 600 }}>{n.title}</div>
-              {n.body && <div style={{ fontSize: "0.8rem", color: "var(--pv-text-2)" }}>{n.body}</div>}
-              {n.link && (
-                <Link to={n.link} onClick={() => { void markRead([n.id]); setOpen(false); }} style={{ fontSize: "0.78rem" }}>
-                  Open →
-                </Link>
-              )}
-            </div>
-          ))}
-          {!(listData?.notifications ?? []).length && (
-            <div style={{ padding: "8px 10px", fontSize: "0.85rem", color: "var(--pv-text-2)" }}>
-              All caught up — new tickets, requests, threats, and backup failures land here.
-            </div>
-          )}
-          <button className="pv-btn pv-btn-sm" style={{ width: "100%", marginTop: 8 }} onClick={() => void markRead(undefined, true)}>
-            Mark all read
-          </button>
-        </div>
+            ))}
+            {!items.length && (
+              <div style={{ padding: "18px 12px", fontSize: "0.82rem", color: "var(--pv-text-3)", textAlign: "center" }}>
+                All caught up.
+              </div>
+            )}
+          </div>
+        </>
       )}
-    </div>
+    </Popover>
   );
 }

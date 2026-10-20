@@ -1,5 +1,5 @@
 import { useSearchParams } from "react-router-dom";
-import { Empty } from "../components/ui.js";
+import { EmptyState, Tabs } from "../ui/index.js";
 import Settings from "./Settings.js";
 import Domains from "./Domains.js";
 import Content from "./Content.js";
@@ -9,32 +9,28 @@ import Content from "./Content.js";
  *  Old routes (/settings, /domains, /content) redirect here — see App.tsx. */
 export default function Configuration({ can }: { can: (perm: string) => boolean }) {
   const [params, setParams] = useSearchParams();
-  const tabs = [
+  const all = [
     { id: "settings", label: "Settings", perm: "settings.manage", panel: <Settings /> },
     { id: "domains", label: "Domains", perm: "settings.manage", panel: <Domains /> },
     { id: "content", label: "Site content", perm: "settings.manage", panel: <Content /> },
-  ].filter((t) => can(t.perm));
+  ];
+  const tabs = all.filter((t) => can(t.perm));
   const active = tabs.some((t) => t.id === params.get("tab")) ? params.get("tab")! : (tabs[0]?.id ?? "");
   const current = tabs.find((t) => t.id === active);
 
   return (
     <div className="pv-page">
       {tabs.length > 1 && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }} role="tablist" aria-label="Configuration views">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              role="tab"
-              aria-selected={t.id === active}
-              onClick={() => setParams({ tab: t.id })}
-              className={t.id === active ? "pv-btn pv-btn-primary pv-btn-sm" : "pv-btn pv-btn-sm"}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          tabs={tabs}
+          active={active}
+          onChange={(t) => setParams({ tab: t }, { replace: true })}
+          label="Configuration views"
+        />
       )}
-      {current ? current.panel : <Empty title="No access" body="Configuration requires administrator permissions." />}
+      {current ? current.panel : (
+        <EmptyState title="No access" body="Configuration requires administrator permissions." />
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, Empty, Btn } from "../components/ui.js";
+import { PageHeader, EmptyState, Btn, Input, Select, Checkbox, SearchInput, TableSkeleton } from "../ui/index.js";
 
 interface CatalogPermission {
   code: string;
@@ -17,8 +17,9 @@ interface MatrixUser {
   groups: Array<{ id: string; name: string }>;
 }
 
+/** Read-only IAM matrix: who holds what, and where each grant comes from. */
 export default function Matrix() {
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["iam-matrix"],
     queryFn: () =>
       api<{
@@ -82,98 +83,107 @@ export default function Matrix() {
 
   return (
     <div className="pv-page">
-      <PageTitle title="Permission matrix" description="Who holds what, and where it comes from (role, group, direct grant)." />
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "center" }}>
-        <input
-          className="pv-input"
-          style={{ width: 224 }}
-          placeholder="Search users, roles, groups…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <select
-          className="pv-select pv-input-auto"
-          style={{ height: 34 }}
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        >
+      <PageHeader title="Permission matrix" description="Who holds what, and where it comes from (role, group, direct grant)." />
+
+      <div className="pv-toolbar">
+        <SearchInput placeholder="Search users, roles, groups…" value={search} onChange={setSearch} label="Search matrix" />
+        <Select autoWidth small value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Category filter">
           <option value="">All categories</option>
           {categories.map((c) => (
             <option key={c} value={c}>{c}</option>
           ))}
-        </select>
-        <input
-          className="pv-input"
-          style={{ width: 224 }}
+        </Select>
+        <Input
+          small
+          autoWidth
           placeholder="Filter permissions…"
           value={permissionFilter}
           onChange={(e) => setPermissionFilter(e.target.value)}
+          aria-label="Filter permissions"
         />
-        <label className="pv-checkrow">
-          <input type="checkbox" checked={grantedOnly} onChange={(e) => setGrantedOnly(e.target.checked)} />
-          Only holders (filter to exactly one permission)
-        </label>
+        <Checkbox
+          label="Only holders (requires exactly one permission)"
+          checked={grantedOnly}
+          onChange={(e) => setGrantedOnly(e.target.checked)}
+        />
       </div>
+
       {selectedPerm && (
-        <div className="pv-notice" style={{ marginBottom: 16 }}>
+        <div className="pv-panel" style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span className="pv-mono" style={{ fontSize: "0.95rem" }}>{selectedPerm.code}</span>
-            <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }}>
+            <code className="pv-mono" style={{ fontSize: "0.92rem" }}>{selectedPerm.code}</code>
+            <span className="pv-faint" style={{ fontSize: "0.76rem" }}>
               {selectedPerm.category} · scope: {selectedPerm.scope}
             </span>
-            <Btn size="sm" kind="link" onClick={() => setSelected(null)}>Close</Btn>
+            <Btn size="sm" kind="link" style={{ marginLeft: "auto" }} onClick={() => setSelected(null)}>Close</Btn>
           </div>
-          <div style={{ marginTop: 4 }}>{selectedPerm.description}</div>
+          <div style={{ marginTop: 5 }}>{selectedPerm.description}</div>
         </div>
       )}
-      <div className="pv-table-wrap">
-        <table className="pv-table">
-          <thead>
-            <tr>
-              <th style={{ position: "sticky", left: 0 }}>User</th>
-              {permList.map((p) => (
-                <th key={p.code} className="pv-mono" style={{ fontWeight: 500, whiteSpace: "nowrap" }} title={p.description || p.code}>
-                  {p.code}
-                  <Btn
-                    size="sm"
-                    kind="link"
-                    title={`About ${p.code}`}
-                    aria-label={`About ${p.code}`}
-                    onClick={() => setSelected(selectedPerm?.code === p.code ? null : p.code)}
-                  >
-                    ⓘ
-                  </Btn>
-                </th>
-              ))}
-              <th className="num">VMs</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <tr key={u.user.id}>
-                <td style={{ position: "sticky", left: 0, background: "var(--pv-surface)" }}>
-                  {u.user.username}
-                  <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 4 }}>({u.user.roles.join(", ")})</span>
-                  {u.user.active === false && <span style={{ fontSize: "0.76rem", color: "var(--pv-err)", marginLeft: 4 }}>disabled</span>}
-                </td>
-                {permList.map((p) => {
-                  const sources = has(u, p.code);
-                  return (
-                    <td key={p.code} style={{ textAlign: "center", color: sources ? "var(--pv-ok)" : "var(--pv-text-3)" }} title={sources ? sources.join("; ") : "not granted"}>
-                      {sources ? "✓" : "—"}
-                    </td>
-                  );
-                })}
-                <td className="num pv-mono" title={u.vmAccess.map((v) => v.vmId).join(", ")}>
-                  {u.vmAccess.length}
-                </td>
+
+      {isLoading && !data ? (
+        <div className="pv-table-wrap"><TableSkeleton rows={5} cols={6} /></div>
+      ) : (
+        <div className="pv-table-wrap">
+          <table className="pv-table">
+            <thead>
+              <tr>
+                <th style={{ position: "sticky", left: 0, zIndex: 1 }}>User</th>
+                {permList.map((p) => (
+                  <th key={p.code} className="pv-mono" style={{ fontWeight: 500, whiteSpace: "nowrap" }} title={p.description || p.code}>
+                    {p.code}
+                    <Btn
+                      size="sm"
+                      kind="link"
+                      title={`About ${p.code}`}
+                      aria-label={`About ${p.code}`}
+                      aria-expanded={selectedPerm?.code === p.code}
+                      onClick={() => setSelected(selectedPerm?.code === p.code ? null : p.code)}
+                    >
+                      ⓘ
+                    </Btn>
+                  </th>
+                ))}
+                <th className="num">VMs</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.user.id}>
+                  <td style={{ position: "sticky", left: 0, background: "var(--pv-surface)" }}>
+                    {u.user.username}
+                    <span className="pv-faint" style={{ fontSize: "0.76rem", marginLeft: 4 }}>({u.user.roles.join(", ")})</span>
+                    {u.user.active === false && <span style={{ fontSize: "0.76rem", color: "var(--pv-err)", marginLeft: 4 }}>disabled</span>}
+                  </td>
+                  {permList.map((p) => {
+                    const sources = has(u, p.code);
+                    return (
+                      <td
+                        key={p.code}
+                        style={{
+                          textAlign: "center",
+                          color: sources ? "var(--pv-ok)" : "var(--pv-text-3)",
+                          fontWeight: sources ? 700 : 400,
+                        }}
+                        title={sources ? sources.join("; ") : "not granted"}
+                      >
+                        {sources ? "✓" : "—"}
+                      </td>
+                    );
+                  })}
+                  <td className="num pv-mono" title={u.vmAccess.map((v) => v.vmId).join(", ")}>
+                    {u.vmAccess.length}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!isLoading && !users.length && <EmptyState title="No users match the current filters" />}
+      <div className="pv-hint" style={{ marginTop: 8 }}>
+        Hover a ✓ to see where each permission comes from (role, group, direct grant).
       </div>
-      {!users.length && <Empty title="No users match the current filters" />}
-      <div className="pv-hint" style={{ marginTop: 8 }}>Hover a ✓ to see where each permission comes from (role, group, direct grant).</div>
     </div>
   );
 }

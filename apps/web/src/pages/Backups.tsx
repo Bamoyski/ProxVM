@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
 import { usePref } from "../prefs.js";
-import { PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
+import { PageHeader, Section, EmptyState, Btn, Alert, SearchInput, errText } from "../ui/index.js";
 
 interface OverviewRow {
   vmId: string;
@@ -92,7 +92,7 @@ function localTime(hour: string, minute: string): string {
 
 function pill(text: string, tone: "ok" | "warn" | "bad" | "idle"): React.ReactNode {
   const color =
-    tone === "ok" ? "var(--pv-ok, #3a3)" : tone === "warn" ? "var(--pv-warn, #b80)" : tone === "bad" ? "var(--pv-danger, #c00)" : "var(--pv-text-3)";
+    tone === "ok" ? "var(--pv-ok, #3a3)" : tone === "warn" ? "var(--pv-warn, #b80)" : tone === "bad" ? "var(--pv-err, #c00)" : "var(--pv-text-3)";
   return (
     <span style={{ color, fontSize: "0.78rem", border: "1px solid currentColor", borderRadius: 10, padding: "0 8px", whiteSpace: "nowrap" }}>
       {text}
@@ -197,7 +197,7 @@ export default function Backups() {
       reload();
       return res;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
       return null;
     }
   };
@@ -249,20 +249,18 @@ export default function Backups() {
 
   return (
     <div className="pv-page">
-      <PageTitle title="PBS backups" description="Tick VMs, then back them all up or put them on one timetable. Schedules and runs are per-VM underneath." />
-      {error && <ErrorBox error={error} />}
+      <PageHeader title="PBS backups" description="Tick VMs, then back them all up or put them on one timetable. Schedules and runs are per-VM underneath." />
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
       <Section
         title="Fleet"
         hint={`${rows.length} VMs · ${checked.length} selected`}
       >
         <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-          <input
-            className="pv-input"
-            style={{ maxWidth: 260 }}
+          <SearchInput
             placeholder="Search name, node, ID…"
             value={backupSearch}
-            onChange={(e) => setBackupSearch(e.target.value)}
-            aria-label="Search fleet"
+            onChange={setBackupSearch}
+            label="Search fleet"
           />
           <Btn size="sm" onClick={() => setChecked(fleet.map((r) => r.vmId))} disabled={!fleet.length}>Select all</Btn>
           <Btn size="sm" kind="link" onClick={() => setChecked([])} disabled={!checked.length}>Clear</Btn>
@@ -297,10 +295,10 @@ export default function Backups() {
               : pill("no snapshots", "idle")}
           </div>
         ))}
-        {!fleet.length && <Empty title={rows.length ? "No matches" : "No VMs visible"} body={rows.length ? "Try a different search." : "VMs you can manage appear here."} />}
+        {!fleet.length && <EmptyState title={rows.length ? "No matches" : "No VMs visible"} body={rows.length ? "Try a different search." : "VMs you can manage appear here."} />}
       </Section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-10">
+      <div className="pv-grid-side">
         <Section title={`Schedule backups${checked.length ? ` for ${checked.length} selected` : ""}`}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
             {PRESETS.map((p) => (
@@ -356,7 +354,7 @@ export default function Backups() {
               </div>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="pv-grid-3">
             <div className="pv-field">
               <label className="pv-label">How often?</label>
               <select className="pv-select" value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
@@ -395,7 +393,7 @@ export default function Backups() {
             {checked.length ? `Schedule backups for ${checked.length} VM${checked.length === 1 ? "" : "s"}` : "Tick VMs above first"}
           </Btn>
         </Section>
-        <div className="lg:col-span-2">
+        <div>
           <Section title="All backup schedules" hint={`${(schedData?.schedules ?? []).length} total`}>
             {(schedData?.schedules ?? []).slice(0, 30).map((s) => (
               <div key={s.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
@@ -411,7 +409,7 @@ export default function Backups() {
                 </span>
               </div>
             ))}
-            {!(schedData?.schedules ?? []).length && <Empty title="No backup schedules yet" body="Tick VMs above, pick the nightly preset, schedule." />}
+            {!(schedData?.schedules ?? []).length && <EmptyState title="No backup schedules yet" body="Tick VMs above, pick the nightly preset, schedule." />}
           </Section>
           {focusRow && (
             <Section title={`Latest activity — ${focusRow.name}`}>
@@ -419,10 +417,10 @@ export default function Backups() {
                 <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0", fontSize: "0.85rem" }}>
                   {pill(`${r.kind} ${r.status}`, runTone(r.status))}
                   <span style={{ color: "var(--pv-text-3)", fontSize: "0.78rem" }}>{new Date(r.createdAt).toLocaleString()}</span>
-                  {r.error && <span style={{ color: "var(--pv-danger, #c00)", fontSize: "0.78rem" }}>{r.error.slice(0, 160)}</span>}
+                  {r.error && <span style={{ color: "var(--pv-err, #c00)", fontSize: "0.78rem" }}>{r.error.slice(0, 160)}</span>}
                 </div>
               ))}
-              {!(runsData?.runs ?? []).length && <Empty title="No runs yet" body="Trigger a backup or wait for a schedule." />}
+              {!(runsData?.runs ?? []).length && <EmptyState title="No runs yet" body="Trigger a backup or wait for a schedule." />}
               {(snapsData?.snapshots ?? []).length > 0 && (
                 <div style={{ marginTop: 6, fontSize: "0.85rem", color: "var(--pv-text-3)" }}>
                   Snapshots: {(snapsData?.snapshots ?? []).map((s) => s.backupId).join(", ")}

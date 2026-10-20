@@ -1,123 +1,117 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { ShieldAlert } from "lucide-react";
 import { api } from "../api.js";
+import { Popover } from "../ui/index.js";
+import { fmtRelative } from "../lib/format.js";
 
-interface ThreatFinding {
+interface Finding {
   id: string;
+  category: string;
   severity: "critical" | "high" | "medium" | "low";
   title: string;
-  actorUsername: string | null;
-  ip: string | null;
+  detail?: string | null;
   lastSeen: string;
+  eventCount?: number;
 }
 
 const SEEN_KEY = "proxvm-threats-seen";
 
-function loadSeen(): Set<string> {
+function readSeen(): string[] {
   try {
-    const raw = window.localStorage.getItem(SEEN_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === "string"));
+    return JSON.parse(window.localStorage.getItem(SEEN_KEY) ?? "[]") as string[];
   } catch {
-    // corrupted storage clears itself
+    return [];
   }
-  return new Set();
 }
 
-/** Topbar bell: badge counts unseen high/critical findings from the last day. */
+function writeSeen(ids: string[]): void {
+  try {
+    window.localStorage.setItem(SEEN_KEY, JSON.stringify(ids.slice(-200)));
+  } catch {
+    // private mode: seen-state just won't persist
+  }
+}
+
+/** Urgent-threat indicator (audit.read only): unseen critical/high findings. */
 export default function ThreatBell() {
-  const [open, setOpen] = useState(false);
-  const [seen, setSeen] = useState<Set<string>>(loadSeen);
   const { data } = useQuery({
     queryKey: ["threat-bell"],
-    queryFn: () => api<{ findings: ThreatFinding[] }>(`/threats?days=1`),
+    queryFn: () => api<{ findings: Finding[] }>("/threats?days=1"),
     refetchInterval: 60000,
+    retry: false,
   });
 
   const urgent = (data?.findings ?? []).filter((f) => f.severity === "critical" || f.severity === "high");
-  const unseen = urgent.filter((f) => !seen.has(f.id));
-
-  const markSeen = (ids: string[]) => {
-    setSeen((prev) => {
-      const next = new Set(prev);
-      for (const id of ids) next.add(id);
-      try {
-        window.localStorage.setItem(SEEN_KEY, JSON.stringify([...next].slice(-200)));
-      } catch {
-        // storage full or unavailable: badge just recomputes next poll
-      }
-      return next;
-    });
-  };
-
-  const toggle = () => {
-    if (!open) markSeen(urgent.map((f) => f.id));
-    setOpen((v) => !v);
-  };
+  const seen = new Set(readSeen());
+  const unseenUrgent = urgent.filter((f) => !seen.has(f.id));
+  const criticalUnseen = unseenUrgent.some((f) => f.severity === "critical");
 
   return (
-    <div style={{ position: "relative", marginLeft: "auto" }}>
-      <button
-        type="button"
-        className="pv-btn pv-btn-sm"
-        onClick={toggle}
-        aria-label={unseen.length ? `${unseen.length} unseen high-severity threat findings` : "No unseen threat findings"}
-        aria-expanded={open}
-        title="Threat alerts"
-      >
-        <span aria-hidden="true">🔔</span>
-        {unseen.length > 0 && (
-          <span
-            className="pv-mono"
-            style={{
-              marginLeft: 6,
-              fontSize: "0.72rem",
-              fontWeight: 700,
-              color: "#fff",
-              background: urgent.some((f) => f.severity === "critical" && !seen.has(f.id)) ? "#ff5d5d" : "#ff9f43",
-              padding: "1px 7px",
-              borderRadius: 10,
-            }}
-          >
-            {unseen.length}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div
-          className="pv-panel"
-          style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", width: 340, maxWidth: "calc(100vw - 32px)", zIndex: 60, padding: 8 }}
-          role="dialog"
-          aria-label="Threat alerts"
+    <Popover
+      label="Threat feed"
+      width={340}
+      trigger={({ open, toggle, ref }) => (
+        <button
+          ref={ref}
+          className="pv-btn pv-btn-ghost pv-btn-icon"
+          style={{ position: "relative" }}
+          aria-label={`Threats${unseenUrgent.length ? ` (${unseenUrgent.length} new urgent)` : ""}`}
+          aria-expanded={open}
+          onClick={() => {
+            if (!open) {
+              // Opening the feed marks urgent findings as seen.
+              writeSeen([...seen, ...unseenUrgent.map((f) => f.id)]);
+            }
+            toggle();
+          }}
         >
-          {urgent.length === 0 ? (
-            <div style={{ padding: "8px 10px", fontSize: "0.85rem", color: "var(--pv-text-2)" }}>
-              No high or critical findings in the last day.
-            </div>
-          ) : (
-            urgent.slice(0, 8).map((f) => (
-              <div key={f.id} style={{ padding: "8px 10px", borderBottom: "1px solid var(--pv-border, #2a2f3a)" }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 2 }}>
-                  <span
-                    className="pv-mono"
-                    style={{ fontSize: "0.68rem", fontWeight: 700, color: f.severity === "critical" ? "#ff5d5d" : "#ff9f43" }}
-                  >
-                    {f.severity.toUpperCase()}
-                  </span>
-                  <span className="pv-mono" style={{ fontSize: "0.7rem", color: "var(--pv-text-3)" }}>
-                    {new Date(f.lastSeen).toLocaleString()}
-                  </span>
-                </div>
-                <div style={{ fontSize: "0.85rem" }}>{f.title}</div>
-              </div>
-            ))
+          <ShieldAlert size={15} aria-hidden="true" />
+          {unseenUrgent.length > 0 && (
+            <span
+              className="pv-btn-badge"
+              style={{ background: criticalUnseen ? "var(--pv-err-solid)" : "var(--pv-warn)" }}
+            >
+              {unseenUrgent.length > 9 ? "9+" : unseenUrgent.length}
+            </span>
           )}
-          <Link to="/system?tab=threats" onClick={() => setOpen(false)} className="pv-btn pv-btn-sm" style={{ width: "100%", marginTop: 8, textAlign: "center" }}>
-            Open threat detection
-          </Link>
-        </div>
+        </button>
       )}
-    </div>
+    >
+      {() => (
+        <>
+          <div style={{ padding: "6px 10px 8px", borderBottom: "1px solid var(--pv-border-soft)", fontWeight: 650, fontSize: "0.85rem" }}>
+            Threats (last 24h)
+          </div>
+          <div style={{ maxHeight: 340, overflowY: "auto" }}>
+            {urgent.slice(0, 8).map((f) => (
+              <div key={f.id} style={{ padding: "9px 10px", borderBottom: "1px solid var(--pv-border-soft)" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                  <span
+                    className={`pv-badge ${f.severity === "critical" ? "pv-badge-err" : "pv-badge-warn"}`}
+                  >
+                    {f.severity}
+                  </span>
+                  <span style={{ fontSize: "0.82rem", fontWeight: 550, flex: 1, minWidth: 0 }}>{f.title}</span>
+                </div>
+                <div style={{ fontSize: "0.7rem", color: "var(--pv-text-3)", marginTop: 3 }}>
+                  {fmtRelative(f.lastSeen)}
+                </div>
+              </div>
+            ))}
+            {!urgent.length && (
+              <div style={{ padding: "18px 12px", fontSize: "0.82rem", color: "var(--pv-text-3)", textAlign: "center" }}>
+                No urgent threats detected in the last 24 hours.
+              </div>
+            )}
+          </div>
+          <div style={{ padding: "8px 10px", borderTop: "1px solid var(--pv-border-soft)" }}>
+            <Link to="/system?tab=threats" style={{ fontSize: "0.78rem" }}>
+              Open threat analysis →
+            </Link>
+          </div>
+        </>
+      )}
+    </Popover>
   );
 }

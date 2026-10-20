@@ -3,7 +3,9 @@ import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, jobEventSource } from "../api.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
-import { PageTitle, StatusBadge, Empty, Btn } from "../components/ui.js";
+import { hasPermission, type Me } from "../lib/permissions.js";
+import { fmtDateTime } from "../lib/format.js";
+import { PageHeader, StatusBadge, EmptyState, Btn, Alert, useConfirm, useToast, errText } from "../ui/index.js";
 
 interface Job {
   id: string;
@@ -15,21 +17,10 @@ interface Job {
   finishedAt: string | null;
 }
 
-interface Me {
-  id: string;
-  username: string;
-  roles: string[];
-}
-
-function hasPermission(me: Me, perm: string): boolean {
-  const rolePerms: Record<string, string[]> = {
-    ADMIN: ["jobs.read", "jobs.retry", "jobs.cancel", "vm.delete"],
-    OPERATOR: ["jobs.read", "jobs.retry", "jobs.cancel"],
-    USER: ["jobs.read"],
-  };
-  return me.roles.some((r) => rolePerms[r]?.includes(perm));
-}
-
+/**
+ * Provisioning job list. `bare` embeds the full list (watch/retry/cancel/
+ * rollback) inside another page — the Dashboard — without page chrome.
+ */
 export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
   const { jobId } = useParams();
   const can = makeCan(useEffectivePermissions(), (perm) => hasPermission(me, perm));
@@ -37,6 +28,8 @@ export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
   const canCancel = can("jobs.cancel");
   const canRollback = can("vm.delete");
   const qc = useQueryClient();
+  const toast = useToast();
+  const confirm = useConfirm();
   const { data: jobs } = useQuery({
     queryKey: ["jobs", jobId],
     queryFn: () => api<{ jobs: Job[] }>(`/jobs?limit=100${jobId ? "" : ""}`),
@@ -60,35 +53,58 @@ export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
   const retry = async (id: string) => {
     try {
       await api(`/jobs/${id}/retry`, { method: "POST", body: {} });
+      toast.info("Retry queued", "The job restarts from its first incomplete step.");
       void qc.invalidateQueries({ queryKey: ["jobs"] });
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Retry failed", errText(err));
     }
   };
 
   const cancel = async (id: string) => {
+    const ok = await confirm({
+      title: "Cancel this job?",
+      confirmLabel: "Cancel job",
+      body: "The worker stops between steps. Resources already created (partial VM, credential) may need a rollback.",
+    });
+    if (!ok) return;
     try {
       await api(`/jobs/${id}/cancel`, { method: "POST", body: {} });
+      toast.info("Cancellation requested");
       void qc.invalidateQueries({ queryKey: ["jobs"] });
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Cancel failed", errText(err));
     }
   };
 
   const rollback = async (id: string, action: "delete" | "keep") => {
+    const ok = await confirm({
+      title: action === "delete" ? "Roll back and delete the partial VM?" : "Keep the partial VM for debugging?",
+      danger: action === "delete",
+      requireText: action === "delete" ? "DELETE" : undefined,
+      confirmLabel: action === "delete" ? "Roll back" : "Keep",
+      body:
+        action === "delete"
+          ? "Removes resources the failed job created. The job record stays for the audit trail."
+          : "Marks the job rolled back without deleting anything — inspect the partial VM, then clean up manually.",
+    });
+    if (!ok) return;
     try {
       await api(`/jobs/${id}/rollback`, { method: "POST", body: { action } });
+      toast.info(action === "delete" ? "Rollback started" : "Job marked kept");
       void qc.invalidateQueries({ queryKey: ["jobs"] });
+      void qc.invalidateQueries({ queryKey: ["vms"] });
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Rollback failed", errText(err));
     }
   };
 
-  // `bare` embeds the full list (with watch/retry/cancel/rollback) inside
-  // another page — e.g. the Dashboard — without the page chrome.
   const body = (
     <>
-      {progress && <div className="pv-notice pv-mono" style={{ fontSize: "0.8rem" }}>{progress}</div>}
+      {progress && (
+        <Alert kind="info" title="Live job progress">
+          <code className="pv-mono" style={{ fontSize: "0.78rem", wordBreak: "break-all" }}>{progress}</code>
+        </Alert>
+      )}
       <div className="pv-table-wrap">
         <table className="pv-table">
           <thead>
@@ -96,8 +112,8 @@ export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
               <th>Job</th>
               <th>Status</th>
               <th>Created</th>
-              <th>Finished</th>
-              <th>Error</th>
+              <th className="pv-hide-md">Finished</th>
+              <th className="pv-hide-sm">Error</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -105,10 +121,16 @@ export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
             {(jobs?.jobs ?? []).map((j) => (
               <tr key={j.id}>
                 <td className="pv-mono">{j.id.slice(0, 8)}…</td>
-                <td><StatusBadge status={j.status} /></td>
-                <td style={{ color: "var(--pv-text-2)" }}>{new Date(j.createdAt).toLocaleString()}</td>
-                <td style={{ color: "var(--pv-text-2)" }}>{j.finishedAt ? new Date(j.finishedAt).toLocaleString() : "—"}</td>
-                <td style={{ color: "var(--pv-err)", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={j.error ?? undefined}>{j.error ?? "—"}</td>
+                <td><StatusBadge status={j.status} animate={!["READY", "FAILED", "CANCELLED"].includes(j.status)} /></td>
+                <td className="pv-faint">{fmtDateTime(j.createdAt)}</td>
+                <td className="pv-faint pv-hide-md">{j.finishedAt ? fmtDateTime(j.finishedAt) : "—"}</td>
+                <td
+                  className="pv-hide-sm"
+                  style={{ color: "var(--pv-err)", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  title={j.error ?? undefined}
+                >
+                  {j.error ?? "—"}
+                </td>
                 <td>
                   <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                     {!["READY", "FAILED", "CANCELLED"].includes(j.status) && (
@@ -140,7 +162,10 @@ export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
         </table>
       </div>
       {!jobs?.jobs.length && (
-        <Empty title="No jobs yet" body="Provisioning a VM from a template creates a tracked job here." />
+        <EmptyState
+          title="No jobs yet"
+          body="Provisioning a VM from a template creates a tracked job here."
+        />
       )}
     </>
   );
@@ -149,7 +174,7 @@ export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
 
   return (
     <div className="pv-page">
-      <PageTitle
+      <PageHeader
         title="Provisioning jobs"
         description="Each provisioning run is a tracked job. Watch live progress, retry failures, or roll back."
       />

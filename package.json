@@ -14,7 +14,7 @@
     "dev:web": "npm run dev -w @proxvm/web",
     "build": "npm run build -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web",
     "typecheck": "npm run typecheck -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/worker -w @proxvm/web",
-    "test": "npm run test -w @proxvm/shared -w @proxvm/core -w @proxvm/api",
+    "test": "npm run test -w @proxvm/shared -w @proxvm/core -w @proxvm/api -w @proxvm/web",
     "test:integration": "npm run test:integration -w @proxvm/api",
     "db:migrate": "npm run db:migrate -w @proxvm/api",
     "audit:ci": "npm audit --omit=dev --audit-level=moderate"

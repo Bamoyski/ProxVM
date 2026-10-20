@@ -1,4 +1,4 @@
-import { PageTitle, Section } from "../components/ui.js";
+import { PageHeader, Section } from "../ui/index.js";
 
 interface HelpSection {
   id: string;
@@ -233,7 +233,7 @@ export default function Help({ can }: { can: (perm: string) => boolean }) {
   const hidden = SECTIONS.length - visible.length;
   return (
     <div className="pv-page pv-page-narrow">
-      <PageTitle
+      <PageHeader
         title="Help & tutorials"
         description={`Step-by-step guides for the pages you have access to.${hidden > 0 ? ` ${hidden} ${hidden === 1 ? "guide is" : "guides are"} hidden because your account lacks ${hidden === 1 ? "its" : "their"} permission.` : ""}`}
       />

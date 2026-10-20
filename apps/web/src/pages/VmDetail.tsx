@@ -1,72 +1,57 @@
-import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  MoreHorizontal,
+  Play,
+  Square,
+  RotateCw,
+  RefreshCw,
+  Trash2,
+  Copy,
+  Eye,
+  Network,
+  Users as UsersIcon,
+  CloudUpload,
+  Layers,
+  MapPin,
+} from "lucide-react";
 import { api, explainDenial, jobEventSource } from "../api.js";
 import { usePref } from "../prefs.js";
 import { makeCan, useEffectivePermissions } from "../iam.js";
-import { StatusBadge, PageTitle, ErrorBox, Section, Empty, Btn, useConfirm } from "../components/ui.js";
+import { hasPermission, type Me } from "../lib/permissions.js";
+import { fmtBytes, fmtUptime, fmtDateTime, copyToClipboard } from "../lib/format.js";
+import {
+  PageHeader, Section, KeyValue, Tabs, Btn, StatusBadge, Badge, EmptyState,
+  Alert, Menu, Dialog, Field, Input, Select, Checkbox, useConfirm, useToast, errText,
+  TableSkeleton, CopyButton, CopyableCode, Tooltip,
+} from "../ui/index.js";
 import VmFirewallSection from "./VmFirewallSection.js";
-
-interface Me {
-  id: string;
-  username: string;
-  roles: string[];
-}
-
-function hasPermission(me: Me, perm: string): boolean {
-  const rolePerms: Record<string, string[]> = {
-    ADMIN: [
-      "vm.list", "vm.read", "vm.create", "vm.manage", "vm.edit", "vm.delete", "vm.provision",
-      "cred.reveal", "cred.rotate",
-      "guac.launch", "guac.manage",
-      "users.manage",
-      "templates.manage",
-      "audit.read",
-      "jobs.read", "jobs.retry", "jobs.cancel",
-      "settings.manage",
-      "health.read",
-      "proxmox.read",
-    ],
-    OPERATOR: [
-      "vm.list", "vm.read", "vm.create", "vm.manage", "vm.edit", "vm.provision",
-      "cred.rotate",
-      "guac.launch", "guac.manage",
-      "jobs.read", "jobs.retry", "jobs.cancel",
-      "health.read",
-      "proxmox.read",
-    ],
-    USER: [
-      "vm.read",
-      "guac.launch",
-      "jobs.read",
-      "health.read",
-    ],
-  };
-  return me.roles.some((r) => rolePerms[r]?.includes(perm));
-}
 
 export default function VmDetail({ me }: { me: Me }) {
   const { id = "" } = useParams();
+  const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const qc = useQueryClient();
-  const { confirm, dialog } = useConfirm();
-  const { data, error } = useQuery({
+  const confirm = useConfirm();
+  const toast = useToast();
+  const can = makeCan(useEffectivePermissions(), (perm) => hasPermission(me, perm));
+
+  const { data, error, isLoading } = useQuery({
     queryKey: ["vm", id],
     queryFn: () => api<Record<string, unknown>>(`/vms/${id}`),
     refetchInterval: 10000,
   });
+
   const [revealed, setRevealed] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
-  const [launchProtocol, setLaunchProtocol] = useState<string | null>(null);
-  const [connTest, setConnTest] = useState<Record<string, { testing: boolean; text?: string; ok?: boolean }>>({});
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneName, setCloneName] = useState("");
   const [cloneTarget, setCloneTarget] = useState("");
-  const [migrateTarget, setMigrateTarget] = useState("");
-  const [migrateOnline, setMigrateOnline] = useState(true);
-  // Async migration: POST /migrate returns 202 immediately (long migrations
-  // exceed Cloudflare's 100s proxy timeout), then we poll until Proxmox
-  // reports the task stopped. Survives nothing on unmount — polling simply
-  // stops; the migration continues server-side and the next poll finalizes.
+  const [templateName, setTemplateName] = useState("");
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [timeframe, setTimeframe] = usePref("vmdetail-stats-range", "day");
   const [migrating, setMigrating] = useState<{
     target: string;
     upid: string;
@@ -74,24 +59,22 @@ export default function VmDetail({ me }: { me: Me }) {
     detachedIso: string[];
     startedAt: number;
   } | null>(null);
-  const [templateName, setTemplateName] = useState("");
-  const [templateOpen, setTemplateOpen] = useState(false);
-  const [timeframe, setTimeframe] = usePref("vmdetail-stats-range", "day");
-  const [shareProtocol, setShareProtocol] = useState("");
-  const [shareExpiry, setShareExpiry] = useState("60");
-  const [shareMaxUses, setShareMaxUses] = useState("");
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
-  const [inviteUser, setInviteUser] = useState("");
-  // Hooks must run before any early return (Rules of Hooks): permission
-  // resolution stays unconditional and only gates rendering below.
-  const can = makeCan(useEffectivePermissions(), (perm) => hasPermission(me, perm));
-  const canManageEarly = can("vm.manage");
-  const canReadNodesEarly = can("proxmox.read");
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+
+  const canManage = can("vm.manage");
+  const canReadNodes = can("proxmox.read");
+  const canEdit = can("vm.edit");
+  const canDelete = can("vm.delete");
+  const canReveal = can("cred.reveal");
+  const canRotate = can("cred.rotate");
+  const canLaunch = can("guac.launch");
+  const canClone = can("vm.create");
+  const canTemplate = can("templates.manage");
 
   const { data: nodesData } = useQuery({
     queryKey: ["proxmox-nodes"],
     queryFn: () => api<{ nodes: Array<{ node: string; status: string }> }>("/proxmox/nodes"),
-    enabled: canManageEarly && canReadNodesEarly,
+    enabled: canManage && canReadNodes,
     staleTime: 60000,
   });
   const { data: statsData } = useQuery({
@@ -101,16 +84,20 @@ export default function VmDetail({ me }: { me: Me }) {
   });
   const { data: sharesData } = useQuery({
     queryKey: ["vm-shares", id],
-    queryFn: () => api<{ links: Array<{ id: string; vmId: string; protocol: string; expiresAt: string; maxUses: number | null; useCount: number; revokedAt: string | null; createdAt: string }> }>("/share"),
+    queryFn: () =>
+      api<{ links: Array<{ id: string; vmId: string; protocol: string; expiresAt: string; maxUses: number | null; useCount: number; revokedAt: string | null; createdAt: string }> }>(
+        "/share",
+      ),
   });
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["vm", id] });
+    void qc.invalidateQueries({ queryKey: ["vms"] });
   };
 
-  // Hooks must run before any early return (Rules of Hooks): this effect is
-  // a no-op until a migration starts (migrating === null), so it is safe —
-  // and required — to register it unconditionally on every render.
+  // Async migration: POST returns 202 (long migrations exceed proxy
+  // timeouts), then we poll until Proxmox reports the task stopped.
+  // Polling stops on unmount; the migration continues server-side.
   useEffect(() => {
     if (!migrating) return;
     let cancelled = false;
@@ -130,33 +117,33 @@ export default function VmDetail({ me }: { me: Me }) {
         if (cancelled) return;
         if (st.state === "done") {
           setMigrating(null);
-          alert(`Migration to ${migrating.target} complete.`);
-          void qc.invalidateQueries({ queryKey: ["vm", id] });
+          toast.ok(`Migration to ${migrating.target} complete`);
+          refresh();
           return;
         }
         if (st.state === "error") {
           setMigrating(null);
-          alert(
-            `Migration to ${migrating.target} failed: ${st.exitStatus ?? "unknown error"}. The VM is still on its source node.`,
+          toast.err(
+            `Migration to ${migrating.target} failed`,
+            `${st.exitStatus ?? "unknown error"} — the VM is still on its source node.`,
           );
-          void qc.invalidateQueries({ queryKey: ["vm", id] });
+          refresh();
           return;
         }
         failures = 0;
         if (Date.now() > deadline) {
           setMigrating(null);
-          alert("Migration is still running but status polling timed out — it continues server-side; reload this page to check.");
+          toast.warn("Migration still running", "Status polling timed out; it continues server-side. Reload to check.");
           return;
         }
         timer = setTimeout(() => void tick(), 5000);
       } catch {
-        // Transient blips (proxy hiccups) shouldn't kill the poll; give up
-        // only after repeated consecutive failures.
+        // Transient blips shouldn't kill the poll; give up after repeated failures.
         failures += 1;
         if (failures >= 5) {
           if (!cancelled) {
             setMigrating(null);
-            alert("Lost contact with the migration status check — the migration may still be running server-side; reload this page to check.");
+            toast.warn("Lost contact with migration status", "The migration may still be running server-side; reload to check.");
           }
           return;
         }
@@ -170,73 +157,490 @@ export default function VmDetail({ me }: { me: Me }) {
     };
     // qc is context-stable; refresh is deliberately excluded (recreated per
     // render and would restart polling every render).
-  }, [migrating, id, qc]);
+  }, [migrating, id, qc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const doAction = async (action: string) => {
+  /* ------------------------------ actions ----------------------------- */
+
+  const doAction = async (action: "start" | "stop" | "restart") => {
+    if (action !== "start") {
+      const ok = await confirm({
+        title: `${action === "stop" ? "Stop" : "Restart"} this VM?`,
+        danger: action === "stop",
+        confirmLabel: action === "stop" ? "Stop VM" : "Restart VM",
+        body: "The guest receives the ACPI signal — unsaved work inside it may be lost. Use a forced stop from the API if the guest does not respond.",
+      });
+      if (!ok) return;
+    }
+    setActionBusy(action);
     try {
       await api(`/vms/${id}/${action}`, { method: "POST", body: {} });
+      toast.info(`${action[0]!.toUpperCase()}${action.slice(1)} requested`, "Waiting for Proxmox to apply the change.");
       refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err(`${action[0]!.toUpperCase()}${action.slice(1)} failed`, explainDenial(err) ?? errText(err));
+    } finally {
+      setActionBusy(null);
     }
   };
 
   const rotate = async () => {
+    setActionBusy("rotate");
     try {
       const res = await api<{ success: boolean; mechanism: string; verified: boolean; details: string }>(
         `/vms/${id}/credentials/rotate`,
         { method: "POST", body: {} },
       );
-      alert(`Password rotated (mechanism: ${res.mechanism}, verified: ${res.verified}). ${res.details}`);
+      if (res.success) toast.ok("Password rotated", `Mechanism: ${res.mechanism}, verified: ${res.verified}. ${res.details}`);
+      else toast.warn("Rotation completed with issues", res.details);
       refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Rotation failed", errText(err));
+    } finally {
+      setActionBusy(null);
     }
   };
 
   const reveal = async () => {
+    setActionBusy("reveal");
     try {
-      const res = await api<{ password: string }>(`/vms/${id}/credentials/reveal`, { method: "POST" });
+      const res = await api<{ password: string; autoHideSeconds?: number }>(`/vms/${id}/credentials/reveal`, { method: "POST" });
       setRevealed(res.password);
-      setTimeout(() => setRevealed(null), 30000);
+      setTimeout(() => setRevealed(null), (res.autoHideSeconds ?? 30) * 1000);
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Reveal failed", errText(err));
+    } finally {
+      setActionBusy(null);
     }
   };
 
-  const copy = async () => {
+  const copyCredential = async () => {
+    setActionBusy("copy");
     try {
       const res = await api<{ password: string }>(`/vms/${id}/credentials/copy`, { method: "POST" });
-      await navigator.clipboard.writeText(res.password);
+      const ok = await copyToClipboard(res.password);
       setRevealed(res.password);
       setTimeout(() => setRevealed(null), 30000);
+      if (ok) toast.ok("Copied to clipboard", "The password also shows below for 30 seconds.");
+      else toast.warn("Clipboard unavailable", "The password is shown below — copy it manually.");
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Copy failed", errText(err));
+    } finally {
+      setActionBusy(null);
     }
   };
 
   const launch = async (protocol?: string) => {
+    setActionBusy("launch");
     try {
-      const res = await api<{ url: string }>(`/vms/${id}/guacamole/launch`, {
+      const res = await api<{ url: string; mode?: string; detail?: string }>(`/vms/${id}/guacamole/launch`, {
         method: "POST",
         body: protocol ? { protocol } : {},
       });
+      if (res.mode === "login") {
+        toast.warn("Direct session unavailable", res.detail ?? "Opening the Guacamole login page instead.");
+      }
       window.open(res.url, "_blank", "noopener");
     } catch (err) {
-      const why = explainDenial(err);
-      alert(why ?? (err instanceof Error ? err.message : String(err)));
+      toast.err("Could not open console", explainDenial(err) ?? errText(err));
+    } finally {
+      setActionBusy(null);
     }
   };
 
+  const del = async (vmName: string) => {
+    const ok = await confirm({
+      title: `Delete ${vmName}?`,
+      danger: true,
+      requireText: `DELETE ${vmName}`,
+      confirmLabel: "Delete VM",
+      body: "Deletes the VM from Proxmox, its Guacamole connection, and its stored credential. This cannot be undone.",
+    });
+    if (!ok) return;
+    try {
+      await api(`/vms/${id}`, { method: "DELETE", body: { confirmText: `DELETE ${vmName}` } });
+      toast.ok("VM deleted", `${vmName} removed.`);
+      navigate("/vms");
+    } catch (err) {
+      toast.err("Delete failed", errText(err));
+    }
+  };
+
+  /* ------------------------------- render ----------------------------- */
+
+  if (isLoading && !data) {
+    return (
+      <div className="pv-page">
+        <div style={{ paddingTop: 20 }}><TableSkeleton rows={5} cols={3} /></div>
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="pv-page">
+        <Alert kind="err" title="Failed to load this VM">
+          {explainDenial(error) ?? errText(error)}
+          <div style={{ marginTop: 8 }}>
+            <Link to="/vms">← Back to virtual machines</Link>
+          </div>
+        </Alert>
+      </div>
+    );
+  }
+
+  const vm = data.vm as {
+    name: string; vmid: number; node: string; status: string; ip: string | null;
+    osType: string | null; osName?: string | null; private?: boolean; viewerAccess?: boolean;
+    vmClass?: string; startOnBoot?: boolean; createdAt?: string;
+  };
+  const proxmox = data.proxmox as Record<string, unknown> | null;
+  const cred = data.credential as { username?: string; status?: string } | null;
+  const guac = data.guacamole as {
+    connections?: Array<{ protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string }>;
+    active?: { protocol: string; status: string; port: number; hostname: string } | null;
+  } | null;
+  const jobs = (data.jobs ?? []) as Array<Record<string, unknown>>;
+  const audit = (data.audit ?? []) as Array<Record<string, unknown>>;
+  const connections = guac?.connections ?? [];
+  const status = String(proxmox?.status ?? vm.status);
+
+  const tab = params.get("tab") ?? "overview";
+  const setTab = (t: string) => {
+    const next = new URLSearchParams(params);
+    if (t === "overview") next.delete("tab");
+    else next.set("tab", t);
+    setParams(next, { replace: true });
+  };
+
+  const tabs = [
+    {
+      id: "overview",
+      label: "Overview",
+      panel: (
+        <>
+          <KeyValue
+            columns={3}
+            items={[
+              { key: "status", label: "Status", value: <StatusBadge status={status} /> },
+              { key: "ip", label: "IP", value: vm.ip ? <CopyableCode value={vm.ip} /> : <span className="pv-faint">—</span> },
+              { key: "os", label: "OS", value: vm.osName ?? vm.osType ?? "Unknown" },
+              { key: "cpu", label: "CPUs", value: String(proxmox?.cores ?? "—") },
+              { key: "mem", label: "Memory", value: proxmox?.memory ? `${proxmox.memory} MB` : "—" },
+              { key: "disk", label: "Disk", value: proxmox?.disk ? `${proxmox.disk}` : "—" },
+              { key: "uptime", label: "Uptime", value: fmtUptime(proxmox?.uptime) },
+              { key: "agent", label: "Guest agent", value: String(proxmox?.agent ?? "—") },
+              { key: "created", label: "Created", value: fmtDateTime(vm.createdAt) },
+              { key: "guac", label: "Console", value: guac?.active ? <StatusBadge status={String(guac.active.status)} /> : "not created" },
+              {
+                key: "cred",
+                label: "Credential",
+                value: cred ? <span><StatusBadge status={String(cred.status)} /> {cred.username ? <span className="pv-faint">· {cred.username}</span> : null}</span> : "none",
+              },
+              {
+                key: "boot",
+                label: "Start on boot",
+                value: vm.startOnBoot ? <Badge tone="info">on</Badge> : <Badge>off</Badge>,
+              },
+            ]}
+          />
+          {connections.length > 0 && (
+            <Section title="Remote connections" hint="Protocols exposed through Guacamole">
+              <ConnectionTable connections={connections} canLaunch={canLaunch} vmId={id} busy={actionBusy} onLaunch={launch} />
+            </Section>
+          )}
+          <VmGraphs points={statsData?.points ?? []} timeframe={timeframe} setTimeframe={setTimeframe} />
+        </>
+      ),
+    },
+    {
+      id: "access",
+      label: "Access",
+      panel: (
+        <>
+          {canEdit ? (
+            <UserAccessSection vmId={id} vmName={vm.name} refresh={refresh} />
+          ) : (
+            <Section title="User access" hint="Granting and revoking requires the VM edit permission.">
+              <AccessReadonly vmId={id} />
+            </Section>
+          )}
+          {canEdit && (
+            <VmShareSection
+              vmId={id}
+              connections={connections.map((c) => c.protocol)}
+              links={(sharesData?.links ?? []).filter((l) => l.vmId === id)}
+              refreshShare={() => void qc.invalidateQueries({ queryKey: ["vm-shares", id] })}
+            />
+          )}
+          {vm.viewerAccess && <InviteSection vmId={id} refresh={refresh} />}
+          <Section
+            title="Credentials"
+            hint="Server-mediated reveal and rotation — audited events, 30-second auto-hide."
+          >
+            <div className="pv-inline">
+              {canReveal && (
+                <Btn onClick={() => void reveal()} loading={actionBusy === "reveal"}>
+                  <Eye size={13} aria-hidden="true" /> Reveal password
+                </Btn>
+              )}
+              {canReveal && (
+                <Btn onClick={() => void copyCredential()} loading={actionBusy === "copy"}>
+                  <Copy size={13} aria-hidden="true" /> Copy password
+                </Btn>
+              )}
+              {canRotate && (
+                <Btn kind="danger-ghost" onClick={() => void rotate()} loading={actionBusy === "rotate"}>
+                  <RefreshCw size={13} aria-hidden="true" /> Rotate password
+                </Btn>
+              )}
+            </div>
+            {revealed && (
+              <Alert kind="ok" title="Password revealed (auto-hides in 30s)">
+                <code className="pv-mono" style={{ userSelect: "all", wordBreak: "break-all" }}>{revealed}</code>
+              </Alert>
+            )}
+          </Section>
+        </>
+      ),
+    },
+    {
+      id: "firewall",
+      label: "Network & isolation",
+      panel: canEdit ? (
+        <VmFirewallSection vmId={id} />
+      ) : (
+        <EmptyState title="Firewall management unavailable" body="Editing the isolation firewall requires the VM edit permission." />
+      ),
+    },
+    {
+      id: "tasks",
+      label: "Tasks",
+      panel: (
+        <Section title="Provisioning jobs" hint="Background operations run by the worker; watch live progress.">
+          {!jobs.length ? (
+            <EmptyState title="No provisioning jobs" body="Jobs for this VM appear here after provisioning, cloning, or templating." />
+          ) : (
+            <div className="pv-table-wrap">
+              <table className="pv-table">
+                <thead>
+                  <tr><th>Job</th><th>Status</th><th>Created</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {jobs.map((j) => (
+                    <tr key={String(j.id)}>
+                      <td className="pv-mono">{String(j.id).slice(0, 8)}</td>
+                      <td><StatusBadge status={String(j.status)} /></td>
+                      <td className="pv-faint">{fmtDateTime(String(j.createdAt))}</td>
+                      <td style={{ textAlign: "right" }}>
+                        <WatchJobButton jobId={String(j.id)} onProgress={setProgress} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {progress && (
+            <div className="pv-mono" style={{ marginTop: 10, fontSize: "0.78rem", color: "var(--pv-text-2)" }} role="status">
+              {progress}
+            </div>
+          )}
+        </Section>
+      ),
+    },
+    {
+      id: "audit",
+      label: "Audit",
+      panel: (
+        <Section title="Audit history" hint="Recorded actions on this VM (actor, time, event).">
+          {!audit.length ? (
+            <EmptyState title="No audit entries" />
+          ) : (
+            <div className="pv-table-wrap">
+              <table className="pv-table">
+                <thead>
+                  <tr><th>Event</th><th>Actor</th><th>Time</th></tr>
+                </thead>
+                <tbody>
+                  {audit.map((a) => (
+                    <tr key={String(a.id)}>
+                      <td className="pv-mono">{String(a.event)}</td>
+                      <td>{String(a.actorUsername ?? "system")}</td>
+                      <td className="pv-faint">{fmtDateTime(String(a.createdAt))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+      ),
+    },
+  ];
+
+  return (
+    <div className="pv-page">
+      <div style={{ marginBottom: 10 }}>
+        <Link to="/vms" style={{ fontSize: "0.8rem", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <ArrowLeft size={12} aria-hidden="true" /> Virtual machines
+        </Link>
+      </div>
+      <PageHeader
+        title={vm.name}
+        meta={
+          <>
+            <StatusBadge status={status} />
+            <span className="pv-mono pv-faint" style={{ fontWeight: 400, fontSize: "0.8rem" }}>
+              {vm.vmid} @ {vm.node}
+            </span>
+            {vm.private && <Badge tone="plain" icon={<Eye size={10} aria-hidden="true" />}>private</Badge>}
+            {vm.vmClass === "user" ? <Badge tone="plain" icon={<UsersIcon size={10} aria-hidden="true" />}>user class</Badge> : null}
+          </>
+        }
+        actions={
+          <>
+            {canLaunch && connections.length > 0 && (
+              connections.length === 1 ? (
+                <Btn kind="primary" onClick={() => void launch(connections[0]!.protocol)} loading={actionBusy === "launch"}>
+                  <Network size={13} aria-hidden="true" /> Open {connections[0]!.protocol.toUpperCase()}
+                </Btn>
+              ) : (
+                <Menu
+                  label="Open console"
+                  trigger={({ open, toggle, ref }) => (
+                    <button ref={ref} className="pv-btn pv-btn-primary" aria-expanded={open} onClick={toggle}>
+                      <Network size={13} aria-hidden="true" /> Open console
+                    </button>
+                  )}
+                  items={connections.map((c) => ({
+                    label: `${c.protocol.toUpperCase()} — ${c.hostname}:${c.port}`,
+                    onSelect: () => void launch(c.protocol),
+                  }))}
+                />
+              )
+            )}
+            {canManage && (
+              <>
+                <Btn onClick={() => void doAction("start")} disabled={status === "running" || actionBusy !== null}>
+                  <Play size={13} aria-hidden="true" /> Start
+                </Btn>
+                <Btn onClick={() => void doAction("stop")} disabled={status === "stopped" || actionBusy !== null}>
+                  <Square size={13} aria-hidden="true" /> Stop
+                </Btn>
+                <Btn onClick={() => void doAction("restart")} disabled={status !== "running" || actionBusy !== null}>
+                  <RotateCw size={13} aria-hidden="true" /> Restart
+                </Btn>
+              </>
+            )}
+            {(canClone || canTemplate || canManage || canEdit || canDelete) && (
+              <Menu
+                label="More actions"
+                trigger={({ open, toggle, ref }) => (
+                  <button ref={ref} className="pv-btn pv-btn-icon" aria-expanded={open} aria-label="More actions" onClick={toggle}>
+                    <MoreHorizontal size={15} aria-hidden="true" />
+                  </button>
+                )}
+                items={[
+                  ...(canClone
+                    ? [{
+                        label: "Clone…",
+                        icon: <Layers size={13} aria-hidden="true" />,
+                        onSelect: () => { setCloneOpen(true); setCloneName(`${vm.name}-copy`); },
+                      }]
+                    : []),
+                  ...(canManage
+                    ? [{
+                        label: "Migrate…",
+                        icon: <MapPin size={13} aria-hidden="true" />,
+                        disabled: migrating !== null,
+                        onSelect: () => document.getElementById("pv-migrate-anchor")?.scrollIntoView({ behavior: "smooth", block: "center" }),
+                      }]
+                    : []),
+                  ...(canTemplate
+                    ? [{
+                        label: "Save as template…",
+                        icon: <CloudUpload size={13} aria-hidden="true" />,
+                        onSelect: () => { setTemplateOpen(true); setTemplateName(`${vm.name}-template`); },
+                      }]
+                    : []),
+                  ...(canDelete
+                    ? [{
+                        label: "Delete…",
+                        icon: <Trash2 size={13} aria-hidden="true" />,
+                        danger: true,
+                        onSelect: () => void del(vm.name),
+                      }]
+                    : []),
+                ]}
+              />
+            )}
+          </>
+        }
+      />
+
+      {migrating && (
+        <Alert kind="info" title={`Migrating to ${migrating.target}…`}>
+          {migrating.online ? "Live migration" : "Offline migration"} in progress — checking status
+          every few seconds. It is safe to leave this page; the migration continues server-side.
+        </Alert>
+      )}
+
+      <div id="pv-migrate-anchor" />
+
+      <Tabs tabs={tabs} active={tab} onChange={setTab} label="VM detail sections" />
+
+      {(canManage || canEdit) && (
+        <ManageSection
+          vm={vm}
+          nodes={nodesData?.nodes ?? []}
+          canManage={canManage}
+          canEdit={canEdit}
+          canClone={canClone}
+          cloneOpen={cloneOpen}
+          setCloneOpen={setCloneOpen}
+          cloneName={cloneName}
+          setCloneName={setCloneName}
+          cloneTarget={cloneTarget}
+          setCloneTarget={setCloneTarget}
+          templateOpen={templateOpen}
+          setTemplateOpen={setTemplateOpen}
+          templateName={templateName}
+          setTemplateName={setTemplateName}
+          migrating={migrating}
+          setMigrating={setMigrating}
+          refresh={refresh}
+          vmId={id}
+        />
+      )}
+    </div>
+  );
+}
+
+/* =========================== connection table ========================= */
+
+function ConnectionTable({
+  connections,
+  canLaunch,
+  vmId,
+  busy,
+  onLaunch,
+}: {
+  connections: Array<{ protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string }>;
+  canLaunch: boolean;
+  vmId: string;
+  busy: string | null;
+  onLaunch: (protocol?: string) => void;
+}) {
+  const [tests, setTests] = useState<Record<string, { testing: boolean; text?: string; ok?: boolean }>>({});
+
   const testConnection = async (protocol: string) => {
-    setConnTest((t) => ({ ...t, [protocol]: { testing: true } }));
+    setTests((t) => ({ ...t, [protocol]: { testing: true } }));
     try {
       const res = await api<{ reachable: boolean; authenticated: boolean | null; detail: string }>(
-        `/vms/${id}/guacamole/test`,
+        `/vms/${vmId}/guacamole/test`,
         { method: "POST", body: { protocol } },
       );
       const ok = res.reachable && res.authenticated !== false;
-      setConnTest((t) => ({
+      setTests((t) => ({
         ...t,
         [protocol]: {
           testing: false,
@@ -245,67 +649,102 @@ export default function VmDetail({ me }: { me: Me }) {
         },
       }));
     } catch (err) {
-      setConnTest((t) => ({
-        ...t,
-        [protocol]: { testing: false, ok: false, text: err instanceof Error ? err.message : String(err) },
-      }));
+      setTests((t) => ({ ...t, [protocol]: { testing: false, ok: false, text: errText(err) } }));
     }
   };
 
-  const watchJob = async (jobId: string) => {
-    setProgress("Connecting to job stream…");
-    jobEventSource(
-      jobId,
-      (data) => {
-        const d = data as { status: string; step: string | null; message: string };
-        setProgress(`${d.status}${d.step ? ` (${d.step})` : ""}: ${d.message}`);
-      },
-      () => setProgress(null),
-      (err) => setProgress(`Event stream unavailable: ${err.message}`),
-    );
-  };
+  return (
+    <div className="pv-table-wrap">
+      <table className="pv-table">
+        <thead>
+          <tr>
+            <th>Protocol</th>
+            <th>Status</th>
+            <th>Target</th>
+            <th>User</th>
+            <th style={{ width: 150 }}>Diagnostics</th>
+          </tr>
+        </thead>
+        <tbody>
+          {connections.map((c) => (
+            <tr key={c.protocol}>
+              <td className="pv-mono" style={{ textTransform: "uppercase" }}>{c.protocol}</td>
+              <td><StatusBadge status={c.status} /></td>
+              <td className="pv-mono">{c.hostname}:{c.port}</td>
+              <td>{c.username}</td>
+              <td>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {canLaunch && (
+                    <button className="pv-btn pv-btn-sm" onClick={() => void onLaunch(c.protocol)} disabled={busy !== null}>
+                      Open
+                    </button>
+                  )}
+                  <button
+                    className="pv-btn pv-btn-sm"
+                    disabled={tests[c.protocol]?.testing}
+                    onClick={() => void testConnection(c.protocol)}
+                  >
+                    {tests[c.protocol]?.testing ? "Testing…" : "Test"}
+                  </button>
+                </div>
+                {tests[c.protocol]?.text && (
+                  <div style={{ fontSize: "0.74rem", marginTop: 3, color: tests[c.protocol]?.ok ? "var(--pv-ok)" : "var(--pv-err)" }}>
+                    {tests[c.protocol]!.text}
+                  </div>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
-  const del = (vmName: string) => {
-    confirm(`Delete VM ${vmName} and all associated resources.`, `DELETE ${vmName}`, async () => {
-      await api(`/vms/${id}`, { method: "DELETE", body: { confirmText: `DELETE ${vmName}` } });
-      window.location.href = "/vms";
-    });
-  };
+/* ============================ manage section ========================== */
 
-  if (!data) return error ? <ErrorBox error={error} /> : <div style={{ color: "var(--pv-text-3)" }}>Loading…</div>;
-
-  const vm = data.vm as { name: string; vmid: number; node: string; status: string; ip: string | null; osType: string | null; private?: boolean; viewerAccess?: boolean; vmClass?: string; startOnBoot?: boolean };
-  const proxmox = data.proxmox as Record<string, unknown> | null;
-  const cred = data.credential as Record<string, unknown> | null;
-  const guac = data.guacamole as { connections?: Array<{ protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string }>; active?: { protocol: string; status: string; port: number; hostname: string; username: string; connectionName: string } | null } | null;
-
-  const canManage = can("vm.manage");
-  const canEdit = can("vm.edit");
-  const canDelete = can("vm.delete");
-  const canReveal = can("cred.reveal");
-  const canRotate = can("cred.rotate");
-  const canLaunch = can("guac.launch");
-  const canClone = can("vm.create");
-  const canTemplate = can("templates.manage");
+function ManageSection({
+  vm, nodes, canManage, canEdit, canClone,
+  cloneOpen, setCloneOpen, cloneName, setCloneName, cloneTarget, setCloneTarget,
+  templateOpen, setTemplateOpen, templateName, setTemplateName,
+  migrating, setMigrating, refresh, vmId,
+}: {
+  vm: { name: string; node: string; private?: boolean; vmClass?: string; startOnBoot?: boolean; viewerAccess?: boolean };
+  nodes: Array<{ node: string; status: string }>;
+  canManage: boolean; canEdit: boolean; canClone: boolean;
+  cloneOpen: boolean; setCloneOpen: (v: boolean) => void;
+  cloneName: string; setCloneName: (v: string) => void;
+  cloneTarget: string; setCloneTarget: (v: string) => void;
+  templateOpen: boolean; setTemplateOpen: (v: boolean) => void;
+  templateName: string; setTemplateName: (v: string) => void;
+  migrating: { target: string } | null;
+  setMigrating: (m: { target: string; upid: string; online: boolean; detachedIso: string[]; startedAt: number } | null) => void;
+  refresh: () => void;
+  vmId: string;
+}) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [migrateTarget, setMigrateTarget] = useState("");
+  const [migrateOnline, setMigrateOnline] = useState(true);
 
   const doClone = async () => {
     try {
-      const res = await api<{ vm: { id: string; name: string } }>(`/vms/${id}/clone`, {
+      const res = await api<{ vm: { id: string; name: string } }>(`/vms/${vmId}/clone`, {
         method: "POST",
         body: { name: cloneName, target: cloneTarget || undefined },
       });
-      alert(`Clone started as ${res.vm.name}.`);
+      toast.ok("Clone started", `${res.vm.name} is being created.`);
       setCloneOpen(false);
       setCloneName("");
       refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Clone failed", errText(err));
     }
   };
 
   const doMigrate = async () => {
     try {
-      const res = await api<{ accepted: boolean; upid: string; detachedIso: string[] }>(`/vms/${id}/migrate`, {
+      const res = await api<{ accepted: boolean; upid: string; detachedIso: string[] }>(`/vms/${vmId}/migrate`, {
         method: "POST",
         body: { target: migrateTarget, online: migrateOnline },
       });
@@ -316,443 +755,218 @@ export default function VmDetail({ me }: { me: Me }) {
         detachedIso: res.detachedIso ?? [],
         startedAt: Date.now(),
       });
+      toast.info("Migration accepted", `Moving to ${migrateTarget} — progress is tracked on this page.`);
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const doInvite = async () => {
-    try {
-      await api(`/vms/${id}/invite`, { method: "POST", body: { username: inviteUser.trim() } });
-      alert(`${inviteUser.trim()} now has access.`);
-      setInviteUser("");
-      refresh();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const togglePrivacy = async () => {
-    try {
-      const res = await api<{ private: boolean }>(`/vms/${id}/privacy`, {
-        method: "PATCH",
-        body: { enabled: !vm.private },
-      });
-      alert(res.private ? "Privacy flag on — only granted users can see this VM now." : "Privacy flag off.");
-      refresh();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const setStartOnBoot = async (enabled: boolean) => {
-    try {
-      await api(`/vms/${id}/start-on-boot`, { method: "PATCH", body: { enabled } });
-      alert(
-        enabled
-          ? "Start on host boot is on — Proxmox will power this VM on automatically when its node boots."
-          : "Start on host boot is off — this VM stays stopped across node reboots.",
-      );
-      refresh();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const setClass = async (vmClass: "server" | "user") => {
-    try {
-      await api(`/vms/${id}/class`, { method: "PATCH", body: { vmClass } });
-      alert(
-        vmClass === "user"
-          ? "Marked as a user VM — eligible for idle auto-shutdown when the global switch is on."
-          : "Marked as a server VM — never auto-shut down.",
-      );
-      refresh();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Migration failed to start", errText(err));
     }
   };
 
   const doMakeTemplate = async () => {
     try {
-      const res = await api<{ template: { name: string } }>(`/vms/${id}/make-template`, {
+      const res = await api<{ template: { name: string } }>(`/vms/${vmId}/make-template`, {
         method: "POST",
         body: { name: templateName },
       });
-      alert(`Template ${res.template.name} registered.`);
+      toast.ok("Template registered", `${res.template.name} is available for provisioning.`);
       setTemplateOpen(false);
       setTemplateName("");
+      void qc.invalidateQueries({ queryKey: ["templates"] });
       refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Template conversion failed", errText(err));
     }
   };
 
-  const doShare = async (protocol: string) => {
+  const togglePrivacy = async () => {
     try {
-      const res = await api<{ token: string }>(`/vms/${id}/share`, {
-        method: "POST",
-        body: {
-          protocol,
-          expiresInMinutes: Number(shareExpiry),
-          maxUses: shareMaxUses ? Number(shareMaxUses) : undefined,
-        },
+      const res = await api<{ private: boolean }>(`/vms/${vmId}/privacy`, {
+        method: "PATCH",
+        body: { enabled: !vm.private },
       });
-      setShareUrl(`${window.location.origin}/api/s/${res.token}`);
-      void qc.invalidateQueries({ queryKey: ["vm-shares", id] });
+      if (res.private) {
+        toast.ok("Privacy flag on", "Only users with a direct grant — including admins — can see this VM now.");
+      } else {
+        toast.info("Privacy flag off", "Administrators can see and manage this VM without a grant.");
+      }
+      refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Privacy change failed", errText(err));
     }
   };
 
-  const doRevokeShare = async (shareId: string) => {
+  const setStartOnBoot = async (enabled: boolean) => {
     try {
-      await api(`/share/${shareId}`, { method: "DELETE" });
-      void qc.invalidateQueries({ queryKey: ["vm-shares", id] });
+      await api(`/vms/${vmId}/start-on-boot`, { method: "PATCH", body: { enabled } });
+      toast.ok(
+        enabled ? "Start on host boot enabled" : "Start on host boot disabled",
+        enabled ? "Proxmox will power this VM on when its node boots." : "This VM stays stopped across node reboots.",
+      );
+      refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      toast.err("Change failed", errText(err));
     }
   };
+
+  const setClass = async (vmClass: "server" | "user") => {
+    try {
+      await api(`/vms/${vmId}/class`, { method: "PATCH", body: { vmClass } });
+      toast.ok(
+        vmClass === "user" ? "Marked as user VM" : "Marked as server VM",
+        vmClass === "user" ? "Eligible for idle auto-shutdown when the global switch is on." : "Never auto-shut down.",
+      );
+      refresh();
+    } catch (err) {
+      toast.err("Change failed", errText(err));
+    }
+  };
+
+  const otherNodes = nodes.filter((n) => n.node !== vm.node);
 
   return (
-    <div className="pv-page">
-      {dialog}
-      <div style={{ marginBottom: 4 }}>
-        <Link to="/vms" style={{ fontSize: "0.8rem" }}>← Virtual Machines</Link>
-      </div>
-      <div className="pv-title-row" style={{ marginBottom: 14 }}>
-        <h1 className="pv-title">
-          {vm.name}{" "}
-          <span className="pv-mono" style={{ color: "var(--pv-text-3)", fontWeight: 400 }}>
-            {vm.vmid} @ {vm.node}
-          </span>
-          {vm.private && <span className="pv-mono" title="Privacy-flagged: invisible without a direct grant" style={{ marginLeft: 8, color: "var(--pv-text-3)" }}>private</span>}
-        </h1>
-        <div className="pv-title-actions">
-          {canLaunch && guac?.connections?.length && (
-            <>
-              <select
-                value={launchProtocol ?? ""}
-                onChange={(e) => setLaunchProtocol(e.target.value || null)}
-                className="pv-select pv-input-auto"
-                style={{ height: 32 }}
-                aria-label="Protocol"
-              >
-                <option value="">Protocol…</option>
-                {guac.connections.map((c) => (
-                  <option key={c.protocol} value={c.protocol}>{c.protocol.toUpperCase()} ({c.hostname}:{c.port})</option>
-                ))}
-              </select>
-              <Btn kind="primary" onClick={() => void launch(launchProtocol ?? undefined)} disabled={!launchProtocol}>
-                Open
+    <Section title="Manage" hint="Clone, migrate, template, policy flags">
+      <div className="pv-grid-3">
+        {canClone && (
+          <div>
+            <div className="pv-label">Clone this VM</div>
+            {!cloneOpen ? (
+              <Btn size="sm" onClick={() => { setCloneOpen(true); setCloneName(`${vm.name}-copy`); }}>
+                <Layers size={12} aria-hidden="true" /> Clone…
               </Btn>
-            </>
-          )}
-          {canManage && (
-            <>
-              <Btn onClick={() => void doAction("start")}>Start</Btn>
-              <Btn onClick={() => void doAction("stop")}>Stop</Btn>
-              <Btn onClick={() => void doAction("restart")}>Restart</Btn>
-            </>
-          )}
-          {canReveal && <Btn onClick={() => void reveal()}>Reveal credential</Btn>}
-          {canRotate && <Btn onClick={() => void rotate()}>Rotate password</Btn>}
-          {canDelete && <Btn kind="link" onClick={() => del(vm.name)}>Delete</Btn>}
-        </div>
-      </div>
-
-      <dl className="pv-kv pv-kv-3" style={{ marginBottom: 24 }}>
-        <dt>Status</dt><dd><StatusBadge status={String(proxmox?.status ?? vm.status)} /></dd>
-        <dt>IP</dt><dd><span className="pv-mono">{vm.ip ?? "—"}</span></dd>
-        <dt>CPUs</dt><dd>{String(proxmox?.cores ?? "—")}</dd>
-        <dt>Memory</dt><dd>{proxmox?.memory ? `${proxmox.memory} MB` : "—"}</dd>
-        <dt>Uptime</dt><dd>{proxmox?.uptime ? `${Math.floor(Number(proxmox.uptime) / 3600)}h ${Math.floor((Number(proxmox.uptime) % 3600) / 60)}m` : "—"}</dd>
-        <dt>Guest agent</dt><dd>{String(proxmox?.agent ?? "—")}</dd>
-        <dt>Guacamole</dt><dd>{guac?.active ? <StatusBadge status={String(guac.active.status)} /> : "not created"}</dd>
-        <dt>Credential</dt><dd>{cred ? <StatusBadge status={String(cred.status)} /> : "none"}{cred?.username ? ` · ${String(cred.username)}` : ""}</dd>
-      </dl>
-
-      {guac?.connections?.length && (
-        <Section title="Remote connections" hint={`${guac.connections.length} protocol${guac.connections.length > 1 ? "s" : ""} via Guacamole`}>
-          <div className="pv-table-wrap">
-            <table className="pv-table">
-              <thead>
-                <tr><th>Protocol</th><th>Status</th><th>Target</th><th>User</th>{canLaunch && <th>Check</th>}</tr>
-              </thead>
-              <tbody>
-                {guac.connections.map((c) => (
-                  <tr key={c.protocol}>
-                    <td className="pv-mono" style={{ textTransform: "uppercase" }}>{c.protocol}</td>
-                    <td><StatusBadge status={c.status} /></td>
-                    <td className="pv-mono">{c.hostname}:{c.port}</td>
-                    <td>{c.username}</td>
-                    {canLaunch && (
-                      <td>
-                        <Btn
-                          size="sm"
-                          kind="link"
-                          onClick={() => void testConnection(c.protocol)}
-                          disabled={connTest[c.protocol]?.testing}
-                        >
-                          {connTest[c.protocol]?.testing ? "Testing…" : "Test"}
-                        </Btn>
-                        {connTest[c.protocol]?.text && (
-                          <div style={{ fontSize: "0.76rem", marginTop: 2, color: connTest[c.protocol]?.ok ? "var(--pv-ok)" : "var(--pv-err)" }}>
-                            {connTest[c.protocol]?.text}
-                          </div>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Section>
-      )}
-
-      {(canClone || canTemplate || canManage || canEdit) && (
-        <Section title="Manage" hint="Clone, migrate, template, privacy, class">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4 text-sm">
-            {canClone && (
+            ) : (
               <div>
-                <div className="pv-label">Clone this VM</div>
-                {!cloneOpen ? (
-                  <Btn size="sm" onClick={() => { setCloneOpen(true); setCloneName(`${vm.name}-copy`); }}>
-                    Clone…
-                  </Btn>
-                ) : (
-                  <div>
-                    <input
-                      className="pv-input"
-                      style={{ marginBottom: 8 }}
-                      placeholder="Clone name"
-                      value={cloneName}
-                      onChange={(e) => setCloneName(e.target.value)}
-                    />
-                    {(nodesData?.nodes ?? []).length > 0 && (
-                      <select
-                        className="pv-select"
-                        style={{ marginBottom: 8 }}
-                        value={cloneTarget}
-                        onChange={(e) => setCloneTarget(e.target.value)}
-                      >
-                        <option value="">Same node ({vm.node})</option>
-                        {(nodesData?.nodes ?? []).filter((n) => n.node !== vm.node).map((n) => (
-                          <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
-                        ))}
-                      </select>
-                    )}
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <Btn size="sm" kind="primary" onClick={() => void doClone()} disabled={!cloneName.trim()}>
-                        Clone
-                      </Btn>
-                      <Btn size="sm" onClick={() => setCloneOpen(false)}>
-                        Cancel
-                      </Btn>
-                    </div>
-                  </div>
+                <Input style={{ marginBottom: 8 }} placeholder="Clone name" value={cloneName} onChange={(e) => setCloneName(e.target.value)} />
+                {otherNodes.length > 0 && (
+                  <Select style={{ marginBottom: 8 }} value={cloneTarget} onChange={(e) => setCloneTarget(e.target.value)} aria-label="Clone target node">
+                    <option value="">Same node ({vm.node})</option>
+                    {otherNodes.map((n) => (
+                      <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
+                    ))}
+                  </Select>
                 )}
-              </div>
-            )}
-            {canManage && (
-              <div>
-                <div className="pv-label">Migrate to another node</div>
-                {(nodesData?.nodes ?? []).filter((n) => n.node !== vm.node).length > 0 ? (
-                  <div>
-                    <select
-                      className="pv-select"
-                      style={{ marginBottom: 8 }}
-                      value={migrateTarget}
-                      onChange={(e) => setMigrateTarget(e.target.value)}
-                    >
-                      <option value="">Select target…</option>
-                      {(nodesData?.nodes ?? []).filter((n) => n.node !== vm.node).map((n) => (
-                        <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
-                      ))}
-                    </select>
-                    <label className="pv-checkrow" style={{ marginBottom: 8 }}>
-                      <input type="checkbox" checked={migrateOnline} onChange={(e) => setMigrateOnline(e.target.checked)} />
-                      Online migration (running VMs)
-                    </label>
-                    <Btn size="sm" onClick={() => void doMigrate()} disabled={!migrateTarget || migrating !== null}>
-                      {migrating ? `Migrating to ${migrating.target}…` : "Migrate"}
-                    </Btn>
-                    {migrating && (
-                      <div className="pv-hint">Migration running — checking status every few seconds. Safe to leave this page.</div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="pv-hint">Single-node cluster or node list unavailable.</div>
-                )}
-              </div>
-            )}
-            {canTemplate && (
-              <div>
-                <div className="pv-label">Save as template</div>
-                {!templateOpen ? (
-                  <Btn size="sm" onClick={() => { setTemplateOpen(true); setTemplateName(`${vm.name}-template`); }}>
-                    New template…
-                  </Btn>
-                ) : (
-                  <div>
-                    <input
-                      className="pv-input"
-                      style={{ marginBottom: 8 }}
-                      placeholder="Template name"
-                      value={templateName}
-                      onChange={(e) => setTemplateName(e.target.value)}
-                    />
-                    <div className="pv-hint" style={{ marginBottom: 8 }}>The VM must be stopped; Proxmox converts it in place.</div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <Btn size="sm" kind="primary" onClick={() => void doMakeTemplate()} disabled={!templateName.trim()}>
-                        Convert
-                      </Btn>
-                      <Btn size="sm" onClick={() => setTemplateOpen(false)}>
-                        Cancel
-                      </Btn>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            {(vm.viewerAccess || !vm.private || me.roles.includes("ADMIN")) && (
-              <div>
-                <div className="pv-label">Privacy</div>
-                <div className="pv-hint" style={{ marginBottom: 8 }}>
-                  {vm.private
-                    ? "On — invisible to everyone without a direct grant, including administrators."
-                    : "Off — administrators can see and manage this VM without a grant."}
+                <div className="pv-inline">
+                  <Btn size="sm" kind="primary" onClick={() => void doClone()} disabled={!cloneName.trim()}>Clone</Btn>
+                  <Btn size="sm" onClick={() => setCloneOpen(false)}>Cancel</Btn>
                 </div>
-                <Btn size="sm" onClick={() => void togglePrivacy()}>
-                  Turn {vm.private ? "off" : "on"}
+              </div>
+            )}
+          </div>
+        )}
+        {canManage && (
+          <div>
+            <div className="pv-label">Migrate to another node</div>
+            {otherNodes.length > 0 ? (
+              <div>
+                <Select style={{ marginBottom: 8 }} value={migrateTarget} onChange={(e) => setMigrateTarget(e.target.value)} aria-label="Migration target node">
+                  <option value="">Select target…</option>
+                  {otherNodes.map((n) => (
+                    <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
+                  ))}
+                </Select>
+                <Checkbox
+                  label="Online migration (keeps the VM running)"
+                  checked={migrateOnline}
+                  onChange={(e) => setMigrateOnline(e.target.checked)}
+                  style={{ marginBottom: 8 }}
+                />
+                <Btn size="sm" onClick={() => void doMigrate()} disabled={!migrateTarget || migrating !== null}>
+                  {migrating ? `Migrating to ${migrating.target}…` : "Migrate"}
                 </Btn>
               </div>
+            ) : (
+              <div className="pv-hint">Single-node cluster or node list unavailable.</div>
             )}
-            {canEdit && (
-              <div>
-                <div className="pv-label">Start on host boot</div>
-                <div className="pv-hint" style={{ marginBottom: 8 }}>
-                  {vm.startOnBoot
-                    ? "On — Proxmox powers this VM on automatically when its node boots."
-                    : "Off — this VM stays stopped across node reboots."}
-                </div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-                  <Btn size="sm" onClick={() => void setStartOnBoot(true)} disabled={vm.startOnBoot === true}>
-                    On
-                  </Btn>
-                  <Btn size="sm" onClick={() => void setStartOnBoot(false)} disabled={!vm.startOnBoot}>
-                    Off
-                  </Btn>
-                </div>
-                <div className="pv-label">VM class</div>
-                <div className="pv-hint" style={{ marginBottom: 8 }}>
-                  {(vm.vmClass ?? "server") === "user"
-                    ? "User VM — eligible for idle auto-shutdown when the global switch is on."
-                    : "Server VM — never auto-shut down."}
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <Btn
-                    size="sm"
-                    onClick={() => void setClass("server")}
-                    disabled={(vm.vmClass ?? "server") === "server"}
-                  >
-                    Server
-                  </Btn>
-                  <Btn
-                    size="sm"
-                    onClick={() => void setClass("user")}
-                    disabled={vm.vmClass === "user"}
-                  >
-                    User
-                  </Btn>
-                </div>
+          </div>
+        )}
+        <div>
+          <div className="pv-label">Classification & boot policy</div>
+          <div className="pv-hint" style={{ marginBottom: 6 }}>
+            {(vm.vmClass ?? "server") === "user"
+              ? "User VM — eligible for idle auto-shutdown."
+              : "Server VM — never auto-shut down."}
+          </div>
+          {canEdit && (
+            <div className="pv-seg" role="group" aria-label="VM class" style={{ marginBottom: 12 }}>
+              <button className={`pv-seg-btn${(vm.vmClass ?? "server") === "server" ? " pv-seg-btn-active" : ""}`} onClick={() => void setClass("server")}>Server</button>
+              <button className={`pv-seg-btn${vm.vmClass === "user" ? " pv-seg-btn-active" : ""}`} onClick={() => void setClass("user")}>User</button>
+            </div>
+          )}
+          {canEdit && (
+            <>
+              <div className="pv-hint" style={{ marginBottom: 6 }}>
+                {vm.startOnBoot ? "Powers on automatically when the node boots." : "Stays stopped across node reboots."}
               </div>
-            )}
-          </div>
-        </Section>
-      )}
-
-      {vm.viewerAccess && (
-        <Section
-          title="Invite someone"
-          hint="Anyone with access can bring one more person in — including an administrator on a privacy-flagged VM."
-        >
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              className="pv-input"
-              style={{ width: 224 }}
-              placeholder="Username to invite…"
-              value={inviteUser}
-              onChange={(e) => setInviteUser(e.target.value)}
-            />
-            <Btn kind="primary" onClick={() => void doInvite()} disabled={!inviteUser.trim()}>
-              Invite
-            </Btn>
-          </div>
-        </Section>
-      )}
-
-      <VmGraphs points={statsData?.points ?? []} timeframe={timeframe} setTimeframe={setTimeframe} />
-
-      {canEdit && <VmFirewallSection vmId={id} />}
-
-      {canEdit && (
-        <VmShareSection
-          connections={(guac?.connections ?? []).map((c) => c.protocol)}
-          links={(sharesData?.links ?? []).filter((l) => l.vmId === id)}
-          shareProtocol={shareProtocol}
-          setShareProtocol={setShareProtocol}
-          shareExpiry={shareExpiry}
-          setShareExpiry={setShareExpiry}
-          shareMaxUses={shareMaxUses}
-          setShareMaxUses={setShareMaxUses}
-          shareUrl={shareUrl}
-          onShare={doShare}
-          onRevoke={doRevokeShare}
-        />
-      )}
-
-      {revealed && (
-        <div className="pv-notice pv-notice-ok" style={{ fontSize: "0.85rem" }}>
-          Credential (auto-hides in 30s): <code className="pv-mono" style={{ userSelect: "all" }}>{revealed}</code>{" "}
-          <Btn size="sm" kind="link" onClick={() => void copy()}>Copy</Btn>
-        </div>
-      )}
-
-      {progress && (
-        <div className="pv-notice pv-mono" style={{ fontSize: "0.8rem" }}>{progress}</div>
-      )}
-
-      {canEdit && <UserAccessSection vmId={id} vmName={vm.name} refresh={refresh} />}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-10">
-        <Section title="Provisioning history">
-          {(data.jobs as Array<Record<string, unknown>>).map((j) => (
-            <div key={String(j.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
-              <span className="pv-mono">{String(j.id).slice(0, 8)}</span>
-              <StatusBadge status={String(j.status)} />
-              <Btn size="sm" kind="link" onClick={() => void watchJob(String(j.id))}>
-                Watch
+              <div className="pv-seg" role="group" aria-label="Start on boot">
+                <button className={`pv-seg-btn${vm.startOnBoot ? " pv-seg-btn-active" : ""}`} onClick={() => void setStartOnBoot(true)}>Start on boot</button>
+                <button className={`pv-seg-btn${!vm.startOnBoot ? " pv-seg-btn-active" : ""}`} onClick={() => void setStartOnBoot(false)}>Manual</button>
+              </div>
+            </>
+          )}
+          {(vm.viewerAccess || !vm.private) && (
+            <div style={{ marginTop: 14 }}>
+              <div className="pv-hint" style={{ marginBottom: 6 }}>
+                {vm.private
+                  ? "Private — invisible without a direct grant."
+                  : "Visible to administrators without a grant."}
+              </div>
+              <Btn size="sm" onClick={() => void togglePrivacy()}>
+                Turn {vm.private ? "off" : "on"} privacy
               </Btn>
-              <span style={{ marginLeft: "auto", color: "var(--pv-text-3)", fontSize: "0.76rem" }}>{new Date(String(j.createdAt)).toLocaleString()}</span>
             </div>
-          ))}
-          {!(data.jobs as Array<unknown>).length && <Empty title="No provisioning jobs" />}
-        </Section>
-        <Section title="Audit history">
-          {(data.audit as Array<Record<string, unknown>>).map((a) => (
-            <div key={String(a.id)} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
-              <span className="pv-mono">{String(a.event)}</span>
-              <span style={{ color: "var(--pv-text-3)", fontSize: "0.76rem", whiteSpace: "nowrap" }}>{String(a.actorUsername ?? "system")} · {new Date(String(a.createdAt)).toLocaleString()}</span>
-            </div>
-          ))}
-          {!(data.audit as Array<unknown>).length && <Empty title="No audit entries" />}
-        </Section>
+          )}
+        </div>
       </div>
-    </div>
+
+      {cloneOpen && (
+        <div aria-hidden="true" />
+      )}
+
+      <Dialog
+        title={`Clone ${vm.name}`}
+        onClose={() => setCloneOpen(false)}
+        footer={
+          <>
+            <Btn onClick={() => setCloneOpen(false)}>Cancel</Btn>
+            <Btn kind="primary" onClick={() => void doClone()} disabled={!cloneName.trim()}>Clone</Btn>
+          </>
+        }
+      >
+        <Field label="Clone name" required>
+          {({ id }) => <Input id={id} value={cloneName} onChange={(e) => setCloneName(e.target.value)} />}
+        </Field>
+        {otherNodes.length > 0 && (
+          <Field label="Target node" hint="Leave on same node for the fastest clone.">
+            {({ id }) => (
+              <Select id={id} value={cloneTarget} onChange={(e) => setCloneTarget(e.target.value)}>
+                <option value="">Same node ({vm.node})</option>
+                {otherNodes.map((n) => (
+                  <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        )}
+      </Dialog>
+
+      <Dialog
+        title={`Convert ${vm.name} to template`}
+        onClose={() => setTemplateOpen(false)}
+        footer={
+          <>
+            <Btn onClick={() => setTemplateOpen(false)}>Cancel</Btn>
+            <Btn kind="primary" onClick={() => void doMakeTemplate()} disabled={!templateName.trim()}>Convert</Btn>
+          </>
+        }
+      >
+        <Field label="Template name" required>
+          {({ id }) => <Input id={id} value={templateName} onChange={(e) => setTemplateName(e.target.value)} />}
+        </Field>
+        <div className="pv-hint">The VM must be stopped; Proxmox converts it in place.</div>
+      </Dialog>
+    </Section>
   );
 }
+
+/* ============================ access section ========================== */
 
 interface AccessUser {
   id: string;
@@ -761,26 +975,47 @@ interface AccessUser {
   active: boolean;
 }
 
+interface AccessEntry {
+  user: AccessUser;
+  createdAt: string;
+  createdBy: string | null;
+  protocols: string[] | null;
+  expiresAt: string | null;
+  source: "direct" | "group";
+  groupId: string | null;
+  groupName: string | null;
+}
+
+function AccessReadonly({ vmId }: { vmId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["vm-access", vmId],
+    queryFn: () => api<{ access: AccessEntry[] }>(`/vms/${vmId}/access`),
+  });
+  const access = data?.access ?? [];
+  if (isLoading) return <TableSkeleton rows={2} cols={3} />;
+  if (!access.length) return <EmptyState title="No users assigned" />;
+  return (
+    <div>
+      {access.map((a) => (
+        <div key={`${a.source}-${a.user.id}`} className="pv-list-row">
+          <span>{a.user.username}</span>
+          <span className="pv-faint" style={{ fontSize: "0.76rem" }}>
+            {a.source === "group" ? `via group ${a.groupName ?? ""}` : "direct"}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: string; refresh: () => void }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const [search, setSearch] = useState("");
-  const [usernameInput, setUsernameInput] = useState("");
-  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
-
-  interface AccessEntry {
-    user: AccessUser;
-    createdAt: string;
-    createdBy: string | null;
-    protocols: string[] | null;
-    expiresAt: string | null;
-    source: "direct" | "group";
-    groupId: string | null;
-    groupName: string | null;
-  }
-
   const [grantProtocols, setGrantProtocols] = useState<string[] | null>(null);
   const [grantExpiry, setGrantExpiry] = useState("");
   const [customExpiry, setCustomExpiry] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const accessQuery = useQuery({
     queryKey: ["vm-access", vmId],
@@ -816,11 +1051,11 @@ function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: st
   };
 
   const assign = async (who: { userId: string } | { username: string }) => {
-    setStatus(null);
     if (grantExpiry === "custom" && !expiryIso()) {
-      setStatus({ ok: false, text: "Pick a valid custom expiration date/time." });
+      toast.warn("Invalid expiration", "Pick a valid custom expiration date/time.");
       return;
     }
+    setBusy(true);
     const body: Record<string, unknown> = { ...who };
     if (grantProtocols !== null) body.protocols = grantProtocols;
     const expiresAt = expiryIso();
@@ -830,30 +1065,32 @@ function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: st
         `/vms/${vmId}/access`,
         { method: "POST", body },
       );
-      const protoText = !res.protocols ? "all protocols" : res.protocols.length ? res.protocols.join(", ").toUpperCase() : "no protocols";
-      const expText = res.expiresAt ? `, expires ${new Date(res.expiresAt).toLocaleString()}` : "";
-      setStatus({
-        ok: true,
-        text: res.changed
-          ? `Granted ${res.user.username} access (${protoText}${expText}).`
-          : `${res.user.username} was already assigned; Guacamole permissions re-synced (${protoText}${expText}).`,
-      });
-      setUsernameInput("");
+      const protoText = !res.protocols
+        ? "all protocols"
+        : res.protocols.length
+          ? res.protocols.join(", ").toUpperCase()
+          : "no protocols";
+      const expText = res.expiresAt ? `, expires ${fmtDateTime(res.expiresAt)}` : "";
+      toast.ok(
+        res.changed ? `Granted ${res.user.username} access` : `${res.user.username} re-synced`,
+        `${protoText}${expText}.`,
+      );
       setSearch("");
       reload();
     } catch (err) {
-      setStatus({ ok: false, text: err instanceof Error ? err.message : String(err) });
+      toast.err("Grant failed", errText(err));
+    } finally {
+      setBusy(false);
     }
   };
 
   const remove = async (targetUserId: string, targetUsername: string) => {
-    setStatus(null);
     try {
       await api(`/vms/${vmId}/access/${targetUserId}`, { method: "DELETE" });
-      setStatus({ ok: true, text: `Removed ${targetUsername}'s access (ProxVM + Guacamole).` });
+      toast.ok(`Removed ${targetUsername}`, "ProxVM and Guacamole access revoked.");
       reload();
     } catch (err) {
-      setStatus({ ok: false, text: err instanceof Error ? err.message : String(err) });
+      toast.err("Removal failed", errText(err));
     }
   };
 
@@ -862,140 +1099,314 @@ function UserAccessSection({ vmId, vmName, refresh }: { vmId: string; vmName: st
       title="User access"
       hint="Assigning a user grants them this VM plus all of its Guacamole connections. Removing revokes both."
     >
-      {status && (
-        <div className={status.ok ? "pv-notice pv-notice-ok" : "pv-error"}>{status.text}</div>
-      )}
-      <div style={{ marginBottom: 12 }}>
+      <div style={{ marginBottom: 14 }}>
         {assigned.map((a) => (
-          <div key={`${a.source}-${a.user.id}`} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
-            <span>
+          <div key={`${a.source}-${a.user.id}`} className="pv-list-row">
+            <span style={{ flex: 1, minWidth: 0 }}>
               {a.user.username}
-              <span style={{ color: "var(--pv-text-3)", fontSize: "0.76rem", marginLeft: 8 }}>
+              <span className="pv-faint" style={{ fontSize: "0.76rem", marginLeft: 8 }}>
                 {a.source === "group" ? `via group ${a.groupName ?? ""} · ` : ""}
                 {a.protocols === null ? "all protocols" : a.protocols.length ? a.protocols.join(", ").toUpperCase() : "no protocols"}
-                {a.expiresAt ? ` · expires ${new Date(a.expiresAt).toLocaleString()}` : " · never expires"}
+                {a.expiresAt ? ` · expires ${fmtDateTime(a.expiresAt)}` : " · never expires"}
               </span>
             </span>
             {a.source === "direct" ? (
-              <Btn size="sm" kind="link" onClick={() => void remove(a.user.id, a.user.username)}>
+              <button className="pv-btn pv-btn-link" style={{ fontSize: "0.78rem" }} onClick={() => void remove(a.user.id, a.user.username)}>
                 Remove
-              </Btn>
+              </button>
             ) : (
-              <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }} title="Group-derived access is managed on the Groups page">managed by group</span>
+              <Tooltip content="Group-derived access is managed on the Groups page">
+                <span className="pv-faint" style={{ fontSize: "0.76rem" }}>managed by group</span>
+              </Tooltip>
             )}
           </div>
         ))}
-        {!assigned.length && !accessQuery.isLoading && (
-          <Empty title={`No users assigned to ${vmName}`} />
-        )}
+        {!assigned.length && !accessQuery.isLoading && <EmptyState title={`No users assigned to ${vmName}`} />}
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", fontSize: "0.8rem", marginBottom: 12 }}>
+
+      <div className="pv-inline" style={{ marginBottom: 12, gap: 14, fontSize: "0.8rem" }}>
         <span className="pv-label" style={{ margin: 0 }}>Protocols</span>
-        <label className="pv-checkrow">
-          <input
-            type="checkbox"
-            checked={grantProtocols === null}
-            onChange={(e) => setGrantProtocols(e.target.checked ? null : ["ssh", "rdp", "vnc"])}
-          />
-          All
-        </label>
+        <Checkbox
+          label="All"
+          checked={grantProtocols === null}
+          onChange={(e) => setGrantProtocols(e.target.checked ? null : ["ssh", "rdp", "vnc"])}
+        />
         {["ssh", "rdp", "vnc"].map((p) => (
-          <label key={p} className="pv-checkrow" style={{ textTransform: "uppercase" }}>
-            <input
-              type="checkbox"
-              checked={grantProtocols === null || grantProtocols.includes(p)}
-              disabled={grantProtocols === null}
-              onChange={(e) =>
-                setGrantProtocols((prev) => {
-                  const cur = prev ?? ["ssh", "rdp", "vnc"];
-                  return e.target.checked ? [...new Set([...cur, p])] : cur.filter((x) => x !== p);
-                })
-              }
-            />
-            {p}
-          </label>
+          <Checkbox
+            key={p}
+            label={p.toUpperCase()}
+            checked={grantProtocols === null || grantProtocols.includes(p)}
+            disabled={grantProtocols === null}
+            onChange={(e) =>
+              setGrantProtocols((prev) => {
+                const cur = prev ?? ["ssh", "rdp", "vnc"];
+                return e.target.checked ? [...new Set([...cur, p])] : cur.filter((x) => x !== p);
+              })
+            }
+          />
         ))}
         <span className="pv-label" style={{ margin: 0 }}>Expires</span>
-        <select
-          className="pv-select pv-input-auto"
-          style={{ height: 28, fontSize: "0.78rem" }}
+        <Select
+          autoWidth
+          small
           value={grantExpiry}
           onChange={(e) => setGrantExpiry(e.target.value)}
+          aria-label="Grant expiration"
         >
           <option value="">Never</option>
           <option value="1h">1 hour</option>
           <option value="1d">1 day</option>
           <option value="1w">1 week</option>
           <option value="custom">Custom…</option>
-        </select>
+        </Select>
         {grantExpiry === "custom" && (
-          <input
+          <Input
+            small
+            autoWidth
             type="datetime-local"
-            className="pv-input pv-input-auto"
-            style={{ height: 28, fontSize: "0.78rem" }}
             value={customExpiry}
             onChange={(e) => setCustomExpiry(e.target.value)}
+            aria-label="Custom expiration"
           />
         )}
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+
+      <div className="pv-inline">
         {usersQuery.data ? (
           <div style={{ position: "relative" }}>
-            <input
-              className="pv-input"
+            <Input
               style={{ width: 256 }}
               placeholder="Search users…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              aria-label="Search users to assign"
             />
             {matches.length > 0 && (
-              <div style={{ position: "absolute", zIndex: 10, marginTop: 4, width: 256, background: "var(--pv-surface)", border: "1px solid var(--pv-border)", borderRadius: 6, boxShadow: "0 8px 30px rgba(0,0,0,0.45)" }}>
+              <div className="pv-menu" style={{ width: 256, top: "calc(100% + 4px)", left: 0 }}>
                 {matches.map((u) => (
                   <button
                     key={u.id}
-                    style={{ width: "100%", textAlign: "left", padding: "7px 12px", fontSize: "0.83rem", background: "none", border: "none", color: "var(--pv-text)", cursor: "pointer", display: "flex", justifyContent: "space-between" }}
+                    className="pv-menu-item"
+                    style={{ display: "flex", justifyContent: "space-between" }}
                     onClick={() => void assign({ userId: u.id })}
+                    disabled={busy}
                   >
                     <span>{u.username}</span>
-                    <span style={{ color: "var(--pv-text-3)", fontSize: "0.76rem" }}>{u.roles.join(", ")}</span>
+                    <span className="pv-faint" style={{ fontSize: "0.74rem" }}>{u.roles.join(", ")}</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
         ) : (
-          <input
-            className="pv-input"
-            style={{ width: 256 }}
-            placeholder="Username to assign…"
-            value={usernameInput}
-            onChange={(e) => setUsernameInput(e.target.value)}
-          />
-        )}
-        {!usersQuery.data && (
-          <Btn size="sm" kind="primary" disabled={!usernameInput.trim()} onClick={() => void assign({ username: usernameInput.trim() })}>
-            Assign user
-          </Btn>
+          <AssignByUsername onAssign={(username) => void assign({ username })} busy={busy} />
         )}
       </div>
       {usersQuery.isError && (
-        <div className="pv-hint" style={{ marginTop: 8 }}>User directory unavailable — assign by exact username.</div>
+        <div className="pv-hint" style={{ marginTop: 8 }}>
+          User directory unavailable — assign by exact username.
+        </div>
       )}
     </Section>
   );
 }
 
-function fmtBytes(n: number): string {
-  if (!Number.isFinite(n) || n < 0) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = n;
-  let u = 0;
-  while (v >= 1024 && u < units.length - 1) {
-    v /= 1024;
-    u++;
-  }
-  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[u]}`;
+function AssignByUsername({ onAssign, busy }: { onAssign: (username: string) => void; busy: boolean }) {
+  const [username, setUsername] = useState("");
+  return (
+    <div className="pv-inline">
+      <Input
+        style={{ width: 256 }}
+        placeholder="Username to assign…"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        aria-label="Username to assign"
+      />
+      <Btn size="sm" kind="primary" disabled={!username.trim() || busy} onClick={() => onAssign(username.trim())}>
+        Assign user
+      </Btn>
+    </div>
+  );
 }
+
+/* ============================== invite =============================== */
+
+function InviteSection({ vmId, refresh }: { vmId: string; refresh: () => void }) {
+  const toast = useToast();
+  const [inviteUser, setInviteUser] = useState("");
+  const [busy, setBusy] = useState(false);
+  const doInvite = async () => {
+    setBusy(true);
+    try {
+      await api(`/vms/${vmId}/invite`, { method: "POST", body: { username: inviteUser.trim() } });
+      toast.ok(`${inviteUser.trim()} now has access`);
+      setInviteUser("");
+      refresh();
+    } catch (err) {
+      toast.err("Invite failed", errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Section title="Invite someone" hint="Anyone with access can bring one more person in — including an admin on a privacy-flagged VM.">
+      <div className="pv-inline">
+        <Input
+          style={{ width: 224 }}
+          placeholder="Username to invite…"
+          value={inviteUser}
+          onChange={(e) => setInviteUser(e.target.value)}
+          aria-label="Username to invite"
+        />
+        <Btn kind="primary" onClick={() => void doInvite()} disabled={!inviteUser.trim() || busy}>
+          Invite
+        </Btn>
+      </div>
+    </Section>
+  );
+}
+
+/* ============================ share links ============================= */
+
+function VmShareSection({
+  vmId,
+  connections,
+  links,
+  refreshShare,
+}: {
+  vmId: string;
+  connections: string[];
+  links: Array<{ id: string; protocol: string; expiresAt: string; maxUses: number | null; useCount: number; revokedAt: string | null }>;
+  refreshShare: () => void;
+}) {
+  const toast = useToast();
+  const [shareProtocol, setShareProtocol] = useState("");
+  const [shareExpiry, setShareExpiry] = useState("60");
+  const [shareMaxUses, setShareMaxUses] = useState("");
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const active = links.filter((l) => !l.revokedAt && new Date(l.expiresAt).getTime() > Date.now());
+
+  const doShare = async () => {
+    if (!shareProtocol) return;
+    setBusy(true);
+    try {
+      const res = await api<{ token: string }>(`/vms/${vmId}/share`, {
+        method: "POST",
+        body: {
+          protocol: shareProtocol,
+          expiresInMinutes: Number(shareExpiry),
+          maxUses: shareMaxUses ? Number(shareMaxUses) : undefined,
+        },
+      });
+      setShareUrl(`${window.location.origin}/api/s/${res.token}`);
+      refreshShare();
+    } catch (err) {
+      toast.err("Share link failed", errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doRevoke = async (shareId: string) => {
+    try {
+      await api(`/share/${shareId}`, { method: "DELETE" });
+      toast.ok("Share link revoked");
+      refreshShare();
+    } catch (err) {
+      toast.err("Revoke failed", errText(err));
+    }
+  };
+
+  return (
+    <Section
+      title="Shareable session links"
+      hint="Time-boxed links anyone can open — no account needed. Opening mints a fresh Guacamole session under your identity; revoke anytime."
+    >
+      <div className="pv-inline" style={{ marginBottom: 12 }}>
+        <Select autoWidth small value={shareProtocol} onChange={(e) => setShareProtocol(e.target.value)} aria-label="Protocol to share">
+          <option value="">Select protocol…</option>
+          {connections.map((p) => (
+            <option key={p} value={p}>{p.toUpperCase()}</option>
+          ))}
+        </Select>
+        <Select autoWidth small value={shareExpiry} onChange={(e) => setShareExpiry(e.target.value)} aria-label="Link lifetime">
+          <option value="60">1 hour</option>
+          <option value="1440">1 day</option>
+          <option value="10080">7 days</option>
+        </Select>
+        <Input
+          small
+          style={{ width: 120 }}
+          placeholder="Max uses (∞)"
+          inputMode="numeric"
+          value={shareMaxUses}
+          onChange={(e) => setShareMaxUses(e.target.value.replace(/[^0-9]/g, ""))}
+          aria-label="Maximum uses"
+        />
+        <Btn size="sm" kind="primary" onClick={() => void doShare()} disabled={!shareProtocol || busy}>
+          Create link
+        </Btn>
+      </div>
+      {shareUrl && (
+        <Alert kind="ok" title="Share this URL (shown once — copy it now)">
+          <code className="pv-mono" style={{ wordBreak: "break-all", userSelect: "all" }}>{shareUrl}</code>
+        </Alert>
+      )}
+      {active.length > 0 ? (
+        active.map((l) => (
+          <div key={l.id} className="pv-list-row">
+            <span className="pv-mono" style={{ textTransform: "uppercase" }}>{l.protocol}</span>
+            <span className="pv-faint" style={{ fontSize: "0.8rem" }}>expires {fmtDateTime(l.expiresAt)}</span>
+            <span className="pv-faint" style={{ fontSize: "0.8rem" }}>
+              used {l.useCount}{l.maxUses === null ? "" : `/${l.maxUses}`}
+            </span>
+            <span style={{ marginLeft: "auto" }}>
+              <button className="pv-btn pv-btn-link" style={{ fontSize: "0.78rem" }} onClick={() => void doRevoke(l.id)}>
+                Revoke
+              </button>
+            </span>
+          </div>
+        ))
+      ) : (
+        <EmptyState title="No active share links for this VM" />
+      )}
+    </Section>
+  );
+}
+
+/* ============================ job watching ============================ */
+
+function WatchJobButton({ jobId, onProgress }: { jobId: string; onProgress: (v: string) => void }) {
+  const [watching, setWatching] = useState(false);
+  const watch = () => {
+    setWatching(true);
+    onProgress("Connecting to job stream…");
+    jobEventSource(
+      jobId,
+      (data) => {
+        const d = data as { status: string; step: string | null; message: string };
+        onProgress(`${d.status}${d.step ? ` (${d.step})` : ""}: ${d.message}`);
+      },
+      () => {
+        onProgress("");
+        setWatching(false);
+      },
+      (err) => {
+        onProgress(`Event stream unavailable: ${err.message}`);
+        setWatching(false);
+      },
+    );
+  };
+  return (
+    <Btn size="sm" onClick={watch} disabled={watching}>
+      {watching ? "Watching…" : "Watch"}
+    </Btn>
+  );
+}
+
+/* ============================== graphs =============================== */
 
 function fmtTime(ts: number): string {
   const d = new Date(ts * 1000);
@@ -1020,7 +1431,7 @@ function MetricChart({ title, current, series, color, series2, color2, label2, f
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", marginBottom: 4 }}>
           <span style={{ fontWeight: 600 }}>{title}</span>
-          <span style={{ color: "var(--pv-text-3)" }}>no data</span>
+          <span className="pv-faint">no data</span>
         </div>
       </div>
     );
@@ -1043,25 +1454,30 @@ function MetricChart({ title, current, series, color, series2, color2, label2, f
         <span style={{ fontWeight: 600 }}>{title}</span>
         <span className="pv-mono" style={{ color }}>{current}</span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 128, background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6 }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label={`${title} over the selected range. Current value ${current}.`}
+        style={{ width: "100%", height: 128, background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6 }}
+      >
         {[0.25, 0.5, 0.75].map((f) => (
           <line key={f} x1="0" x2={W} y1={H * f} y2={H * f} stroke="var(--pv-border)" strokeWidth="1" />
         ))}
-        <polygon points={area} fill={color} opacity="0.18" />
+        <polygon points={area} fill={color} opacity="0.16" />
         <polyline points={line} fill="none" stroke={color} strokeWidth="1.5" />
         {series2 && color2 && (
           <polyline points={toLine(series2)} fill="none" stroke={color2} strokeWidth="1.5" strokeDasharray="4 2" />
         )}
         {ticks.map((t) => (
-          <text key={t.label} x={t.x} y={H - 1} fontSize="9" fill="#64748b" textAnchor="middle">
+          <text key={t.label} x={t.x} y={H - 1} fontSize="9" fill="var(--pv-text-3)" textAnchor="middle">
             {t.label}
           </text>
         ))}
-        <text x={W - 3} y={12} fontSize="9" fill="#64748b" textAnchor="end">
+        <text x={W - 3} y={12} fontSize="9" fill="var(--pv-text-3)" textAnchor="end">
           max {format(top)}
         </text>
       </svg>
-      {label2 && <div style={{ fontSize: 10, color: "var(--pv-text-3)", marginTop: 4 }}>solid: in/read · dashed {label2}</div>}
+      {label2 && <div style={{ fontSize: 10, color: "var(--pv-text-3)", marginTop: 4 }}>solid: primary · dashed {label2}</div>}
     </div>
   );
 }
@@ -1091,10 +1507,11 @@ function VmGraphs({ points, timeframe, setTimeframe }: {
   return (
     <Section
       title="Resource graphs"
+      hint="RRD metrics reported by Proxmox"
       actions={
-        <select
-          className="pv-select pv-input-auto"
-          style={{ height: 28, fontSize: "0.78rem" }}
+        <Select
+          autoWidth
+          small
           value={timeframe}
           onChange={(e) => setTimeframe(e.target.value)}
           aria-label="Time range"
@@ -1102,31 +1519,31 @@ function VmGraphs({ points, timeframe, setTimeframe }: {
           {["hour", "day", "week", "month"].map((t) => (
             <option key={t} value={t}>{t}</option>
           ))}
-        </select>
+        </Select>
       }
     >
       {!rows.length ? (
-        <Empty title="No data points yet for this range" body="Graphs fill in once the guest reports metrics." />
+        <EmptyState title="No data points yet for this range" body="Graphs fill in once the guest reports metrics." />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="pv-grid-2">
           <MetricChart
             title={`CPU${last && last.maxcpu > 0 ? ` (${last.maxcpu} cores)` : ""}`}
             current={`${cpuPct.toFixed(1)}%`}
-            color="#60a5fa"
+            color="var(--pv-accent)"
             format={(v) => `${v.toFixed(1)}%`}
             series={rows.map((r) => ({ t: r.t, v: r.maxcpu > 0 ? (r.cpu / r.maxcpu) * 100 : r.cpu * 100 }))}
           />
           <MetricChart
             title={`Memory (${fmtBytes(last?.maxmem ?? 0)} total)`}
             current={`${fmtBytes(last?.mem ?? 0)} · ${memPct.toFixed(0)}%`}
-            color="#34d399"
+            color="var(--pv-ok)"
             format={(v) => fmtBytes(v)}
             series={rows.map((r) => ({ t: r.t, v: r.mem }))}
           />
           <MetricChart
             title="Network in / out"
             current={`↓ ${fmtBytes(last?.netin ?? 0)}/s · ↑ ${fmtBytes(last?.netout ?? 0)}/s`}
-            color="#22d3ee"
+            color="#38bdf8"
             color2="#a78bfa"
             label2=": out"
             format={(v) => `${fmtBytes(v)}/s`}
@@ -1144,91 +1561,6 @@ function VmGraphs({ points, timeframe, setTimeframe }: {
             series2={rows.map((r) => ({ t: r.t, v: r.diskwrite }))}
           />
         </div>
-      )}
-    </Section>
-  );
-}
-
-interface ShareLinkRow {
-  id: string;
-  vmId: string;
-  protocol: string;
-  expiresAt: string;
-  maxUses: number | null;
-  useCount: number;
-  revokedAt: string | null;
-  createdAt: string;
-}
-
-function VmShareSection({ connections, links, shareProtocol, setShareProtocol, shareExpiry, setShareExpiry, shareMaxUses, setShareMaxUses, shareUrl, onShare, onRevoke }: {
-  connections: string[];
-  links: ShareLinkRow[];
-  shareProtocol: string;
-  setShareProtocol: (v: string) => void;
-  shareExpiry: string;
-  setShareExpiry: (v: string) => void;
-  shareMaxUses: string;
-  setShareMaxUses: (v: string) => void;
-  shareUrl: string | null;
-  onShare: (protocol: string) => void;
-  onRevoke: (shareId: string) => void;
-}) {
-  const active = links.filter((l) => !l.revokedAt && new Date(l.expiresAt).getTime() > Date.now());
-  return (
-    <Section
-      title="Shareable session links"
-      hint="Time-boxed links anyone can open — no account needed. Opening mints a fresh Guacamole session under your identity; revoke anytime."
-    >
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 12 }}>
-        <select
-          className="pv-select pv-input-auto"
-          value={shareProtocol}
-          onChange={(e) => setShareProtocol(e.target.value)}
-        >
-          <option value="">Select protocol…</option>
-          {connections.map((p) => (
-            <option key={p} value={p}>{p.toUpperCase()}</option>
-          ))}
-        </select>
-        <select
-          className="pv-select pv-input-auto"
-          value={shareExpiry}
-          onChange={(e) => setShareExpiry(e.target.value)}
-          title="Link lifetime"
-        >
-          <option value="60">1 hour</option>
-          <option value="1440">1 day</option>
-          <option value="10080">7 days</option>
-        </select>
-        <input
-          className="pv-input"
-          style={{ width: 112 }}
-          placeholder="Max uses (∞)"
-          inputMode="numeric"
-          value={shareMaxUses}
-          onChange={(e) => setShareMaxUses(e.target.value.replace(/[^0-9]/g, ""))}
-        />
-        <Btn size="sm" kind="primary" onClick={() => shareProtocol && onShare(shareProtocol)} disabled={!shareProtocol}>
-          Create link
-        </Btn>
-      </div>
-      {shareUrl && (
-        <div className="pv-notice pv-notice-ok" style={{ fontSize: "0.8rem" }}>
-          Share this URL (shown once — copy it now):{" "}
-          <code className="pv-mono" style={{ wordBreak: "break-all", userSelect: "all" }}>{shareUrl}</code>
-        </div>
-      )}
-      {active.length > 0 ? (
-        active.map((l) => (
-          <div key={l.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, fontSize: "0.8rem", padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
-            <span className="pv-mono" style={{ textTransform: "uppercase" }}>{l.protocol}</span>
-            <span style={{ color: "var(--pv-text-2)" }}>expires {new Date(l.expiresAt).toLocaleString()}</span>
-            <span style={{ color: "var(--pv-text-2)" }}>used {l.useCount}{l.maxUses === null ? "" : `/${l.maxUses}`}</span>
-            <Btn size="sm" kind="link" onClick={() => onRevoke(l.id)}>Revoke</Btn>
-          </div>
-        ))
-      ) : (
-        <Empty title="No active share links for this VM" />
       )}
     </Section>
   );

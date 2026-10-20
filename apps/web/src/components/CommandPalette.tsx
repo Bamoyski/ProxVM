@@ -1,23 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Search, CornerDownLeft } from "lucide-react";
 import { api } from "../api.js";
 
-interface CommandPaletteProps {
-  open: boolean;
-  onClose: () => void;
-  nav: Array<{ to: string; label: string }>;
-  canViewUsers: boolean;
-  go: (to: string) => void;
-}
-
 interface Entry {
-  kind: string;
+  kind: "Page" | "VM" | "User";
   label: string;
   hint: string;
   to: string;
 }
 
-export default function CommandPalette({ open, onClose, nav, canViewUsers, go }: CommandPaletteProps) {
+/**
+ * Command palette (Ctrl/Cmd+K): navigate to pages, jump to a VM, open a
+ * user's permission page. Only surfaces what the user may already reach.
+ */
+export default function CommandPalette({
+  open,
+  onClose,
+  nav,
+  canViewUsers,
+  go,
+}: {
+  open: boolean;
+  onClose: () => void;
+  nav: Array<{ to: string; label: string }>;
+  canViewUsers: boolean;
+  go: (to: string) => void;
+}) {
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -39,22 +48,35 @@ export default function CommandPalette({ open, onClose, nav, canViewUsers, go }:
     if (open) {
       setQuery("");
       setIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      const t = setTimeout(() => inputRef.current?.focus(), 0);
+      return () => clearTimeout(t);
     }
-  }, [open ]);
+  }, [open]);
 
   const entries = useMemo<Entry[]>(() => {
     const q = query.trim().toLowerCase();
     const all: Entry[] = [
-      ...nav.map((n) => ({ kind: "Page", label: n.label, hint: n.to, to: n.to })),
+      ...nav.map((n) => ({ kind: "Page" as const, label: n.label, hint: n.to, to: n.to })),
       ...(vmsData?.vms ?? [])
         .filter((v) => v.id)
-        .map((v) => ({ kind: "VM", label: v.name, hint: v.status, to: `/vms/${v.id}` })),
-      ...(canViewUsers ? (usersData?.users ?? []).map((u) => ({ kind: "User", label: u.username, hint: "permissions", to: `/users/${u.id}/permissions` })) : []),
+        .map((v) => ({ kind: "VM" as const, label: v.name, hint: v.status, to: `/vms/${v.id}` })),
+      ...(canViewUsers
+        ? (usersData?.users ?? []).map((u) => ({
+            kind: "User" as const,
+            label: u.username,
+            hint: "permissions",
+            to: `/users/${u.id}/permissions`,
+          }))
+        : []),
     ];
     if (!q) return all.slice(0, 12);
     return all
-      .filter((e) => e.label.toLowerCase().includes(q) || e.hint.toLowerCase().includes(q) || e.kind.toLowerCase().includes(q))
+      .filter(
+        (e) =>
+          e.label.toLowerCase().includes(q) ||
+          e.hint.toLowerCase().includes(q) ||
+          e.kind.toLowerCase().includes(q),
+      )
       .slice(0, 12);
   }, [nav, vmsData, usersData, canViewUsers, query]);
 
@@ -63,63 +85,86 @@ export default function CommandPalette({ open, onClose, nav, canViewUsers, go }:
   }, [query]);
 
   if (!open) return null;
+
   const choose = (i: number): void => {
     const entry = entries[i];
     if (entry) go(entry.to);
   };
 
+  let lastKind = "";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-24" style={{ background: "rgba(0,0,0,0.55)" }} onClick={onClose}>
-      <div
-        role="dialog"
-        aria-label="Command palette"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "100%", maxWidth: 560, background: "var(--pv-surface)",
-          border: "1px solid var(--pv-border)", borderRadius: 8,
-          boxShadow: "0 12px 40px rgba(0,0,0,0.5)", overflow: "hidden",
-        }}
-      >
-        <input
-          ref={inputRef}
-          className="pv-input"
-          style={{ border: "none", borderBottom: "1px solid var(--pv-border-soft)", borderRadius: 0, height: 44, fontSize: "0.9rem" }}
-          placeholder="Type a page, VM, or user… (Esc to close)"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") onClose();
-            else if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setIndex((i) => Math.min(i + 1, entries.length - 1));
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setIndex((i) => Math.max(i - 1, 0));
-            } else if (e.key === "Enter") {
-              choose(index);
-            }
-          }}
-        />
-        <div style={{ maxHeight: 320, overflowY: "auto", padding: "4px 0" }}>
-          {entries.map((e, i) => (
-            <button
-              key={`${e.kind}-${e.to}`}
-              onMouseEnter={() => setIndex(i)}
-              onClick={() => choose(i)}
-              style={{
-                width: "100%", textAlign: "left", display: "flex", alignItems: "center", gap: 12,
-                padding: "8px 16px", fontSize: "0.85rem", cursor: "pointer",
-                background: i === index ? "var(--pv-surface-2)" : "none",
-                border: "none", borderLeft: i === index ? "2px solid var(--pv-accent)" : "2px solid transparent",
-                color: "var(--pv-text)",
-              }}
-            >
-              <span className="pv-mono" style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)", width: 40, flex: "none" }}>{e.kind}</span>
-              <span>{e.label}</span>
-              <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.hint}</span>
-            </button>
-          ))}
-          {!entries.length && <div style={{ padding: "12px 16px", fontSize: "0.85rem", color: "var(--pv-text-3)" }}>No matches.</div>}
+    <div
+      className="pv-palette-scrim"
+      onClick={onClose}
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div role="dialog" aria-label="Command palette" className="pv-palette" onClick={(e) => e.stopPropagation()}>
+        <div style={{ position: "relative" }}>
+          <Search
+            size={15}
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: 18,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--pv-text-3)",
+            }}
+          />
+          <input
+            ref={inputRef}
+            className="pv-palette-input"
+            style={{ paddingLeft: 44 }}
+            placeholder="Jump to a page, VM, or user…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search pages, VMs and users"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onClose();
+              else if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setIndex((i) => Math.min(i + 1, entries.length - 1));
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setIndex((i) => Math.max(i - 1, 0));
+              } else if (e.key === "Enter") {
+                choose(index);
+              }
+            }}
+          />
+        </div>
+        <div className="pv-palette-list" role="listbox" aria-label="Results">
+          {entries.map((e, i) => {
+            const showGroup = e.kind !== lastKind;
+            lastKind = e.kind;
+            return (
+              <div key={`${e.kind}-${e.to}`}>
+                {showGroup && <div className="pv-palette-group">{e.kind}s</div>}
+                <button
+                  role="option"
+                  aria-selected={i === index}
+                  className={`pv-palette-item${i === index ? " pv-palette-item-active" : ""}`}
+                  onMouseEnter={() => setIndex(i)}
+                  onClick={() => choose(i)}
+                >
+                  <span>{e.label}</span>
+                  <span className="pv-palette-hint">{e.hint}</span>
+                  {i === index && <CornerDownLeft size={12} aria-hidden="true" style={{ color: "var(--pv-text-3)", flex: "none" }} />}
+                </button>
+              </div>
+            );
+          })}
+          {!entries.length && (
+            <div style={{ padding: "14px 16px", fontSize: "0.85rem", color: "var(--pv-text-3)" }}>
+              No matches for “{query}”.
+            </div>
+          )}
+        </div>
+        <div className="pv-palette-foot">
+          <span><span className="pv-kbd">↑↓</span> navigate</span>
+          <span><span className="pv-kbd">↵</span> open</span>
+          <span><span className="pv-kbd">Esc</span> close</span>
         </div>
       </div>
     </div>

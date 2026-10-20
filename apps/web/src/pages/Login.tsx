@@ -193,7 +193,7 @@ export default function Login() {
         )}
         {error && <div className="pv-error">{error}</div>}
         {registered && (
-          <div className="pv-notice pv-notice-ok">
+          <div className="pv-alert pv-alert-ok">
             {autoApprove
               ? "Account created! Sign in to get started — VM access is granted by an administrator."
               : "Request sent. An administrator must approve it before you can sign in."}

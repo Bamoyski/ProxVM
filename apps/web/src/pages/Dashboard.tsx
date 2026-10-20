@@ -3,13 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import Jobs from "./Jobs.js";
-import { StatusBadge, PageTitle, ErrorBox, Section, Empty, Btn } from "../components/ui.js";
-
-interface Me {
-  id: string;
-  username: string;
-  roles: string[];
-}
+import { isPrivileged, type Me } from "../lib/permissions.js";
+import { fmtBytes, fmtDateTime } from "../lib/format.js";
+import {
+  PageHeader, StatusBadge, EmptyState, Section, Btn, Alert, Stat, Meter, utilTone, useToast, errText,
+} from "../ui/index.js";
 
 interface NodeStatus {
   node: string;
@@ -30,25 +28,9 @@ interface VmRow {
   ip: string | null;
 }
 
-function bytes(n: unknown): string {
-  if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = Number(n);
-  let u = 0;
-  while (v >= 1024 && u < units.length - 1) {
-    v /= 1024;
-    u++;
-  }
-  return `${v.toFixed(v >= 100 || u === 0 ? 0 : 1)} ${units[u]}`;
-}
-
 function pct(used: unknown, max: unknown): number | null {
   if (used === null || used === undefined || !max) return null;
   return Math.min(100, (Number(used) / Number(max)) * 100);
-}
-
-function isPrivileged(roles: string[]): boolean {
-  return roles.some((r) => r === "ADMIN" || r === "OPERATOR");
 }
 
 type WidgetId = "stats" | "proxmox" | "discovery" | "events" | "jobs" | "mine";
@@ -84,6 +66,7 @@ function loadLayout(): Layout {
 
 export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) => boolean }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const privileged = isPrivileged(me.roles);
   // Self-serve GUEST accounts hold zero permissions: without vm.list there
   // is no dashboard to show — every widget would just be a 403 error box.
@@ -92,7 +75,6 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
   const canList = can ? can("vm.list") : true;
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [customizing, setCustomizing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const saveLayout = (next: Layout): void => {
     setLayout(next);
@@ -105,7 +87,7 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
 
   const { data: pm, error: pmError } = useQuery({
     queryKey: ["proxmox-status"],
-    queryFn: () => api<{ connected: boolean; version?: string; nodes?: NodeStatus[] }>("/proxmox/status"),
+    queryFn: () => api<{ connected: boolean; version?: string; nodes?: NodeStatus[]; error?: string }>("/proxmox/status"),
     refetchInterval: 15000,
     enabled: privileged,
   });
@@ -185,12 +167,12 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
   };
 
   const runDiscovery = async (): Promise<void> => {
-    setError(null);
     try {
       await api("/discovery/run", { method: "POST", body: {} });
+      toast.info("Discovery scan started", "Results appear below once the scan finishes.");
       void qc.invalidateQueries({ queryKey: ["vm-services"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      toast.err("Discovery scan failed", errText(err));
     }
   };
 
@@ -213,35 +195,46 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
     { label: "Running", value: String(running), tone: "var(--pv-ok)" },
     { label: "Stopped", value: String(stopped) },
     ...(failed ? [{ label: "Failed", value: String(failed), tone: "var(--pv-err)" }] : []),
-    ...(activeJobs ? [{ label: "Active jobs", value: String(activeJobs), tone: "var(--pv-info)" }] : []),
+    ...(activeJobs ? [{ label: "Active jobs", value: String(activeJobs), tone: "var(--pv-accent)" }] : []),
   ];
 
   const widgets: Record<WidgetId, { privilegedOnly: boolean; node: React.ReactNode }> = {
     mine: {
       privilegedOnly: false,
       node: (
-        <Section title="My activity">
+        <Section title="My activity" hint="Your launches, backups, and changes — newest first.">
           {(mine?.activity ?? []).map((a) => (
-            <div key={a.id} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+            <div
+              key={a.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 16,
+                padding: "7px 0",
+                borderBottom: "1px solid var(--pv-border-soft)",
+                fontSize: "0.85rem",
+              }}
+            >
               <span className="pv-mono">{a.event}</span>
-              <span style={{ color: "var(--pv-text-3)", whiteSpace: "nowrap" }}>{new Date(a.createdAt).toLocaleString()}</span>
+              <span className="pv-faint" style={{ whiteSpace: "nowrap" }}>{fmtDateTime(a.createdAt)}</span>
             </div>
           ))}
-          {!(mine?.activity ?? []).length && <Empty title="Nothing yet" body="Your launches, backups, and changes will appear here." />}
+          {!(mine?.activity ?? []).length && (
+            <EmptyState title="Nothing yet" body="Your launches, backups, and changes will appear here." />
+          )}
         </Section>
       ),
     },
     stats: {
       privilegedOnly: false,
       node: (
-        <dl style={{ display: "flex", gap: 28, flexWrap: "wrap", margin: "0 0 26px" }}>
-          {statItems.map((s) => (
-            <div key={s.label}>
-              <dt style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)" }}>{s.label}</dt>
-              <dd style={{ margin: 0, fontSize: "1.5rem", fontWeight: 650, color: s.tone ?? "var(--pv-text)", fontVariantNumeric: "tabular-nums" }}>{s.value}</dd>
-            </div>
-          ))}
-        </dl>
+        <Section title="Overview" hint="Fleet counters, live">
+          <div className="pv-grid-stats">
+            {statItems.map((s) => (
+              <Stat key={s.label} label={s.label} value={s.value} tone={s.tone} />
+            ))}
+          </div>
+        </Section>
       ),
     },
     proxmox: {
@@ -251,36 +244,44 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
           title={`Cluster${pm?.connected && pm.version ? ` — Proxmox VE ${pm.version}` : ""}`}
           hint={!pm?.connected ? "disconnected" : undefined}
         >
-          {pmError && <ErrorBox error={`Failed to load Proxmox status: ${String(pmError)}`} />}
+          {pmError && <Alert kind="err" title="Failed to load Proxmox status">{errText(pmError)}</Alert>}
           {!pm?.connected && pm && (
-            <div className="pv-notice pv-notice-warn">
-              Proxmox is disconnected: {String((pm as { error?: string }).error ?? "unknown error")}
-            </div>
+            <Alert kind="warn" title="Proxmox disconnected">{pm.error ?? "unknown error"}</Alert>
           )}
           {nodes.map((n) => {
             const cpu = pct(n.cpu, n.maxcpu) ?? 0;
             const mem = pct(n.mem, n.maxmem) ?? 0;
             return (
-              <div key={n.node} style={{ padding: "10px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-                  <span style={{ fontWeight: 600 }}>{n.node} <StatusBadge status={n.status === "online" ? "running" : "stopped"} /></span>
-                  <span style={{ color: "var(--pv-text-2)", fontSize: "0.8rem", fontVariantNumeric: "tabular-nums" }}>
-                    {cpu.toFixed(0)}% CPU · {bytes(n.mem)}/{bytes(n.maxmem)} RAM
+              <div key={n.node} style={{ padding: "11px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, marginBottom: 7 }}>
+                  <span style={{ fontWeight: 600, display: "inline-flex", gap: 8, alignItems: "center" }}>
+                    {n.node} <StatusBadge status={n.status === "online" ? "running" : "stopped"} />
+                  </span>
+                  <span className="pv-faint pv-mono" style={{ fontSize: "0.78rem" }}>
+                    {cpu.toFixed(0)}% CPU · {fmtBytes(n.mem)}/{fmtBytes(n.maxmem)} RAM
                   </span>
                 </div>
-                <div className={`pv-meter${mem >= 80 ? " pv-meter-hot" : ""}`} title={`${mem.toFixed(0)}% RAM used`}>
-                  <i style={{ width: `${cpu}%` }} />
+                <div style={{ display: "grid", gap: 5 }}>
+                  <Meter value={cpu} max={100} tone={utilTone(cpu)} title={`${n.node} CPU ${cpu.toFixed(0)}%`} />
+                  <Meter value={mem} max={100} tone={utilTone(mem)} title={`${n.node} RAM ${mem.toFixed(0)}%`} />
                 </div>
               </div>
             );
           })}
           {showTip && balanceTip && (
-            <div className="pv-notice pv-notice-warn" style={{ display: "flex", gap: 12, marginTop: 12 }}>
-              <span style={{ flex: 1 }}>{balanceTip}</span>
-              <button className="pv-btn pv-btn-link" style={{ fontSize: "0.78rem", flex: "none" }} onClick={dismissTip} title="Hide this suggestion (it returns if the situation changes)">
-                Dismiss
-              </button>
-            </div>
+            <Alert kind="warn" title="Balance suggestion">
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                <span style={{ flex: 1 }}>{balanceTip}</span>
+                <button
+                  className="pv-btn pv-btn-link"
+                  style={{ fontSize: "0.78rem", flex: "none" }}
+                  onClick={dismissTip}
+                  title="Hide this suggestion (it returns if the situation changes)"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </Alert>
           )}
         </Section>
       ),
@@ -290,14 +291,26 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
       node: (
         <Section
           title="Discovered services"
+          hint="Open ports mapped to their VMs by the last scan."
           actions={privileged ? <Btn size="sm" onClick={() => void runDiscovery()}>Scan now</Btn> : undefined}
         >
           {[...servicesByVm.entries()].map(([vmId, services]) => {
             const vm = vmList.find((v) => v.id === vmId);
             if (!vm) return null;
             return (
-              <div key={vmId} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
-                <Link to={`/vms/${vmId}`}>{vm.name}</Link>
+              <div
+                key={vmId}
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 0",
+                  borderBottom: "1px solid var(--pv-border-soft)",
+                  fontSize: "0.85rem",
+                }}
+              >
+                <Link to={`/vms/${vmId}`} style={{ fontWeight: 550 }}>{vm.name}</Link>
                 {services.map((s) => (
                   <span key={s.port} className="pv-mono" title={`Port ${s.port}`} style={{ color: "var(--pv-text-2)" }}>
                     {s.service} · {s.port}
@@ -307,7 +320,10 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
             );
           })}
           {!servicesByVm.size && (
-            <Empty title="No scan results yet" body={privileged ? "Run a discovery scan to map open services to VMs." : undefined} />
+            <EmptyState
+              title="No scan results yet"
+              body={privileged ? "Run a discovery scan to map open services to VMs." : "An administrator runs the scan."}
+            />
           )}
         </Section>
       ),
@@ -315,21 +331,33 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
     events: {
       privilegedOnly: true,
       node: (
-        <Section title="Recent events">
+        <Section title="Recent events" hint="Last 10 audit entries across the fleet.">
           {(audit?.entries ?? []).map((e) => (
-            <div key={e.id} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
+            <div
+              key={e.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 16,
+                padding: "7px 0",
+                borderBottom: "1px solid var(--pv-border-soft)",
+                fontSize: "0.85rem",
+              }}
+            >
               <span className="pv-mono">{e.event}</span>
-              <span style={{ color: "var(--pv-text-3)", whiteSpace: "nowrap" }}>{e.actorUsername ?? "system"} · {new Date(e.createdAt).toLocaleString()}</span>
+              <span className="pv-faint" style={{ whiteSpace: "nowrap" }}>
+                {e.actorUsername ?? "system"} · {fmtDateTime(e.createdAt)}
+              </span>
             </div>
           ))}
-          {!audit?.entries.length && <Empty title="No events yet" body="Actions across the fleet will appear here." />}
+          {!audit?.entries.length && <EmptyState title="No events yet" body="Actions across the fleet will appear here." />}
         </Section>
       ),
     },
     jobs: {
       privilegedOnly: false,
       node: (
-        <Section title="Provisioning jobs">
+        <Section title="Provisioning jobs" hint="Watch live progress, retry failures, roll back.">
           <Jobs me={me} bare />
         </Section>
       ),
@@ -339,9 +367,9 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
   if (!canList) {
     return (
       <div className="pv-page pv-page-narrow">
-        <PageTitle title="Dashboard" description="Your account is active but has no VM access yet." />
+        <PageHeader title="Dashboard" description="Your account is active but has no VM access yet." />
         <Section title="Welcome">
-          <Empty
+          <EmptyState
             title="Awaiting VM access"
             body="Your account was created with no permissions. An administrator will grant access — once VMs are assigned to you, they appear here along with remote-access buttons and credentials."
           />
@@ -352,27 +380,31 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
 
   return (
     <div className="pv-page">
-      <PageTitle
+      <PageHeader
         title="Dashboard"
         description={privileged ? "Fleet state at a glance. Rearrange or hide sections with Customize." : "Your virtual machines and recent activity."}
-      >
-        <Btn size="sm" onClick={() => setCustomizing((v) => !v)}>{customizing ? "Done" : "Customize"}</Btn>
-      </PageTitle>
-      {error && <ErrorBox error={error} />}
+        actions={<Btn size="sm" onClick={() => setCustomizing((v) => !v)}>{customizing ? "Done" : "Customize"}</Btn>}
+      />
       {customizing && (
         <div className="pv-panel" style={{ marginBottom: 20 }}>
-          <div className="pv-label" style={{ marginBottom: 8 }}>Arrange sections (saved in this browser)</div>
+          <div className="pv-label" style={{ marginBottom: 10 }}>Arrange sections (saved in this browser)</div>
           {layout.order.map((id) => (
-            <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", fontSize: "0.85rem" }}>
+            <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", fontSize: "0.85rem" }}>
               <button
                 onClick={() => toggleWidget(id)}
                 style={{
-                  width: 16, height: 16, borderRadius: 4, border: "1px solid var(--pv-border)",
+                  width: 16,
+                  height: 16,
+                  borderRadius: 4,
+                  border: `1px solid ${layout.hidden.includes(id) ? "var(--pv-border)" : "var(--pv-accent)"}`,
                   background: layout.hidden.includes(id) ? "transparent" : "var(--pv-accent)",
-                  borderColor: layout.hidden.includes(id) ? "var(--pv-border)" : "var(--pv-accent)",
-                  color: "#fff", fontSize: 10, lineHeight: 1, cursor: "pointer",
+                  color: "#fff",
+                  fontSize: 10,
+                  lineHeight: 1,
+                  cursor: "pointer",
                 }}
-                aria-label={`Toggle ${id}`}
+                aria-label={`Toggle ${ALL_WIDGETS.find((w) => w.id === id)?.title}`}
+                aria-pressed={!layout.hidden.includes(id)}
               >
                 ✓
               </button>
