@@ -21,10 +21,9 @@ your pull requests and runs anything that needs live infrastructure.
 
 **Never push to `main`. Never commit onto `main`. Never force-push `main`
 or any branch you did not create.** Every change ships as a pull request
-that Ben reviews and merges. No exceptions, including "trivial" fixes.
-(Ben himself pushes directly — that is the maintainer's prerogative and
-changes nothing for you. If you see direct pushes in the history, they
-are his, not a precedent.)
+that the maintainer reviews and merges. No exceptions, including "trivial"
+fixes. The maintainer also ships through PRs; direct pushes to `main` in
+the history are legacy, not a precedent.
 
 Every task follows this shape:
 
@@ -37,9 +36,9 @@ git push -u origin vihaan/<short-description>        # your branch only
 gh pr create --base main --title "..." --body "..."  # then STOP and wait
 ```
 
-`main` is branch-protected server-side (direct pushes rejected for
-everyone including admins; one approving review required), so following
-the shape above is not just policy — it is the only path that works.
+`main` is branch-protected: a pull request and one approving review are
+required, and conversations must be resolved before merge. Admins follow
+the same PR rule, so the shape above is the only path.
 
 - Branch names start with `vihaan/`.
 - Force-push is allowed **only** on your own `vihaan/*` branches (e.g.
@@ -78,21 +77,24 @@ Each request becomes exactly one branch and one PR:
    re-read the authorization primer in `CONTRIBUTING.md` first.
 2. **One branch per feature** (`vihaan/<short-description>`, from latest
    `main`). If a request is really three features, say so and split it —
-   small PRs get reviewed fast, big ones sit.
+   small PRs get reviewed fast, big ones sit. Delete the branch after the
+   PR merges; keep only `main` plus the branch for the active PR.
 3. **Build it to the done criteria below** (green checks, tests, PR
    description). Screenshots for UI, `needs-live-verify` label when live
    infrastructure is the only way to prove it.
-4. **Open the PR and stop.** Ben reviews and merges. Never merge, never
-   deploy, never touch production — you have no path to it and must not
-   invent one.
+4. **Open the PR and stop.** The maintainer reviews and merges. Never
+   merge, never deploy, never touch production — you have no path to it
+   and must not invent one. After merge, delete your branch locally and on
+   `origin`; keep only `main` plus the branch for your active PR.
 5. **Review comments are the next task.** Apply them as follow-up commits
    on the same branch, re-verify, push again. If a comment changes the
    shape of the feature, confirm the new direction with Vihaan first.
 6. **If Vihaan changes or cancels a request mid-task:** commit nothing
    half-done to the branch — either finish the pivot cleanly on the same
-   branch (and say so in the PR) or abandon it (`git checkout main` and
-   delete the branch locally) and start fresh. Never leave a stale
-   half-built branch open without a note explaining its state.
+   branch (and say so in the PR) or abandon it (`git switch main`, delete
+   the branch locally, and delete it on `origin` if it was pushed) and
+   start fresh. Never leave a stale half-built branch open without a note
+   explaining its state.
 
 ## What "done" means for a PR
 
@@ -149,8 +151,9 @@ Each request becomes exactly one branch and one PR:
 - Tests run on `pg-mem` + `ioredis-mock` — no database, homelab, or
   secrets required. If the suite is green, the backend change is verified
   as far as automation can tell.
-- The web SPA has no test runner: `typecheck` + `vite build` is the
-  compile proof; behavior verification happens on Ben's side.
+- The web SPA's compile proof is `typecheck` + `vite build`; `npm run
+  test` also runs web tests when the workspace has them. Behavior
+  verification happens on the maintainer's side.
 - `npm run test:integration` is maintainer-only (needs real Proxmox env) —
   never run it, never gate on it.
 - Windows note: if `npm.ps1` is blocked by execution policy, invoke
