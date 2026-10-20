@@ -53,9 +53,15 @@ describe("isolation rule builder", () => {
     expect(buildIsolationRules({ allowInternet: false })).toEqual([]);
   });
   it("rejects malformed addresses and ports up front", () => {
-    expect(() => buildIsolationRules({ allowFrom: "not-an-ip" })).toThrow(/IPv4/);
+    expect(() => buildIsolationRules({ allowFrom: "not_an_ip!" })).toThrow(/IPv4 address, CIDR, or hostname/);
     expect(() => buildIsolationRules({ allowFrom: "192.168.1.999" })).toThrow(/octet/);
     expect(() => buildIsolationRules({ allowFrom: "192.168.1.0/33" })).toThrow(/CIDR/);
+    // Strict RFC-1123 hostnames are accepted: Proxmox resolves hostname rule
+    // sources itself, and the Guacamole-backed default inbound exception is
+    // the guac URL's DNS name. They build the same ruleset as an address.
+    expect(buildIsolationRules({ allowFrom: "not-an-ip" })).toHaveLength(
+      buildIsolationRules({ allowFrom: "10.0.0.1" }).length,
+    );
     expect(() => buildIsolationRules({ allowFrom: "10.0.0.1", inboundPorts: ["99999"] })).toThrow(/0–65535/);
     expect(() => buildIsolationRules({ allowFrom: "10.0.0.1", inboundPorts: ["80; rm"] })).toThrow(/ports like/);
     expect(buildIsolationRules({ allowFrom: "10.0.0.0/24", inboundPorts: ["80", "5900:5910"] })).toHaveLength(10);
@@ -73,7 +79,13 @@ describe("hand-written rule validation", () => {
     expect(() => assertFirewallRuleInput({ action: "ACCEPT", type: "sideways" })).toThrow(/in or out/);
     expect(() => assertFirewallRuleInput({ action: "ACCEPT", type: "in", proto: "gre" })).toThrow(/tcp, udp/);
     expect(() => assertFirewallRuleInput({ action: "ACCEPT", type: "in", dport: "0:99999" })).toThrow(/0–65535/);
-    expect(() => assertFirewallRuleInput({ action: "ACCEPT", type: "in", source: "example.com" })).toThrow(/IPv4/);
+    expect(() => assertFirewallRuleInput({ action: "ACCEPT", type: "in", source: "bad rule!" })).toThrow(
+      /IPv4 address, CIDR, or hostname/,
+    );
+    // Resolvable hostnames are valid Proxmox rule sources too.
+    expect(
+      assertFirewallRuleInput({ action: "ACCEPT", type: "in", source: "guac.example.com" }),
+    ).toMatchObject({ source: "guac.example.com" });
     expect(() => assertFirewallRuleInput(null)).toThrow();
   });
 });

@@ -50,6 +50,7 @@ import {
   type Permission,
 } from "@proxvm/core";
 import { basicProvisionSchema } from "@proxvm/shared";
+import { guacdHostFromSettings } from "./firewall.js";
 import type { Queue } from "bullmq";
 
 const ipOverrideSchema = z.object({ ip: z.string().ip({ version: "v4" }) });
@@ -674,36 +675,55 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // Static segment wins over /vms/:id in Fastify routing; per-item results so
   // one failure never aborts the rest. Each item enforces the same permission
   // and access rules as the single-VM endpoints, with re-authorization-at-execution
-  // (resolveVmAccess) inside the loop so that revoked grants, quota changes, or
-  // privacy-flag shifts take effect immediately.
+  // (resolveVmAccess inside the loop; shared privacy helper for privacy) so that
+  // revoked grants, quota changes, or privacy-flag shifts take effect immediately.
   app.post("/vms/bulk-action", async (request) => {
     const body = z
-      .object({ ids: z.array(z.string().uuid()).min(1).max(50), action: z.enum(["start", "stop", "restart", "privacy", "class", "isolation", "start-on-boot"]) })
+      .object({
+        ids: z.array(z.string().uuid()).min(1).max(50),
+        action: z.enum(["start", "stop", "restart", "privacy", "class", "isolation", "start-on-boot"]),
+        // Isolation refinement, mirroring POST /vms/:id/firewall. When no
+        // allowFrom is supplied, the Guacamole host is used (same default as
+        // VmFirewallSection) so new console sessions survive policy_in DROP.
+        allowFrom: z.string().max(128).optional(),
+        allowDnsTo: z.string().max(128).optional(),
+        allowInternet: z.boolean().optional(),
+      })
       .parse(request.body);
 
-    // Map each action to the minimal permission set required (OR-list).
+    // Entry permissions mirror the single-VM endpoints exactly:
+    // - privacy needs no policy permission (PATCH /vms/:id/privacy is requireAuth;
+    //   the shared per-VM helper decides grant/ownership/ADMIN/vm.edit);
+    // - class/isolation/start-on-boot need vm.edit (matches the single PATCHes);
+    // - power actions keep their OR-lists, as before.
     const action = body.action;
-    const perAction: Permission[] =
-      action === "start"
-        ? ["vm.manage", "vm.start"]
-        : action === "stop"
-          ? ["vm.manage", "vm.stop"]
-          : action === "restart"
-            ? ["vm.manage", "vm.restart"]
-            : action === "privacy"
-              ? ["vm.manage"]
-              : ["vm.manage", "vm.edit"];
-    const user = await app.requirePermission(perAction)(request);
+    const perAction: Permission[] | null =
+      action === "privacy"
+        ? null
+        : action === "start"
+          ? ["vm.manage", "vm.start"]
+          : action === "stop"
+            ? ["vm.manage", "vm.stop"]
+            : action === "restart"
+              ? ["vm.manage", "vm.restart"]
+              : ["vm.edit"];
+    const user = perAction
+      ? await app.requirePermission(perAction)(request)
+      : await app.requireAuth(request);
 
-    const results: Array<{ vmId: string; ok: boolean; error?: string; private?: boolean; vmClass?: string }> = [];
+    const results: Array<{ vmId: string; ok: boolean; error?: string; private?: boolean; granted?: boolean; vmClass?: string }> = [];
     for (const vmId of [...new Set(body.ids)]) {
       try {
+        const vm = await ctx.vms.requireById(vmId);
         // Re-authorize per VM — a revoked grant, changed quota, or privacy shift
         // takes effect immediately rather than using the permission captured at entry.
-        const access = await resolveVmAccess(request, vmId);
-        if (!access.allowed) throw AppError.forbidden("No access to this VM");
-
-        const vm = await ctx.vms.requireById(vmId);
+        // Privacy is the exception: its per-VM rules are direction-specific and shared
+        // with PATCH /vms/:id/privacy (assertMayChangePrivacy inside core), which
+        // performs the only authorization an item needs.
+        if (action !== "privacy") {
+          const access = await resolveVmAccess(request, vmId);
+          if (!access.allowed) throw AppError.forbidden("No access to this VM");
+        }
 
         if (action === "start") {
           const client = await ctx.getProxmoxClient();
@@ -734,14 +754,14 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
             actorUserId: user.id,
             actorUsername: user.username,
             vmId: vm.id,
-            detail: { bulk: true },
+            detail: { bulk: true, granted: item.granted },
           });
-          results.push({ vmId, ok: true, private: item.private });
+          results.push({ vmId, ok: true, private: item.private, granted: item.granted });
         } else if (action === "class") {
-          // server ↔ user per VM; core helper blocks server→user while
-          // enabled schedules would conflict with idle auto-shutdown.
+          // server ↔ user per VM; the schedule guard lives in setVmClass,
+          // shared with PATCH /vms/:id/class and the idle service.
           const target: "server" | "user" = vm.vmClass === "user" ? "server" : "user";
-          const item = (await ctx.vms.bulkSetVmClass([vmId], target, user.id, user.roles))[0];
+          const item = (await ctx.vms.bulkSetVmClass([vmId], target))[0];
           if (!item?.ok) throw new Error(item?.error ?? "class switch failed");
           await app.audit(request, {
             event: "VM_EDITED",
@@ -753,8 +773,19 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
           results.push({ vmId, ok: true, vmClass: target });
         } else if (action === "isolation") {
           const enabled = !vm.firewallIsolated;
+          // Same default as the single-VM UI toggle: allow the Guacamole host
+          // (the reverse proxy guests see console traffic from) to open
+          // RDP/SSH/VNC into the guest. Explicit body values win; when
+          // Guacamole is unconfigured and nothing is passed, no inbound
+          // exception is created (matches the single endpoint).
+          const guacSettings = await ctx.settings.guacamole();
+          const isolationOpts = {
+            allowFrom: body.allowFrom?.trim() || guacdHostFromSettings(guacSettings?.url) || undefined,
+            allowDnsTo: body.allowDnsTo?.trim() || undefined,
+            allowInternet: body.allowInternet,
+          };
           const item = (
-            await ctx.vms.bulkToggleIsolation([vmId], enabled, user.id, user.roles, await ctx.getProxmoxClient())
+            await ctx.vms.bulkToggleIsolation([vmId], enabled, await ctx.getProxmoxClient(), isolationOpts)
           )[0];
           if (!item?.ok) throw new Error(item?.error ?? "isolation toggle failed");
           await app.audit(request, {
@@ -762,13 +793,13 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
             actorUserId: user.id,
             actorUsername: user.username,
             vmId: vm.id,
-            detail: { isolated: enabled, bulk: true, rules: item.rules },
+            detail: { isolated: enabled, bulk: true, rules: item.rules, allowFrom: isolationOpts.allowFrom },
           });
           results.push({ vmId, ok: true });
         } else if (action === "start-on-boot") {
           const enabled = !vm.startOnBoot;
           const item = (
-            await ctx.vms.bulkSetStartOnBoot([vmId], enabled, user.id, user.roles, await ctx.getProxmoxClient())
+            await ctx.vms.bulkSetStartOnBoot([vmId], enabled, await ctx.getProxmoxClient())
           )[0];
           if (!item?.ok) throw new Error(item?.error ?? "start-on-boot toggle failed");
           await app.audit(request, {

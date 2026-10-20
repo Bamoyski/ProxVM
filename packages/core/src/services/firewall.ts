@@ -28,7 +28,8 @@ import type { ProxmoxClient } from "../proxmox/client.js";
  * LAN), and the final ACCEPT-all sits last. With allowInternet off the
  * guest gets DNS only (legacy behavior).
  *
- * Known limits: IPv4 only (the builder validates IPv4/CIDR); DHCP client
+ * Known limits: IPv4 for addresses (the builder validates IPv4/CIDR plus
+ * RFC-1123 hostnames, which Proxmox resolves itself); DHCP client
  * traffic is narrowly allowed (UDP 67 out / 68 in) so DHCP guests keep
  * their leases; ARP is L2 and untouched by these L3 rules.
  *
@@ -178,11 +179,18 @@ function assertPortSpec(spec: string, field: string): void {
 
 function assertAddress(value: string, field: string): void {
   const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/([0-9]|[12][0-9]|3[0-2]))?$/.exec(value);
-  if (!match) {
-    throw AppError.validation(`${field} must be an IPv4 address or CIDR (e.g. 192.168.1.22 or 10.0.0.0/24)`);
+  if (match) {
+    for (const octet of match.slice(1, 5)) {
+      if (Number(octet) > 255) throw AppError.validation(`${field} has an octet above 255`);
+    }
+    return;
   }
-  for (const octet of match.slice(1, 5)) {
-    if (Number(octet) > 255) throw AppError.validation(`${field} has an octet above 255`);
+  // Proxmox itself accepts resolvable hostnames as rule sources — and the
+  // Guacamole-backed default inbound exception is a DNS name (the guac URL
+  // hostname), not always an address. Accept strict RFC-1123 hostnames;
+  // everything else (spaces, quotes, wildcards, bare port specs) is rejected.
+  if (!/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?$/i.test(value)) {
+    throw AppError.validation(`${field} must be an IPv4 address, CIDR, or hostname (e.g. 192.168.1.22, 10.0.0.0/24, or guac.example.com)`);
   }
 }
 

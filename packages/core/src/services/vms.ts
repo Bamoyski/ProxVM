@@ -17,6 +17,7 @@ import type { VmRow } from "./rows.js";
 import type { ProxmoxClient } from "../proxmox/client.js";
 import { applyIsolation, removeIsolation } from "./firewall.js";
 import { applyStartOnBoot } from "./start-on-boot.js";
+import { resolveEffectiveAccess } from "./iam.js";
 
 /** Input for registering a VM row; status defaults to pending. */
 export interface CreateVmInput {
@@ -323,41 +324,95 @@ export class VmsRepository {
     await this.db.query("UPDATE vms SET privacy_flag = $2, updated_at = NOW() WHERE id = $1", [id, enabled]);
   }
 
+  /**
+   * VM class (idle auto-shutdown eligibility). Server machines are never
+   * touched by the idle ticker; user machines may be shut down after
+   * sustained idleness when the global switch is on. The server→user guard
+   * lives HERE so every write path shares it: PATCH /vms/:id/class, the
+   * bulk route, and the idle service's validated setter would otherwise be
+   * able to move a scheduled VM into a class the ticker can power off,
+   * fighting its enabled schedules.
+   */
   async setVmClass(id: string, vmClass: "server" | "user"): Promise<void> {
     if (vmClass !== "server" && vmClass !== "user") {
       throw AppError.validation('vmClass must be "server" or "user"');
     }
-    await this.db.query("UPDATE vms SET vm_class = $2, updated_at = NOW() WHERE id = $1", [id, vmClass]);
+    const vm = await this.requireById(id);
+    if (vmClass === "user" && vm.vmClass !== "user") {
+      const dep = await this.db.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM vm_schedules WHERE vm_id = $1 AND enabled", [id]);
+      if ((dep.rows[0]?.n ?? 0) > 0) {
+        throw AppError.validation('VM class switch to "user" is blocked: the VM has enabled schedules that would conflict with idle auto-shutdown');
+      }
+    }
+    if (vmClass !== vm.vmClass) {
+      await this.db.query("UPDATE vms SET vm_class = $2, updated_at = NOW() WHERE id = $1", [id, vmClass]);
+    }
   }
 
   async setStartOnBoot(id: string, enabled: boolean): Promise<void> {
     await this.db.query("UPDATE vms SET start_on_boot = $2, updated_at = NOW() WHERE id = $1", [id, enabled]);
   }
 
+  /** Direction-specific privacy-change authorization, shared by
+   * PATCH /vms/:id/privacy and the bulk route so they can never diverge.
+   * Enabling needs a concrete grant, creator-ownership, or ADMIN; clearing
+   * additionally needs ownership, ADMIN, or an effective vm.edit — it
+   * exposes the VM to the ADMIN/OPERATOR list bypass, so ordinary vm.read
+   * holders must not be able to do it. MUST run before any write. Returns
+   * the grant/ownership state for the audit trail. */
+  async assertMayChangePrivacy(
+    vm: { id: string; createdByUserId: string | null },
+    userId: string,
+    roles: string[],
+    enabled: boolean,
+  ): Promise<boolean> {
+    const granted = await this.hasAccessOrOwns(vm.id, userId);
+    if (!granted && !roles.includes("ADMIN")) {
+      throw AppError.forbidden("Toggling privacy requires a direct grant for this VM");
+    }
+    if (!enabled) {
+      // De-privatizing exposes the VM to every ADMIN/OPERATOR via the list
+      // bypass, so clearing the flag is a management action: owner, ADMIN,
+      // or an effective vm.edit holder. Enabling stays visibility-based so
+      // regular users can protect their own VMs.
+      const isOwner = vm.createdByUserId !== null && vm.createdByUserId === userId;
+      if (!isOwner && !roles.includes("ADMIN")) {
+        const effective = await resolveEffectiveAccess(this.db, userId);
+        if (!effective.permissions.has("vm.edit")) {
+          throw AppError.forbidden("Clearing the privacy flag requires vm.edit, ownership, or ADMIN");
+        }
+      }
+    }
+    return granted;
+  }
+
   // ---------------------------------------------------------------------------
   // Bulk policy toggles. Shared orchestrators behind /vms/bulk-action.
-  // Authorization (entry permission + per-VM resolveVmAccess) and audit
-  // logging are the caller's contract; these helpers fan out to the per-VM
-  // writers so one failure never aborts the rest. Proxmox-facing helpers
-  // (isolation, start-on-boot) take the client so Proxmox and the ProxVM
-  // database never disagree; without a client they only record desired state.
+  // Authorization and audit logging are the caller's contract, except where a
+  // shared helper owns the rule (privacy, the class schedule guard); these
+  // helpers fan out to the per-VM writers so one failure never aborts the
+  // rest. Proxmox-facing helpers (isolation, start-on-boot) take the client
+  // so Proxmox and the ProxVM database never disagree; without a client they
+  // only record desired state.
   // ---------------------------------------------------------------------------
 
   /**
-   * Bulk set privacy flag across selected VMs. Each item re-checks `visibleTo`
-   * — privacy-flagged VMs require a concrete grant or creator-ownership for
-   * anyone including admins — so a revoked grant takes effect immediately.
+   * Bulk set privacy flag across selected VMs. Each item runs the shared
+   * per-VM privacy authorization (same direction-specific rules as
+   * PATCH /vms/:id/privacy) BEFORE any write, so the bulk path can never
+   * flip a flag the single endpoint would refuse.
    */
-  async bulkSetPrivacy(vmIds: string[], enabled: boolean, userId: string, roles: string[]): Promise<Array<{ vmId: string; ok: boolean; private: boolean; error?: string }>> {
-    const results: Array<{ vmId: string; ok: boolean; private: boolean; error?: string }> = [];
+  async bulkSetPrivacy(vmIds: string[], enabled: boolean, userId: string, roles: string[]): Promise<Array<{ vmId: string; ok: boolean; private: boolean; granted?: boolean; error?: string }>> {
+    const results: Array<{ vmId: string; ok: boolean; private: boolean; granted?: boolean; error?: string }> = [];
     for (const vmId of [...new Set(vmIds)]) {
       try {
         const vm = await this.requireById(vmId);
+        // Authorization strictly precedes the write (parity with single-VM).
+        const granted = await this.assertMayChangePrivacy(vm, userId, roles, enabled);
         if (enabled !== vm.privacyFlag) {
           await this.setPrivacyFlag(vm.id, enabled);
         }
-        const vis = await this.visibleTo(userId, roles, vmId);
-        results.push({ vmId, ok: true, private: vis.private });
+        results.push({ vmId, ok: true, private: enabled, granted });
       } catch (err) {
         results.push({ vmId, ok: false, private: false, error: err instanceof Error ? err.message : String(err) });
       }
@@ -365,26 +420,13 @@ export class VmsRepository {
     return results;
   }
 
-  /**
-   * Bulk set VM class across selected VMs. Server→user is blocked while the
-   * VM still has enabled schedules: user-class machines are eligible for
-   * idle auto-shutdown, and scheduled power actions would fight the ticker.
-   * User→server is always permitted.
-   */
-  async bulkSetVmClass(vmIds: string[], vmClass: "server" | "user", userId: string, roles: string[]): Promise<Array<{ vmId: string; ok: boolean; error?: string }>> {
+  /** Bulk set VM class across selected VMs. The server→user schedule guard
+   * lives in setVmClass, shared with the single-VM endpoint. */
+  async bulkSetVmClass(vmIds: string[], vmClass: "server" | "user"): Promise<Array<{ vmId: string; ok: boolean; error?: string }>> {
     const results: Array<{ vmId: string; ok: boolean; error?: string }> = [];
     for (const vmId of [...new Set(vmIds)]) {
       try {
-        const vm = await this.requireById(vmId);
-        if (vmClass === "user" && vm.vmClass !== "user") {
-          const dep = await this.db.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM vm_schedules WHERE vm_id = $1 AND enabled", [vmId]);
-          if ((dep.rows[0]?.n ?? 0) > 0) {
-            throw AppError.validation('VM class switch to "user" is blocked: the VM has enabled schedules that would conflict with idle auto-shutdown');
-          }
-        }
-        if (vmClass !== vm.vmClass) {
-          await this.setVmClass(vm.id, vmClass);
-        }
+        await this.setVmClass(vmId, vmClass);
         results.push({ vmId, ok: true });
       } catch (err) {
         results.push({ vmId, ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -397,16 +439,28 @@ export class VmsRepository {
    * Bulk toggle network isolation across selected VMs. With a Proxmox client
    * this applies/removes the full default-deny guest-firewall ruleset via the
    * same helpers as POST /vms/:id/firewall (idempotent, count in results);
-   * without one it only flips the desired-state flag.
+   * `opts.allowFrom` is the inbound exception source — callers default it to
+   * the Guacamole host (the UI does the same on the single-VM toggle) so new
+   * RDP/SSH/VNC sessions survive `policy_in DROP`. Without a client it only
+   * flips the desired-state flag.
    */
-  async bulkToggleIsolation(vmIds: string[], enabled: boolean, userId: string, roles: string[], proxmox?: ProxmoxClient): Promise<Array<{ vmId: string; ok: boolean; rules?: number; error?: string }>> {
+  async bulkToggleIsolation(
+    vmIds: string[],
+    enabled: boolean,
+    proxmox?: ProxmoxClient,
+    opts?: { allowFrom?: string; allowDnsTo?: string; allowInternet?: boolean },
+  ): Promise<Array<{ vmId: string; ok: boolean; rules?: number; error?: string }>> {
     const results: Array<{ vmId: string; ok: boolean; rules?: number; error?: string }> = [];
     for (const vmId of [...new Set(vmIds)]) {
       try {
         const vm = await this.requireById(vmId);
         if (proxmox) {
           const outcome = enabled
-            ? await applyIsolation(this.db, proxmox, vm.id, vm.node, vm.vmid, { allowInternet: true })
+            ? await applyIsolation(this.db, proxmox, vm.id, vm.node, vm.vmid, {
+                allowFrom: opts?.allowFrom,
+                allowDnsTo: opts?.allowDnsTo,
+                allowInternet: opts?.allowInternet ?? true,
+              })
             : await removeIsolation(this.db, proxmox, vm.id, vm.node, vm.vmid);
           const rules = "rulesCreated" in outcome ? outcome.rulesCreated : outcome.rulesRemoved;
           results.push({ vmId, ok: true, rules });
@@ -427,7 +481,7 @@ export class VmsRepository {
    * endpoint) so the `onboot` flag and the DB never disagree; without one it
    * only records desired state.
    */
-  async bulkSetStartOnBoot(vmIds: string[], enabled: boolean, userId: string, roles: string[], proxmox?: ProxmoxClient): Promise<Array<{ vmId: string; ok: boolean; error?: string }>> {
+  async bulkSetStartOnBoot(vmIds: string[], enabled: boolean, proxmox?: ProxmoxClient): Promise<Array<{ vmId: string; ok: boolean; error?: string }>> {
     const results: Array<{ vmId: string; ok: boolean; error?: string }> = [];
     for (const vmId of [...new Set(vmIds)]) {
       try {
