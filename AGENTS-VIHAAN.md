@@ -37,8 +37,9 @@ gh pr create --base main --title "..." --body "..."  # then STOP and wait
 ```
 
 `main` is branch-protected: a pull request and one approving review are
-required, and conversations must be resolved before merge. Admins follow
-the same PR rule, so the shape above is the only path.
+required, conversations must be resolved before merge, and direct pushes
+are rejected for everyone including admins. The shape above is the only
+path.
 
 - Branch names start with `vihaan/`.
 - Force-push is allowed **only** on your own `vihaan/*` branches (e.g.
