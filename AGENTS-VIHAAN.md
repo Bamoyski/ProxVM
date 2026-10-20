@@ -36,10 +36,12 @@ git push -u origin vihaan/<short-description>        # your branch only
 gh pr create --base main --title "..." --body "..."  # then STOP and wait
 ```
 
-`main` is branch-protected: a pull request is required, conversations must
-be resolved before merge, and direct pushes are rejected for everyone
-including admins. Your PRs are still reviewed and merged by the
-maintainer; never merge your own PR. The shape above is the only path.
+`main` is branch-protected: a pull request and one approving review are
+required, conversations must be resolved before merge, and direct pushes
+are rejected for everyone including admins. The repository admin has a
+pull-request-only bypass for their own PRs; that does not apply to you.
+Your PRs are reviewed and merged by the maintainer; never merge your own
+PR. The shape above is the only path.
 
 - Branch names start with `vihaan/`.
 - Force-push is allowed **only** on your own `vihaan/*` branches (e.g.
