@@ -50,10 +50,11 @@ npm run typecheck && npm run test && npm run build
 - Unit/integration suites run on `pg-mem` + `ioredis-mock` — no database,
   no Proxmox, no secrets required. If the suite is green, your backend
   change is verified as far as automation can tell.
-- The web SPA has no test runner: `typecheck` + `vite build` is the
-  compile proof. You cannot click through flows without a running API —
-  say so in the PR and attach screenshots of the changed UI instead; the
-  maintainer verifies behavior against the live homelab before merging.
+- The web SPA's compile proof is `typecheck` + `vite build`; `npm run
+  test` also runs web tests when the workspace has them. You cannot click
+  through flows without a running API — say so in the PR and attach
+  screenshots of the changed UI instead; the maintainer verifies behavior
+  against the live homelab before merging.
 - Never ask for, accept, or store real credentials (`.env` contents,
   tokens, passwords). If a feature needs a live integration to verify
   (Guacamole launch, PBS backup, Cloudflare DNS), mark the PR
@@ -64,7 +65,7 @@ npm run typecheck && npm run test && npm run build
 
 - `apps/api` — Fastify routes (`src/routes/`), auth plugin, tickers.
 - `apps/worker` — BullMQ provisioning consumer (re-authorizes every job).
-- `apps/web` — React SPA (`src/pages/`, TanStack Query, no test runner).
+- `apps/web` — React SPA (`src/pages/`, TanStack Query; web tests when present).
 - `packages/core` — all business logic: `services/`, `provisioning/`,
   `proxmox/` + `pbs/` + `cloudflare/` + `guacamole/` clients, `db/`.
 - `packages/shared` — Zod schemas, types, enums shared by API and web.
@@ -77,7 +78,7 @@ npm run typecheck && npm run test && npm run build
 | `npm run dev` | api + worker + web with hot reload |
 | `npm run build` | all workspaces (ships `dist/`) |
 | `npm run typecheck` | `tsc --noEmit` everywhere |
-| `npm run test` | shared + core + api suites (pg-mem, no infra needed) |
+| `npm run test` | shared + core + api (+ web when present) suites (pg-mem, no infra needed) |
 | `npm run test:integration` | live-Proxmox tests (needs `PROXVM_INTEGRATION=1` + env) |
 | `npm run audit:ci` | `npm audit --omit=dev`, moderate+ fails |
 
@@ -121,18 +122,32 @@ Green means: typecheck + tests + build, in that order.
 
 ## Pull requests
 
-1. Branch from `main`. Push the branch, open a PR — never push `main`
-   directly, never force-push it. (Recommended repo setting: protect
-   `main` to require a PR before merging — one click under Settings →
-   Branches — so the rule holds even for admins.)
+`main` is PR-only. Every change — including maintainer changes — lands
+through a short-lived branch and a pull request; never push `main`
+directly, never force-push it. `main` requires a PR and one approving
+review for contributor PRs, and branch protection rejects direct pushes
+from admins too. The repository admin has a pull-request-only bypass for
+their own PRs, so the maintainer can self-merge; that bypass never allows
+direct pushes.
+
+1. Start from current `main`:
+   `git fetch origin && git switch -c feature/<short-description> origin/main`.
+   Use `fix/` or `docs/` when that is clearer. One branch per PR; if a
+   request is really several changes, split it.
 2. Keep diffs small and single-purpose. Explain WHY in comments on
    security-sensitive logic, not just what.
-3. CI-green required: typecheck + tests + build + `npm run audit:ci`.
-   Code-only contributors stop here; the maintainer runs live behavior
-   checks and deploys.
-4. The PR description should state: what changed, threat-model impact
+3. Run the full gate locally: `npm run typecheck && npm run test &&
+   npm run build && npm run audit:ci`. Code-only contributors stop here;
+   the maintainer runs live behavior checks and deploys.
+4. Push the branch and open a PR against `main`:
+   `git push -u origin feature/<short-description>` then
+   `gh pr create --base main --title "..." --body "..."`.
+5. The PR description should state: what changed, threat-model impact
    (if any), tests added, anything intentionally not covered, and
    (for UI) screenshots of the changed screens.
+6. After merge, delete the branch — GitHub can do this automatically;
+   otherwise `git push origin --delete <branch>` and `git branch -d
+   <branch>`. Keep only `main` plus the branch you are actively working on.
 
 ## Secrets (hard rules)
 
