@@ -47,6 +47,7 @@ import {
   storeVmServices,
   toPublicUser,
   type EnqueueJobData,
+  type Permission,
 } from "@proxvm/core";
 import { basicProvisionSchema } from "@proxvm/shared";
 import type { Queue } from "bullmq";
@@ -669,41 +670,116 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     return { points };
   });
 
-  // -- Bulk power actions --------------------------------------------------------
+  // -- Bulk power / policy actions --------------------------------------------------------
   // Static segment wins over /vms/:id in Fastify routing; per-item results so
   // one failure never aborts the rest. Each item enforces the same permission
-  // and access rules as the single-VM endpoints.
+  // and access rules as the single-VM endpoints, with re-authorization-at-execution
+  // (resolveVmAccess) inside the loop so that revoked grants, quota changes, or
+  // privacy-flag shifts take effect immediately.
   app.post("/vms/bulk-action", async (request) => {
     const body = z
-      .object({ ids: z.array(z.string().uuid()).min(1).max(50), action: z.enum(["start", "stop", "restart"]) })
+      .object({ ids: z.array(z.string().uuid()).min(1).max(50), action: z.enum(["start", "stop", "restart", "privacy", "class", "isolation", "start-on-boot"]) })
       .parse(request.body);
-    const perm: ("vm.manage" | "vm.start" | "vm.stop" | "vm.restart")[] =
-      body.action === "start" ? ["vm.manage", "vm.start"] : body.action === "stop" ? ["vm.manage", "vm.stop"] : ["vm.manage", "vm.restart"];
-    const user = await app.requirePermission(perm)(request);
-    const client = await ctx.getProxmoxClient();
-    const results: Array<{ vmId: string; ok: boolean; error?: string }> = [];
+
+    // Map each action to the minimal permission set required (OR-list).
+    const action = body.action;
+    const perAction: Permission[] =
+      action === "start"
+        ? ["vm.manage", "vm.start"]
+        : action === "stop"
+          ? ["vm.manage", "vm.stop"]
+          : action === "restart"
+            ? ["vm.manage", "vm.restart"]
+            : action === "privacy"
+              ? ["vm.manage"]
+              : ["vm.manage", "vm.edit"];
+    const user = await app.requirePermission(perAction)(request);
+
+    const results: Array<{ vmId: string; ok: boolean; error?: string; private?: boolean; vmClass?: string }> = [];
     for (const vmId of [...new Set(body.ids)]) {
       try {
+        // Re-authorize per VM — a revoked grant, changed quota, or privacy shift
+        // takes effect immediately rather than using the permission captured at entry.
         const access = await resolveVmAccess(request, vmId);
         if (!access.allowed) throw AppError.forbidden("No access to this VM");
+
         const vm = await ctx.vms.requireById(vmId);
-        let upid: string | null = null;
-        if (body.action === "start") {
-          upid = await client.start(vm.node, vm.vmid);
+
+        if (action === "start") {
+          const client = await ctx.getProxmoxClient();
+          const upid = await client.start(vm.node, vm.vmid);
           if (upid) await client.waitForTask(vm.node, upid, 120000);
           await ctx.vms.updateStatus(vm.id, "running");
           await app.audit(request, { event: "VM_STARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
-        } else if (body.action === "stop") {
-          upid = await client.shutdown(vm.node, vm.vmid);
+          results.push({ vmId, ok: true });
+        } else if (action === "stop") {
+          const client = await ctx.getProxmoxClient();
+          const upid = await client.shutdown(vm.node, vm.vmid);
           if (upid) await client.waitForTask(vm.node, upid, 120000);
           await ctx.vms.updateStatus(vm.id, "stopped");
           await app.audit(request, { event: "VM_STOPPED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
-        } else {
-          upid = await client.reboot(vm.node, vm.vmid);
+          results.push({ vmId, ok: true });
+        } else if (action === "restart") {
+          const client = await ctx.getProxmoxClient();
+          const upid = await client.reboot(vm.node, vm.vmid);
           if (upid) await client.waitForTask(vm.node, upid, 180000);
           await app.audit(request, { event: "VM_RESTARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+          results.push({ vmId, ok: true });
+        } else if (action === "privacy") {
+          const enabled = !vm.privacyFlag;
+          const item = (await ctx.vms.bulkSetPrivacy([vmId], enabled, user.id, user.roles))[0];
+          if (!item?.ok) throw new Error(item?.error ?? "privacy toggle failed");
+          await app.audit(request, {
+            event: enabled ? "PRIVACY_ENABLED" : "PRIVACY_DISABLED",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            vmId: vm.id,
+            detail: { bulk: true },
+          });
+          results.push({ vmId, ok: true, private: item.private });
+        } else if (action === "class") {
+          // server ↔ user per VM; core helper blocks server→user while
+          // enabled schedules would conflict with idle auto-shutdown.
+          const target: "server" | "user" = vm.vmClass === "user" ? "server" : "user";
+          const item = (await ctx.vms.bulkSetVmClass([vmId], target, user.id, user.roles))[0];
+          if (!item?.ok) throw new Error(item?.error ?? "class switch failed");
+          await app.audit(request, {
+            event: "VM_EDITED",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            vmId: vm.id,
+            detail: { vmClass: target, bulk: true },
+          });
+          results.push({ vmId, ok: true, vmClass: target });
+        } else if (action === "isolation") {
+          const enabled = !vm.firewallIsolated;
+          const item = (
+            await ctx.vms.bulkToggleIsolation([vmId], enabled, user.id, user.roles, await ctx.getProxmoxClient())
+          )[0];
+          if (!item?.ok) throw new Error(item?.error ?? "isolation toggle failed");
+          await app.audit(request, {
+            event: "VM_FIREWALL_CHANGED",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            vmId: vm.id,
+            detail: { isolated: enabled, bulk: true, rules: item.rules },
+          });
+          results.push({ vmId, ok: true });
+        } else if (action === "start-on-boot") {
+          const enabled = !vm.startOnBoot;
+          const item = (
+            await ctx.vms.bulkSetStartOnBoot([vmId], enabled, user.id, user.roles, await ctx.getProxmoxClient())
+          )[0];
+          if (!item?.ok) throw new Error(item?.error ?? "start-on-boot toggle failed");
+          await app.audit(request, {
+            event: "VM_START_ON_BOOT_CHANGED",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            vmId: vm.id,
+            detail: { enabled, bulk: true },
+          });
+          results.push({ vmId, ok: true });
         }
-        results.push({ vmId, ok: true });
       } catch (err) {
         results.push({ vmId, ok: false, error: err instanceof Error ? err.message : String(err) });
       }
