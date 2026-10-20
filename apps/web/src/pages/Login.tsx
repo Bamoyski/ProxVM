@@ -117,7 +117,7 @@ export default function Login() {
   return (
     <div className="pv-shell" style={{ alignItems: "center", justifyContent: "center" }}>
       <form onSubmit={mode === "login" ? submit : submitRegister} className="pv-panel" style={{ width: 380, maxWidth: "calc(100vw - 32px)" }}>
-        <div className="pv-brand" style={{ padding: "0 0 2px" }}>Prox<b>VM</b></div>
+        <h1 className="pv-brand" style={{ padding: "0 0 2px" }}>Prox<b>VM</b></h1>
         <p className="pv-sub" style={{ marginBottom: 18 }}>
           {mode === "login"
             ? "Sign in to manage virtual machines."

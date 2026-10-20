@@ -195,7 +195,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
         <div className="pv-panel">
           {step === 1 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 1 — Create administrator</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 1 — Create administrator</h1>
               <Field label="Username">
                 <input className={input} value={admin.username} onChange={(e) => setAdmin({ ...admin, username: e.target.value })} />
               </Field>
@@ -211,7 +211,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 2 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 2 — Configure Proxmox</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 2 — Configure Proxmox</h1>
               <Field label="Proxmox URL">
                 <input className={input} value={proxmox.url} onChange={(e) => setProxmox({ ...proxmox, url: e.target.value })} />
               </Field>
@@ -236,7 +236,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 3 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 3 — Test Proxmox connection</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 3 — Test Proxmox connection</h1>
               <p className="pv-sub">Performs a real API call to your Proxmox server.</p>
               <button onClick={testProxmox} disabled={busy} className="pv-btn pv-btn-primary">
                 {busy ? "Testing…" : "Test connection"}
@@ -248,7 +248,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 4 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 4 — Configure Guacamole</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 4 — Configure Guacamole</h1>
               <Field label="Database engine">
                 <select
                   className="pv-select"
@@ -282,7 +282,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 5 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 5 — Test Guacamole connection</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 5 — Test Guacamole connection</h1>
               <p className="pv-sub">Real database connection + schema check, plus Guacamole web app reachability.</p>
               <button onClick={testGuacamole} disabled={busy} className="pv-btn pv-btn-primary">
                 {busy ? "Testing…" : "Test connection"}
@@ -294,7 +294,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 6 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 6 — Application database & Redis</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 6 — Application database & Redis</h1>
               <div className="pv-grid-2">
                 <Field label="PostgreSQL host"><input className={input} value={database.host} onChange={(e) => setDatabase({ ...database, host: e.target.value })} /></Field>
                 <Field label="Port"><input type="number" className={input} value={database.port} onChange={(e) => setDatabase({ ...database, port: Number(e.target.value) })} /></Field>
@@ -325,7 +325,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 7 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 7 — Initialize encryption & finalize</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 7 — Initialize encryption & finalize</h1>
               <p className="pv-sub">
                 A master encryption key (AES-256-GCM) and session signing key are generated securely and stored server-side in{" "}
                 <span className="pv-mono">.proxvm/config.json</span>. VM passwords and infrastructure secrets are encrypted with the master key.
@@ -345,7 +345,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 8 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 8 — Integration checks</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 8 — Integration checks</h1>
               <pre className="pv-mono" style={{ background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6, padding: 12, fontSize: "0.76rem", overflow: "auto", marginBottom: 16 }}>{JSON.stringify(checks, null, 2)}</pre>
               <button
                 onClick={() => {
