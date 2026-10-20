@@ -1,20 +1,10 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, Section, Btn } from "../components/ui.js";
+import { PageHeader, Section, Btn, Alert, Field, errText } from "../ui/index.js";
 
 const input = "pv-input";
 const label = "pv-label";
-
-function Field({ label: l, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="pv-field">
-      <label className={label}>{l}</label>
-      {children}
-      {hint ? <div className="pv-hint">{hint}</div> : null}
-    </div>
-  );
-}
 
 export default function Settings() {
   const qc = useQueryClient();
@@ -52,7 +42,7 @@ export default function Settings() {
       setSaved("Proxmox settings saved");
       void qc.invalidateQueries({ queryKey: ["settings-proxmox"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
@@ -76,7 +66,7 @@ export default function Settings() {
       setSaved("Guacamole settings saved");
       void qc.invalidateQueries({ queryKey: ["settings-guacamole"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
@@ -85,10 +75,10 @@ export default function Settings() {
 
   return (
     <div className="pv-page">
-      <PageTitle title="Settings" description="Connection details and instance behavior. Secrets stay masked." />
-      {error && <ErrorBox error={error} />}
-      {saved && <div className="pv-notice pv-notice-ok">{saved}</div>}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-10">
+      <PageHeader title="Settings" description="Connection details and instance behavior. Secrets stay masked." />
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
+      {saved && <Alert kind="ok" title="Saved">{saved}</Alert>}
+      <div className="pv-grid-2">
         <Section title="Proxmox">
           <Field label="URL"><input className={input} value={pxField("url", s.url)} onChange={(e) => setPx({ ...px, url: e.target.value })} /></Field>
           <Field label="Token ID"><input className={input} value={pxField("tokenId", s.tokenId)} onChange={(e) => setPx({ ...px, tokenId: e.target.value })} /></Field>
@@ -103,7 +93,7 @@ export default function Settings() {
             />
             Verify SSL
           </label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="pv-grid-3">
             <Field label="Default node"><input className={input} value={pxField("defaultNode", s.defaultNode)} onChange={(e) => setPx({ ...px, defaultNode: e.target.value })} /></Field>
             <Field label="Default storage"><input className={input} value={pxField("defaultStorage", s.defaultStorage)} onChange={(e) => setPx({ ...px, defaultStorage: e.target.value })} /></Field>
             <Field label="Default bridge"><input className={input} value={pxField("defaultNetwork", s.defaultNetwork)} onChange={(e) => setPx({ ...px, defaultNetwork: e.target.value })} /></Field>
@@ -126,7 +116,7 @@ export default function Settings() {
           <Field label="Public URL" hint="For the browser, e.g. https://guacamole.example.com/. Leave empty to use the URL above.">
             <input className={input} value={gacField("publicUrl", g.publicUrl ?? "")} onChange={(e) => setGac({ ...gac, publicUrl: e.target.value })} placeholder="Leave empty to use the URL above" />
           </Field>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="pv-grid-2">
             <Field label="DB host"><input className={input} value={gacField("dbHost", g.dbHost)} onChange={(e) => setGac({ ...gac, dbHost: e.target.value })} /></Field>
             <Field label="DB port"><input type="number" className={input} value={gacField("dbPort", String(g.dbPort ?? ""))} onChange={(e) => setGac({ ...gac, dbPort: e.target.value })} /></Field>
           </div>
@@ -346,7 +336,7 @@ function AppSettings() {
       void qc.invalidateQueries({ queryKey: ["settings-app"] });
       void qc.invalidateQueries({ queryKey: ["announcement"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
@@ -357,14 +347,14 @@ function AppSettings() {
       await api("/settings/gotify/test", { method: "POST", body: {} });
       setGotifyTestMsg("Test message sent — check Gotify.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errText(err));
     }
   };
 
   return (
     <div>
-      {error && <ErrorBox error={error} />}
-      {saved && <div className="pv-notice pv-notice-ok">{saved}</div>}
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
+      {saved && <Alert kind="ok" title="Saved">{saved}</Alert>}
       <Field label="Audit retention (days, blank = keep forever)" hint="Entries older than this are pruned hourly.">
         <input
           type="number"
@@ -420,6 +410,7 @@ function AppSettings() {
             className="pv-input"
             style={{ width: 112 }}
             title="Minutes of no sessions + idle CPU before shutdown"
+            aria-label="Idle minutes before shutdown"
             value={shownIdleMinutes}
             onChange={(e) => {
               setIdleMinutes(e.target.value);
@@ -429,9 +420,14 @@ function AppSettings() {
           <span className="pv-hint">min idle (5–10080)</span>
         </div>
       </Field>
-      <Field label="Threat webhook (blank = disabled)" hint="POSTs fresh threat findings as JSON every 5 minutes. Any http(s) URL works (Discord/Slack-compatible body); cloud metadata endpoints are refused.">
+      <Field
+        label="Threat webhook (blank = disabled)"
+        hint="POSTs fresh threat findings as JSON every 5 minutes. Any http(s) URL works (Discord/Slack-compatible body); cloud metadata endpoints are refused."
+        htmlFor="settings-webhook-url"
+      >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <input
+            id="settings-webhook-url"
             className="pv-input"
             style={{ minWidth: 280, flex: 1 }}
             placeholder="e.g. https://hooks.slack.com/services/…"
@@ -443,6 +439,7 @@ function AppSettings() {
           />
           <select
             className="pv-select"
+            aria-label="Minimum severity that triggers a webhook post"
             value={shownSeverity}
             title="Minimum severity that triggers a webhook post"
             onChange={(e) => {
@@ -472,6 +469,7 @@ function AppSettings() {
             className="pv-input"
             style={{ minWidth: 220, flex: 1 }}
             placeholder="e.g. http://192.168.1.28/"
+            aria-label="Gotify server URL"
             value={shownGotifyUrl}
             onChange={(e) => {
               setGotifyUrl(e.target.value);
@@ -483,6 +481,7 @@ function AppSettings() {
             className="pv-input"
             style={{ minWidth: 160, flex: 1 }}
             placeholder="App token (saved hidden)"
+            aria-label="Gotify application token"
             value={gotifyToken}
             onChange={(e) => {
               setGotifyToken(e.target.value);
@@ -494,6 +493,7 @@ function AppSettings() {
             className="pv-input"
             style={{ width: 100 }}
             title="Gotify priority 0–10"
+            aria-label="Gotify priority (0–10)"
             min={0}
             max={10}
             value={shownGotifyPriority}
@@ -504,13 +504,13 @@ function AppSettings() {
           />
           <Btn onClick={testGotify}>Send test</Btn>
         </div>
-        {gotifyTestMsg && <div className="pv-notice pv-notice-ok">{gotifyTestMsg}</div>}
+        {gotifyTestMsg && <div className="pv-alert pv-alert-ok">{gotifyTestMsg}</div>}
       </Field>
       <Field label="Provisioning ceilings (blank = no ceiling; admins exempt)" hint="Non-admin requests above these are rejected. Applies at request time and again when the worker runs.">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-          <input type="number" className="pv-input" style={{ width: 110 }} placeholder="Max CPU" title="Max vCPU per VM" value={shownMaxCpu} onChange={(e) => { setMaxCpu(e.target.value); setPolicyTouched(true); }} />
-          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max RAM MB" title="Max RAM megabytes per VM" value={shownMaxRam} onChange={(e) => { setMaxRamMb(e.target.value); setPolicyTouched(true); }} />
-          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max disk GB" title="Max disk gigabytes per VM" value={shownMaxDisk} onChange={(e) => { setMaxDiskGb(e.target.value); setPolicyTouched(true); }} />
+          <input type="number" className="pv-input" style={{ width: 110 }} placeholder="Max CPU" title="Max vCPU per VM" aria-label="Max vCPU per VM" value={shownMaxCpu} onChange={(e) => { setMaxCpu(e.target.value); setPolicyTouched(true); }} />
+          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max RAM MB" title="Max RAM megabytes per VM" aria-label="Max RAM megabytes per VM" value={shownMaxRam} onChange={(e) => { setMaxRamMb(e.target.value); setPolicyTouched(true); }} />
+          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max disk GB" title="Max disk gigabytes per VM" aria-label="Max disk gigabytes per VM" value={shownMaxDisk} onChange={(e) => { setMaxDiskGb(e.target.value); setPolicyTouched(true); }} />
         </div>
       </Field>
       <Field label="Static-IP subnets (blank = static assignment disabled for non-admins)" hint="Comma-separated IPv4 CIDRs, e.g. 192.168.1.0/24. Static requests outside these are rejected; addresses must also be unique across VMs.">
@@ -540,7 +540,7 @@ function AppSettings() {
           <option value="auto">Instant — GUEST role, you grant access later</option>
         </select>
         {shownMode === "auto" && !tsSecretConfigured && tsSecret.trim() === "" && (
-          <div className="pv-notice pv-notice-warn" style={{ marginTop: 6, fontSize: "0.8rem" }}>
+          <div className="pv-alert pv-alert-warn" style={{ marginTop: 6, fontSize: "0.8rem" }}>
             Instant signups need a Turnstile secret — save one below, or this behaves as the approval queue.
           </div>
         )}
@@ -565,6 +565,7 @@ function AppSettings() {
             className="pv-input"
             style={{ minWidth: 200, flex: 1 }}
             placeholder={tsSecretConfigured ? "Secret key (saved hidden)" : "Secret key"}
+            aria-label="Turnstile secret key"
             value={tsSecret}
             onChange={(e) => {
               setTsSecret(e.target.value);

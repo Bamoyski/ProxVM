@@ -1,0 +1,174 @@
+/* =====================================================================
+ * Base layer: reset, document, typography, shared utilities.
+ * ===================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--pv-font);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--pv-text);
+  background: var(--pv-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--pv-link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--pv-mono-font);
+}
+
+::placeholder {
+  color: var(--pv-text-3);
+  opacity: 1;
+}
+
+/* Consistent, visible focus for keyboard users everywhere. */
+:focus-visible {
+  outline: 2px solid var(--pv-accent);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: var(--pv-accent-soft-strong);
+}
+
+/* Scrollbars: quiet, theme-aware. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pv-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--pv-border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--pv-text-3);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- shared utilities (the only ones) ---- */
+.pv-mono {
+  font-family: var(--pv-mono-font);
+  font-size: 0.86em;
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-muted {
+  color: var(--pv-text-2);
+}
+
+.pv-faint {
+  color: var(--pv-text-3);
+}
+
+.pv-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.pv-hide {
+  display: none !important;
+}
+
+@media (max-width: 900px) {
+  .pv-hide-md {
+    display: none !important;
+  }
+}
+
+@media (max-width: 680px) {
+  .pv-hide-sm {
+    display: none !important;
+  }
+}

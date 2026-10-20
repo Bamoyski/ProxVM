@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, Section, Empty, Btn, useConfirm } from "../components/ui.js";
+import {
+  PageHeader, Section, EmptyState, Btn, Field, Input, Checkbox, Badge,
+  useConfirm, useToast, errText,
+} from "../ui/index.js";
 
 interface Role {
   id: string;
@@ -30,9 +33,11 @@ function grouped(catalog: CatalogEntry[]): Array<[string, CatalogEntry[]]> {
   return [...map.entries()];
 }
 
+/** Role editor: custom permission bundles on top of the built-in roles. */
 export default function Roles() {
   const qc = useQueryClient();
-  const { confirm, dialog } = useConfirm();
+  const confirm = useConfirm();
+  const toast = useToast();
   const { data: rolesData } = useQuery({
     queryKey: ["roles"],
     queryFn: () => api<{ roles: Role[] }>("/roles"),
@@ -43,7 +48,7 @@ export default function Roles() {
   });
   const [form, setForm] = useState({ name: "", description: "", permissions: [] as string[] });
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const catalog = catalogData?.permissions ?? [];
   const reload = () => {
@@ -59,126 +64,135 @@ export default function Roles() {
   const startEdit = (role: Role) => {
     setEditingId(role.id);
     setForm({ name: role.name, description: role.description, permissions: [...role.permissions] });
-    setError(null);
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setForm({ name: "", description: "", permissions: [] });
-    setError(null);
   };
 
   const save = async () => {
-    setError(null);
+    if (busy) return;
+    setBusy(true);
     try {
       if (editingId) {
         await api(`/roles/${editingId}`, {
           method: "PATCH",
           body: { name: form.name, description: form.description, permissions: form.permissions },
         });
+        toast.ok("Role updated", `${form.name} — ${form.permissions.length} permission(s).`);
       } else {
         await api("/roles", { method: "POST", body: form });
+        toast.ok("Role created", `${form.name} — assign it from Users or Groups.`);
       }
       cancelEdit();
       reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      toast.err("Save failed", errText(err));
+    } finally {
+      setBusy(false);
     }
   };
 
-  const del = (role: Role) => {
-    confirm(`Delete role ${role.name}? Assignments to users and groups are removed.`, `DELETE ${role.name}`, async () => {
-      await api(`/roles/${role.id}`, { method: "DELETE" });
-      reload();
+  const del = async (role: Role) => {
+    const ok = await confirm({
+      title: `Delete role ${role.name}?`,
+      danger: true,
+      requireText: `DELETE ${role.name}`,
+      confirmLabel: "Delete role",
+      body: "Assignments of this role to users and groups are removed. Permissions they hold through other sources are unaffected.",
     });
+    if (!ok) return;
+    try {
+      await api(`/roles/${role.id}`, { method: "DELETE" });
+      toast.ok("Role deleted", role.name);
+      reload();
+    } catch (err) {
+      toast.err("Delete failed", errText(err));
+    }
   };
 
   return (
     <div className="pv-page">
-      <PageTitle title="Roles" description="Named permission sets assigned to users and groups." />
-      {dialog}
-      {error && <ErrorBox error={error} />}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-10">
-        <Section title={editingId ? "Edit role" : "Create custom role"}>
+      <PageHeader title="Roles" description="Named permission sets assigned to users and groups." />
+      <div className="pv-grid-2">
+        <Section title={editingId ? "Edit role" : "Create custom role"} hint="Nothing is granted by default — pick exactly what this role needs.">
+          <Field label="Name" required>
+            {({ id }) => <Input id={id} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />}
+          </Field>
+          <Field label="Description" hint="Shown in the role list.">
+            {({ id }) => <Input id={id} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />}
+          </Field>
           <div className="pv-field">
-            <label className="pv-label">Name</label>
-            <input className="pv-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </div>
-          <div className="pv-field">
-            <label className="pv-label">Description</label>
-            <input className="pv-input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-          </div>
-          <div className="pv-field">
-            <label className="pv-label">Permissions ({form.permissions.length} selected)</label>
-            <div style={{ maxHeight: 256, overflowY: "auto", border: "1px solid var(--pv-border-soft)", borderRadius: 6, padding: 10 }}>
+            <span className="pv-label">Permissions ({form.permissions.length} selected)</span>
+            <div style={{ maxHeight: 256, overflowY: "auto", border: "1px solid var(--pv-border-soft)", borderRadius: 6, padding: 10, background: "var(--pv-inset)" }}>
               {grouped(catalog).map(([category, entries]) => (
                 <div key={category} style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--pv-text-3)", marginBottom: 4 }}>{category}</div>
                   {entries.map((p) => (
-                    <label key={p.code} className="pv-checkrow" style={{ padding: "3px 0", cursor: "pointer" }} title={p.description}>
-                      <input type="checkbox" checked={form.permissions.includes(p.code)} onChange={() => togglePerm(p.code)} />
-                      <span className="pv-mono">{p.code}</span>
-                    </label>
+                    <div key={p.code} title={p.description} style={{ padding: "2px 0" }}>
+                      <Checkbox
+                        label={<span className="pv-mono">{p.code}</span>}
+                        checked={form.permissions.includes(p.code)}
+                        onChange={() => togglePerm(p.code)}
+                      />
+                    </div>
                   ))}
                 </div>
               ))}
+              {!catalog.length && <div className="pv-faint" style={{ fontSize: "0.8rem" }}>Permission catalog loading…</div>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Btn kind="primary" onClick={save} disabled={!form.name.trim()}>
+            <Btn kind="primary" loading={busy} onClick={() => void save()} disabled={!form.name.trim()}>
               {editingId ? "Save changes" : "Create role"}
             </Btn>
-            {editingId && (
-              <Btn onClick={cancelEdit}>Cancel</Btn>
-            )}
+            {editingId && <Btn onClick={cancelEdit}>Cancel</Btn>}
           </div>
         </Section>
-        <div className="lg:col-span-2">
-          <Section title="All roles" hint={`${(rolesData?.roles ?? []).length} total`}>
-            <div className="pv-table-wrap">
-              <table className="pv-table">
-                <thead>
-                  <tr>
-                    <th>Role</th>
-                    <th>Permissions</th>
-                    <th className="num">Users</th>
-                    <th className="num">Groups</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(rolesData?.roles ?? []).map((r) => (
-                    <tr key={r.id}>
-                      <td>
+
+        <Section title="All roles" hint={`${(rolesData?.roles ?? []).length} total`}>
+          <div className="pv-table-wrap">
+            <table className="pv-table">
+              <thead>
+                <tr>
+                  <th>Role</th>
+                  <th>Permissions</th>
+                  <th className="num pv-hide-sm">Users</th>
+                  <th className="num pv-hide-sm">Groups</th>
+                  <th style={{ width: 110 }}><span className="pv-sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(rolesData?.roles ?? []).map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <span style={{ display: "inline-flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
                         {r.name}
-                        {r.is_system && (
-                          <span className="pv-mono" style={{ marginLeft: 6, color: "var(--pv-text-3)" }} title="Built-in roles cannot be modified or deleted">
-                            built-in
-                          </span>
-                        )}
-                        {r.description && <div style={{ fontSize: "0.76rem", color: "var(--pv-text-3)" }}>{r.description}</div>}
-                      </td>
-                      <td style={{ color: "var(--pv-text-2)" }}>
-                        <span title={r.permissions.join(", ")}>{r.permissions.length} permissions</span>
-                      </td>
-                      <td className="num pv-mono">{r.userCount}</td>
-                      <td className="num pv-mono">{r.groupCount}</td>
-                      <td>
-                        {!r.is_system && (
-                          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                            <Btn size="sm" kind="link" onClick={() => startEdit(r)}>Edit</Btn>
-                            <Btn size="sm" kind="link" onClick={() => del(r)}>Delete</Btn>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {!rolesData?.roles.length && <Empty title="No roles" />}
-          </Section>
-        </div>
+                        {r.is_system && <Badge tone="plain">built-in</Badge>}
+                      </span>
+                      {r.description && <div className="pv-faint" style={{ fontSize: "0.76rem" }}>{r.description}</div>}
+                    </td>
+                    <td style={{ color: "var(--pv-text-2)" }}>
+                      <span title={r.permissions.join(", ")}>{r.permissions.length} permissions</span>
+                    </td>
+                    <td className="num pv-mono pv-hide-sm">{r.userCount}</td>
+                    <td className="num pv-mono pv-hide-sm">{r.groupCount}</td>
+                    <td>
+                      {!r.is_system && (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          <Btn size="sm" kind="link" onClick={() => startEdit(r)}>Edit</Btn>
+                          <Btn size="sm" kind="link" onClick={() => void del(r)}>Delete</Btn>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!rolesData?.roles.length && <EmptyState title="No roles" />}
+        </Section>
       </div>
     </div>
   );

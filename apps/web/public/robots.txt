@@ -1,0 +1,3 @@
+# ProxVM is a private management console — never index it.
+User-agent: *
+Disallow: /

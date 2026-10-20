@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api.js";
+import { Field } from "../ui/index.js";
 
 const STEPS = [
   "Create administrator",
@@ -194,7 +195,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
         <div className="pv-panel">
           {step === 1 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 1 — Create administrator</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 1 — Create administrator</h1>
               <Field label="Username">
                 <input className={input} value={admin.username} onChange={(e) => setAdmin({ ...admin, username: e.target.value })} />
               </Field>
@@ -210,7 +211,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 2 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 2 — Configure Proxmox</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 2 — Configure Proxmox</h1>
               <Field label="Proxmox URL">
                 <input className={input} value={proxmox.url} onChange={(e) => setProxmox({ ...proxmox, url: e.target.value })} />
               </Field>
@@ -224,7 +225,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
                 <input type="checkbox" checked={proxmox.verifySsl} onChange={(e) => setProxmox({ ...proxmox, verifySsl: e.target.checked })} />
                 Verify SSL certificate (disable for self-signed certificates)
               </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="pv-grid-3">
                 <Field label="Default node"><input className={input} value={proxmox.defaultNode} onChange={(e) => setProxmox({ ...proxmox, defaultNode: e.target.value })} /></Field>
                 <Field label="Default storage"><input className={input} value={proxmox.defaultStorage} onChange={(e) => setProxmox({ ...proxmox, defaultStorage: e.target.value })} /></Field>
                 <Field label="Default bridge"><input className={input} value={proxmox.defaultNetwork} onChange={(e) => setProxmox({ ...proxmox, defaultNetwork: e.target.value })} /></Field>
@@ -235,19 +236,19 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 3 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 3 — Test Proxmox connection</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 3 — Test Proxmox connection</h1>
               <p className="pv-sub">Performs a real API call to your Proxmox server.</p>
               <button onClick={testProxmox} disabled={busy} className="pv-btn pv-btn-primary">
                 {busy ? "Testing…" : "Test connection"}
               </button>
-              {testResult && <div className="pv-notice pv-notice-ok" style={{ marginTop: 12 }}>{testResult}</div>}
+              {testResult && <div className="pv-alert pv-alert-ok" style={{ marginTop: 12 }}>{testResult}</div>}
               <Nav onNext={() => setStep(4)} nextLabel="Next: Guacamole" />
             </>
           )}
 
           {step === 4 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 4 — Configure Guacamole</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 4 — Configure Guacamole</h1>
               <Field label="Database engine">
                 <select
                   className="pv-select"
@@ -268,7 +269,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
               <Field label="Public URL (for browser access, e.g. https://guacamole.example.com/)">
                 <input className={input} value={guacamole.publicUrl} onChange={(e) => setGuacamole({ ...guacamole, publicUrl: e.target.value })} placeholder="Leave empty to use the URL above" />
               </Field>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="pv-grid-2">
                 <Field label="Database host"><input className={input} value={guacamole.dbHost} onChange={(e) => setGuacamole({ ...guacamole, dbHost: e.target.value })} /></Field>
                 <Field label="Database port"><input type="number" className={input} value={guacamole.dbPort} onChange={(e) => setGuacamole({ ...guacamole, dbPort: Number(e.target.value) })} /></Field>
               </div>
@@ -281,20 +282,20 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 5 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 5 — Test Guacamole connection</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 5 — Test Guacamole connection</h1>
               <p className="pv-sub">Real database connection + schema check, plus Guacamole web app reachability.</p>
               <button onClick={testGuacamole} disabled={busy} className="pv-btn pv-btn-primary">
                 {busy ? "Testing…" : "Test connection"}
               </button>
-              {testResult && <div className="pv-notice" style={{ marginTop: 12 }}>{testResult}</div>}
+              {testResult && <div className="pv-alert" style={{ marginTop: 12 }}>{testResult}</div>}
               <Nav onNext={() => setStep(6)} nextLabel="Next: Database" />
             </>
           )}
 
           {step === 6 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 6 — Application database & Redis</h2>
-              <div className="grid grid-cols-2 gap-3">
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 6 — Application database & Redis</h1>
+              <div className="pv-grid-2">
                 <Field label="PostgreSQL host"><input className={input} value={database.host} onChange={(e) => setDatabase({ ...database, host: e.target.value })} /></Field>
                 <Field label="Port"><input type="number" className={input} value={database.port} onChange={(e) => setDatabase({ ...database, port: Number(e.target.value) })} /></Field>
               </div>
@@ -302,7 +303,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
               <Field label="Database user"><input className={input} value={database.user} onChange={(e) => setDatabase({ ...database, user: e.target.value })} /></Field>
               <Field label="Database password"><input type="password" className={input} value={database.password} onChange={(e) => setDatabase({ ...database, password: e.target.value })} /></Field>
               <hr style={{ border: "none", borderTop: "1px solid var(--pv-border-soft)", margin: "16px 0" }} />
-              <div className="grid grid-cols-2 gap-3">
+              <div className="pv-grid-2">
                 <Field label="Redis host"><input className={input} value={redis.host} onChange={(e) => setRedis({ ...redis, host: e.target.value })} /></Field>
                 <Field label="Redis port"><input type="number" className={input} value={redis.port} onChange={(e) => setRedis({ ...redis, port: Number(e.target.value) })} /></Field>
               </div>
@@ -318,13 +319,13 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
                   <button onClick={() => setStep(7)} className="pv-btn">Next: Encryption</button>
                 </div>
               </div>
-              {testResult && <div className="pv-notice" style={{ marginTop: 12 }}>{testResult}</div>}
+              {testResult && <div className="pv-alert" style={{ marginTop: 12 }}>{testResult}</div>}
             </>
           )}
 
           {step === 7 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 7 — Initialize encryption & finalize</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 8 }}>Step 7 — Initialize encryption & finalize</h1>
               <p className="pv-sub">
                 A master encryption key (AES-256-GCM) and session signing key are generated securely and stored server-side in{" "}
                 <span className="pv-mono">.proxvm/config.json</span>. VM passwords and infrastructure secrets are encrypted with the master key.
@@ -344,7 +345,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
           {step === 8 && (
             <>
-              <h2 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 8 — Integration checks</h2>
+              <h1 className="pv-title" style={{ fontSize: "1.05rem", marginBottom: 16 }}>Step 8 — Integration checks</h1>
               <pre className="pv-mono" style={{ background: "var(--pv-inset)", border: "1px solid var(--pv-border-soft)", borderRadius: 6, padding: 12, fontSize: "0.76rem", overflow: "auto", marginBottom: 16 }}>{JSON.stringify(checks, null, 2)}</pre>
               <button
                 onClick={() => {
@@ -365,11 +366,5 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="pv-field">
-      <label className="pv-label">{label}</label>
-      {children}
-    </div>
-  );
-}
+/* Field is the shared primitive (ui/index.js) — it wires the label to the
+   control, so every setup input is announced correctly. */

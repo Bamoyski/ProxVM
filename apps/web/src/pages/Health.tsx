@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, explainDenial } from "../api.js";
-import { PageTitle, StatusBadge, Empty, Section } from "../components/ui.js";
+import { fmtClock } from "../lib/format.js";
+import { PageHeader, StatusBadge, EmptyState, Section, Meter, utilTone, Badge } from "../ui/index.js";
 
 interface Check {
   name: string;
@@ -63,7 +64,14 @@ function Tile({ check }: { check: Check }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span
           aria-hidden
-          style={{ width: 10, height: 10, borderRadius: "50%", flex: "none", background: color, boxShadow: failure ? `0 0 0 3px color-mix(in srgb, ${color} 25%, transparent)` : "none" }}
+          style={{
+            width: 10,
+            height: 10,
+            borderRadius: "50%",
+            flex: "none",
+            background: color,
+            boxShadow: failure ? `0 0 0 3px color-mix(in srgb, ${color} 25%, transparent)` : "none",
+          }}
         />
         <span style={{ fontWeight: 600 }}>{label}</span>
         <span style={{ marginLeft: "auto", fontSize: "0.78rem", color: failure ? "var(--pv-err)" : "var(--pv-text-3)" }}>
@@ -72,7 +80,7 @@ function Tile({ check }: { check: Check }) {
       </div>
       <div style={{ display: "flex", gap: 10, fontSize: "0.74rem", color: "var(--pv-text-3)", fontVariantNumeric: "tabular-nums" }}>
         <span>{check.latencyMs !== null ? `${check.latencyMs} ms` : "—"}</span>
-        <span>checked {new Date(check.lastChecked).toLocaleTimeString()}</span>
+        <span>checked {fmtClock(check.lastChecked)}</span>
       </div>
       {(check.detail || meta?.link) && (
         <div style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: "0.78rem" }}>
@@ -100,15 +108,18 @@ function ClusterBlock({ privileged }: { privileged: boolean }) {
         const cpu = n.maxcpu ? Math.min(100, (n.cpu / n.maxcpu) * 100) : 0;
         const mem = n.maxmem ? Math.min(100, (n.mem / n.maxmem) * 100) : 0;
         return (
-          <div key={n.node} style={{ padding: "10px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-              <span style={{ fontWeight: 600 }}>{n.node} <StatusBadge status={n.status === "online" ? "running" : "stopped"} /></span>
-              <span style={{ color: "var(--pv-text-2)", fontSize: "0.8rem", fontVariantNumeric: "tabular-nums" }}>
-                {cpu.toFixed(0)}% CPU · {(mem).toFixed(0)}% RAM
+          <div key={n.node} style={{ padding: "11px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, marginBottom: 7 }}>
+              <span style={{ fontWeight: 600, display: "inline-flex", gap: 8, alignItems: "center" }}>
+                {n.node} <StatusBadge status={n.status === "online" ? "running" : "stopped"} />
+              </span>
+              <span className="pv-faint pv-mono" style={{ fontSize: "0.78rem" }}>
+                {cpu.toFixed(0)}% CPU · {mem.toFixed(0)}% RAM
               </span>
             </div>
-            <div className={`pv-meter${mem >= 80 ? " pv-meter-hot" : ""}`} title={`${mem.toFixed(0)}% RAM used`}>
-              <i style={{ width: `${cpu}%` }} />
+            <div style={{ display: "grid", gap: 5 }}>
+              <Meter value={cpu} max={100} tone={utilTone(cpu)} title={`${n.node} CPU ${cpu.toFixed(0)}%`} />
+              <Meter value={mem} max={100} tone={utilTone(mem)} title={`${n.node} RAM ${mem.toFixed(0)}%`} />
             </div>
           </div>
         );
@@ -136,8 +147,13 @@ function ReachabilityChips() {
     <Section title="Guest sessions" hint="Per-protocol reachability of VMs you can access (latest background snapshot).">
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
         {[...byProto.entries()].map(([proto, agg]) => (
-          <span key={proto} className="pv-mono" style={{ fontSize: "0.82rem", color: agg.up === agg.total ? "var(--pv-ok)" : agg.up === 0 ? "var(--pv-err)" : "var(--pv-text-2)" }}>
-            {proto.toUpperCase()} {agg.up}/{agg.total} reachable
+          <span key={proto} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+            <Badge tone={agg.up === agg.total ? "ok" : agg.up === 0 ? "err" : "warn"}>
+              {proto.toUpperCase()}
+            </Badge>
+            <span className="pv-mono" style={{ fontSize: "0.78rem", color: "var(--pv-text-2)" }}>
+              {agg.up}/{agg.total} reachable
+            </span>
           </span>
         ))}
       </div>
@@ -161,7 +177,7 @@ export default function Health({ can }: { can?: (perm: string) => boolean }) {
 
   return (
     <div className="pv-page">
-      <PageTitle
+      <PageHeader
         title="System status"
         description={
           error
@@ -196,14 +212,14 @@ export default function Health({ can }: { can?: (perm: string) => boolean }) {
             {allOperational ? "All systems operational" : `${broken.length} service${broken.length === 1 ? "" : "s"} down`}
           </span>
           {degraded.length > 0 && (
-            <span style={{ marginLeft: "auto", fontSize: "0.78rem", color: "var(--pv-text-3)" }}>
+            <span className="pv-faint" style={{ marginLeft: "auto", fontSize: "0.78rem" }}>
               {degraded.length} not configured ({degraded.map((c) => SERVICES[c.name]?.label ?? c.name).join(", ")})
             </span>
           )}
         </div>
       )}
-      {!data && !error && <Empty title="Running checks…" />}
-      {error && <Empty title="Health endpoint unreachable" body={explainDenial(error) ?? undefined} />}
+      {!data && !error && <EmptyState title="Running checks…" />}
+      {error && <EmptyState title="Health endpoint unreachable" body={explainDenial(error) ?? undefined} />}
       {data && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12, marginBottom: 8 }}>
           {sorted.map((c) => (

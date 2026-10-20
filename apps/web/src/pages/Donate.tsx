@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { PageTitle, Section } from "../components/ui.js";
+import { PageHeader, Section } from "../ui/index.js";
 import { useSiteContent } from "../content.js";
 
 export const DONATE_URL = "https://ko-fi.com/bamoyskistudios";
@@ -40,7 +40,7 @@ export default function Donate() {
   const tiers = parseTiers(get("donate.tiers"));
   return (
     <div className="pv-page pv-page-narrow">
-      <PageTitle title="Donate" />
+      <PageHeader title="Donate" />
       <Section title="Support ProxVM">
         <p style={{ fontSize: "0.88rem", color: "var(--pv-text-2)", margin: "0 0 12px" }}>
           {intro ?? (

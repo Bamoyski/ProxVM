@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, Section, Empty, Btn, useConfirm } from "../components/ui.js";
+import {
+  PageHeader, Section, EmptyState, Btn, Alert, Field, Input, Checkbox,
+  useConfirm, useToast, errText,
+} from "../ui/index.js";
 
 interface Group {
   id: string;
@@ -32,17 +35,16 @@ interface Role {
   name: string;
 }
 
-const input = "pv-input";
-const label = "pv-label";
-
 function fmtExpiry(v: string | null): string {
   if (!v) return "never";
   return new Date(v).toLocaleString();
 }
 
+/** Group administration: bundle users, roles, and VM access in one place. */
 export default function Groups() {
   const qc = useQueryClient();
-  const { confirm, dialog } = useConfirm();
+  const confirm = useConfirm();
+  const toast = useToast();
   const { data: groupsData } = useQuery({
     queryKey: ["groups"],
     queryFn: () => api<{ groups: Group[] }>("/groups"),
@@ -55,6 +57,7 @@ export default function Groups() {
   const [form, setForm] = useState({ name: "", description: "" });
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const [memberInput, setMemberInput] = useState("");
   const [memberExpiry, setMemberExpiry] = useState("");
@@ -72,10 +75,12 @@ export default function Groups() {
     void qc.invalidateQueries({ queryKey: ["group", selectedId] });
   };
 
-  const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
+  const fail = (err: unknown) => setError(errText(err));
 
   const create = async () => {
+    if (creating) return;
     setError(null);
+    setCreating(true);
     try {
       const res = await api<{ group: Group }>("/groups", { method: "POST", body: form });
       setForm({ name: "", description: "" });
@@ -83,15 +88,28 @@ export default function Groups() {
       reload();
     } catch (err) {
       fail(err);
+    } finally {
+      setCreating(false);
     }
   };
 
-  const del = (group: Group) => {
-    confirm(`Delete group ${group.name}? Memberships, role links and VM access are removed.`, `DELETE ${group.name}`, async () => {
+  const del = async (group: Group) => {
+    const ok = await confirm({
+      title: `Delete group ${group.name}?`,
+      danger: true,
+      requireText: `DELETE ${group.name}`,
+      confirmLabel: "Delete group",
+      body: "Memberships, role links, and VM access granted through this group are removed.",
+    });
+    if (!ok) return;
+    try {
       await api(`/groups/${group.id}`, { method: "DELETE" });
       if (selectedId === group.id) setSelectedId(null);
+      toast.ok("Group deleted", group.name);
       reload();
-    });
+    } catch (err) {
+      toast.err("Delete failed", errText(err));
+    }
   };
 
   const expiryBody = (expiry: string): Record<string, unknown> => {
@@ -116,22 +134,19 @@ export default function Groups() {
 
   return (
     <div className="pv-page">
-      <PageTitle title="Groups" description="Bundle users, roles, and VM access. Group-derived access is managed here, not per VM." />
-      {dialog}
-      {error && <ErrorBox error={error} />}
-      {status && <div className="pv-notice pv-notice-ok">{status}</div>}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-10">
+      <PageHeader title="Groups" description="Bundle users, roles, and VM access. Group-derived access is managed here, not per VM." />
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
+      {status && <Alert kind="ok" title="Done">{status}</Alert>}
+      <div className="pv-grid-side">
         <div>
           <Section title="Create group">
-            <div className="pv-field">
-              <label className={label}>Name</label>
-              <input className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            </div>
-            <div className="pv-field">
-              <label className={label}>Description</label>
-              <input className={input} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-            </div>
-            <Btn kind="primary" onClick={create} disabled={!form.name.trim()}>
+            <Field label="Name" required>
+              {({ id }) => <Input id={id} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />}
+            </Field>
+            <Field label="Description" hint="Shown in the group list.">
+              {({ id }) => <Input id={id} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />}
+            </Field>
+            <Btn kind="primary" loading={creating} onClick={() => void create()} disabled={!form.name.trim()}>
               Create group
             </Btn>
           </Section>
@@ -146,15 +161,15 @@ export default function Groups() {
                   {g.name}
                   <span style={{ fontSize: "0.76rem", color: "var(--pv-text-3)", marginLeft: 8 }}>{g.memberCount} members · {g.vmCount} VMs</span>
                 </button>
-                <Btn size="sm" kind="link" onClick={() => del(g)}>Delete</Btn>
+                <Btn size="sm" kind="link" onClick={() => void del(g)}>Delete</Btn>
               </div>
             ))}
-            {!groupsData?.groups.length && <Empty title="No groups yet" />}
+            {!groupsData?.groups.length && <EmptyState title="No groups yet" />}
           </Section>
         </div>
-        <div className="lg:col-span-2">
+        <div>
           {!detail ? (
-            <Empty title="No group selected" body="Select a group to manage members, roles and VM access." />
+            <EmptyState title="No group selected" body="Select a group to manage members, roles and VM access." />
           ) : (
             <div>
               <Section title={detail.group.name} hint={detail.group.description || undefined}>
@@ -175,17 +190,17 @@ export default function Groups() {
                       </Btn>
                     </div>
                   ))}
-                  {!detail.members.length && <Empty title="No members" />}
+                  {!detail.members.length && <EmptyState title="No members" />}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                  <input
-                    className="pv-input"
+                  <Input
                     style={{ width: 192 }}
                     placeholder="Username to add…"
+                    aria-label="Username to add"
                     value={memberInput}
                     onChange={(e) => setMemberInput(e.target.value)}
                   />
-                  <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} value={memberExpiry} onChange={(e) => setMemberExpiry(e.target.value)}>
+                  <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} value={memberExpiry} onChange={(e) => setMemberExpiry(e.target.value)} aria-label="Membership expiry">
                     <option value="">Never expires</option>
                     <option value="1h">1 hour</option>
                     <option value="1d">1 day</option>
@@ -223,10 +238,10 @@ export default function Groups() {
                       </Btn>
                     </div>
                   ))}
-                  {!detail.roles.length && <Empty title="No roles" />}
+                  {!detail.roles.length && <EmptyState title="No roles" />}
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <select className="pv-select pv-input-auto" style={{ height: 32 }} value={rolePick} onChange={(e) => setRolePick(e.target.value)}>
+                  <select className="pv-select pv-input-auto" style={{ height: 32 }} value={rolePick} onChange={(e) => setRolePick(e.target.value)} aria-label="Role to assign">
                     <option value="">Select role…</option>
                     {(rolesData?.roles ?? []).map((r) => (
                       <option key={r.id} value={r.id}>{r.name}</option>
@@ -266,7 +281,7 @@ export default function Groups() {
                       </Btn>
                     </div>
                   ))}
-                  {!detail.vms.length && <Empty title="No VMs" />}
+                  {!detail.vms.length && <EmptyState title="No VMs" />}
                 </div>
                 <GroupVmGrant
                   groupId={detail.group.id}
@@ -286,7 +301,7 @@ export default function Groups() {
 }
 
 function GroupPermissions({ permissions }: { permissions: GroupPermission[] }) {
-  if (!permissions.length) return <Empty title="No permissions via roles" />;
+  if (!permissions.length) return <EmptyState title="No permissions via roles" />;
   const byCategory = new Map<string, GroupPermission[]>();
   for (const p of permissions) {
     const list = byCategory.get(p.category) ?? [];
@@ -321,44 +336,41 @@ function GroupVmGrant({ groupId, vmForm, setVmForm, onGrant, onError, reload }: 
 }) {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-      <input
-        className="pv-input pv-mono"
+      <Input
+        className="pv-mono"
         style={{ width: 256 }}
         placeholder="VM id (see URL on VM page)…"
+        aria-label="VM id"
         value={vmForm.vmId}
         onChange={(e) => setVmForm({ ...vmForm, vmId: e.target.value })}
       />
-      <label className="pv-checkrow">
-        <input
-          type="checkbox"
-          checked={vmForm.protocols === null}
-          onChange={(e) => setVmForm({ ...vmForm, protocols: e.target.checked ? null : ["ssh", "rdp", "vnc"] })}
-        />
-        All protocols
-      </label>
+      <Checkbox
+        label="All protocols"
+        checked={vmForm.protocols === null}
+        onChange={(e) => setVmForm({ ...vmForm, protocols: e.target.checked ? null : ["ssh", "rdp", "vnc"] })}
+      />
       {["ssh", "rdp", "vnc"].map((p) => (
-        <label key={p} className="pv-checkrow" style={{ textTransform: "uppercase" }}>
-          <input
-            type="checkbox"
-            checked={vmForm.protocols === null || vmForm.protocols.includes(p)}
-            disabled={vmForm.protocols === null}
-            onChange={(e) =>
-              setVmForm({
-                ...vmForm,
-                protocols: e.target.checked
-                  ? [...new Set([...(vmForm.protocols ?? ["ssh", "rdp", "vnc"]), p])]
-                  : (vmForm.protocols ?? ["ssh", "rdp", "vnc"]).filter((x) => x !== p),
-              })
-            }
-          />
-          {p}
-        </label>
+        <Checkbox
+          key={p}
+          label={p.toUpperCase()}
+          checked={vmForm.protocols === null || vmForm.protocols.includes(p)}
+          disabled={vmForm.protocols === null}
+          onChange={(e) =>
+            setVmForm({
+              ...vmForm,
+              protocols: e.target.checked
+                ? [...new Set([...(vmForm.protocols ?? ["ssh", "rdp", "vnc"]), p])]
+                : (vmForm.protocols ?? ["ssh", "rdp", "vnc"]).filter((x) => x !== p),
+            })
+          }
+        />
       ))}
       <select
         className="pv-select pv-input-auto"
         style={{ height: 32, fontSize: "0.8rem" }}
         value={vmForm.expiry}
         onChange={(e) => setVmForm({ ...vmForm, expiry: e.target.value })}
+        aria-label="Access expiry"
       >
         <option value="">Never expires</option>
         <option value="1h">1 hour</option>

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageTitle, ErrorBox, Section, Btn } from "../components/ui.js";
+import {
+  PageHeader, Section, Btn, Field, Input, Textarea, Alert, useToast, errText,
+} from "../ui/index.js";
 
 const FIELDS = [
   { key: "contact.email", label: "Contact email", kind: "text" as const, hint: "Shown on the Contact page with a mailto link." },
@@ -17,10 +19,12 @@ const FIELDS = [
   },
 ];
 
+/** Admin editor for the site's static text (contact + donate pages). */
 export default function Content() {
   const qc = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
   const [status, setStatus] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const { data } = useQuery({
@@ -31,8 +35,9 @@ export default function Content() {
   const shown = (key: string): string => (touched[key] ? (values[key] ?? "") : (server[key] ?? ""));
 
   const save = async () => {
-    setError(null);
+    if (saving) return;
     setStatus(null);
+    setSaving(true);
     try {
       const entries: Record<string, string> = {};
       for (const f of FIELDS) {
@@ -48,52 +53,68 @@ export default function Content() {
       void qc.invalidateQueries({ queryKey: ["site-content-admin"] });
       void qc.invalidateQueries({ queryKey: ["site-content"] });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      toast.err("Save failed", errText(err));
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
     <div className="pv-page pv-page-narrow">
-      <PageTitle
+      <PageHeader
         title="Site content"
         description="Edit the site's text without deploying. Clearing a field restores its built-in default."
+        actions={
+          <Btn kind="primary" loading={saving} onClick={() => void save()}>
+            Save content
+          </Btn>
+        }
       />
-      {error && <ErrorBox error={error} />}
-      {status && <div className="pv-notice pv-notice-ok">{status}</div>}
-      <Section
-        title="Fields"
-        hint="A dot marks fields you have customized."
-        actions={<Btn kind="primary" size="sm" onClick={() => void save()}>Save content</Btn>}
-      >
+      {status && status !== "Nothing changed." && <Alert kind="ok" title="Saved">{status}</Alert>}
+      {status === "Nothing changed." && <Alert kind="info" title="Nothing changed" />}
+
+      <Section title="Fields" hint="A dot marks fields you have customized.">
         {FIELDS.map((f) => (
-          <div key={f.key} className="pv-field">
-            <label className="pv-label">
-              {f.label} {server[f.key] !== undefined && <span style={{ color: "var(--pv-accent)" }}>●</span>}
-            </label>
-            {f.kind === "text" ? (
-              <input
-                className="pv-input"
-                value={shown(f.key)}
-                placeholder="(built-in default)"
-                onChange={(e) => {
-                  setValues({ ...values, [f.key]: e.target.value });
-                  setTouched({ ...touched, [f.key]: true });
-                }}
-              />
-            ) : (
-              <textarea
-                className="pv-textarea pv-mono"
-                rows={f.key === "donate.tiers" ? 6 : 3}
-                value={shown(f.key)}
-                placeholder="(built-in default)"
-                onChange={(e) => {
-                  setValues({ ...values, [f.key]: e.target.value });
-                  setTouched({ ...touched, [f.key]: true });
-                }}
-              />
-            )}
-            <div className="pv-hint pv-mono">{f.key} · {f.hint}</div>
-          </div>
+          <Field
+            key={f.key}
+            label={
+              <span>
+                {f.label}{" "}
+                {server[f.key] !== undefined && (
+                  <span style={{ color: "var(--pv-accent)" }} title="Customized — clearing the field resets it">
+                    ●
+                  </span>
+                )}
+              </span>
+            }
+            hint={`${f.key} · ${f.hint}`}
+          >
+            {({ id }) =>
+              f.kind === "text" ? (
+                <Input
+                  id={id}
+                  value={shown(f.key)}
+                  placeholder="(built-in default)"
+                  onChange={(e) => {
+                    setValues({ ...values, [f.key]: e.target.value });
+                    setTouched({ ...touched, [f.key]: true });
+                  }}
+                />
+              ) : (
+                <Textarea
+                  id={id}
+                  className="pv-mono"
+                  rows={f.key === "donate.tiers" ? 6 : 3}
+                  value={shown(f.key)}
+                  placeholder="(built-in default)"
+                  onChange={(e) => {
+                    setValues({ ...values, [f.key]: e.target.value });
+                    setTouched({ ...touched, [f.key]: true });
+                  }}
+                />
+              )
+            }
+          </Field>
         ))}
       </Section>
     </div>

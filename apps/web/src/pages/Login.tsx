@@ -117,7 +117,7 @@ export default function Login() {
   return (
     <div className="pv-shell" style={{ alignItems: "center", justifyContent: "center" }}>
       <form onSubmit={mode === "login" ? submit : submitRegister} className="pv-panel" style={{ width: 380, maxWidth: "calc(100vw - 32px)" }}>
-        <div className="pv-brand" style={{ padding: "0 0 2px" }}>Prox<b>VM</b></div>
+        <h1 className="pv-brand" style={{ padding: "0 0 2px" }}>Prox<b>VM</b></h1>
         <p className="pv-sub" style={{ marginBottom: 18 }}>
           {mode === "login"
             ? "Sign in to manage virtual machines."
@@ -193,7 +193,7 @@ export default function Login() {
         )}
         {error && <div className="pv-error">{error}</div>}
         {registered && (
-          <div className="pv-notice pv-notice-ok">
+          <div className="pv-alert pv-alert-ok">
             {autoApprove
               ? "Account created! Sign in to get started — VM access is granted by an administrator."
               : "Request sent. An administrator must approve it before you can sign in."}
