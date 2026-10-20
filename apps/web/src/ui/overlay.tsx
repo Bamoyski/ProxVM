@@ -16,6 +16,10 @@ import { Btn, IconButton } from "./Button.js";
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/* Dialog stack depth: only the topmost dialog reacts to Escape, so a confirm
+ * opened over an edit dialog closes just the confirm (both listen on document). */
+let dialogDepth = 0;
+
 /**
  * Modal dialog with focus trap: focus moves in on open, Escape and scrim
  * close it, focus returns to the opener. Content is children — the caller
@@ -39,6 +43,7 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const prevFocus = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
 
   useEffect(() => {
     prevFocus.current = document.activeElement as HTMLElement | null;
@@ -47,11 +52,20 @@ export function Dialog({
     return () => prevFocus.current?.focus?.();
   }, []);
 
+  // Keep the latest onClose without re-registering the key listener: the
+  // listener must run exactly once per dialog so stack depths stay stable.
   useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  useEffect(() => {
+    dialogDepth += 1;
+    const myDepth = dialogDepth;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (myDepth !== dialogDepth) return; // a dialog above me owns Escape
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -71,8 +85,11 @@ export function Dialog({
       }
     };
     document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      dialogDepth -= 1;
+    };
+  }, []);
 
   return (
     <div className="pv-dialog-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -117,20 +134,26 @@ const ConfirmCtx = createContext<ConfirmFn | null>(null);
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<{ opts: ConfirmOptions; resolve: (v: boolean) => void } | null>(null);
+  const pendingRef = useRef<{ opts: ConfirmOptions; resolve: (v: boolean) => void } | null>(null);
   const [typed, setTyped] = useState("");
 
   const confirm = useCallback<ConfirmFn>((opts) => {
     return new Promise<boolean>((resolve) => {
+      // A second request while one is open: settle the first as cancelled so
+      // its caller's await never hangs (the dialog can only show one at a time).
+      pendingRef.current?.resolve(false);
+      pendingRef.current = { opts, resolve };
       setTyped("");
-      setPending({ opts, resolve });
+      setPending(pendingRef.current);
     });
   }, []);
 
-  const settle = (v: boolean) => {
-    pending?.resolve(v);
+  const settle = useCallback((v: boolean) => {
+    pendingRef.current?.resolve(v);
+    pendingRef.current = null;
     setPending(null);
     setTyped("");
-  };
+  }, []);
 
   return (
     <ConfirmCtx.Provider value={confirm}>

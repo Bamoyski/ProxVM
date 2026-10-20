@@ -32,7 +32,7 @@ export default function Jobs({ me, bare }: { me: Me; bare?: boolean }) {
   const confirm = useConfirm();
   const { data: jobs } = useQuery({
     queryKey: ["jobs", jobId],
-    queryFn: () => api<{ jobs: Job[] }>(`/jobs?limit=100${jobId ? "" : ""}`),
+    queryFn: () => api<{ jobs: Job[] }>(`/jobs?limit=100`),
     refetchInterval: 10000,
   });
   const [progress, setProgress] = useState<string | null>(null);

@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import Jobs from "./Jobs.js";
 import { isPrivileged, type Me } from "../lib/permissions.js";
-import { fmtBytes, fmtDateTime } from "../lib/format.js";
+import { fmtBytes, fmtDateTime, pct } from "../lib/format.js";
 import {
   PageHeader, StatusBadge, EmptyState, Section, Btn, Alert, Stat, Meter, utilTone, useToast, errText,
 } from "../ui/index.js";
@@ -26,11 +26,6 @@ interface VmRow {
   node: string;
   status: string;
   ip: string | null;
-}
-
-function pct(used: unknown, max: unknown): number | null {
-  if (used === null || used === undefined || !max) return null;
-  return Math.min(100, (Number(used) / Number(max)) * 100);
 }
 
 type WidgetId = "stats" | "proxmox" | "discovery" | "events" | "jobs" | "mine";

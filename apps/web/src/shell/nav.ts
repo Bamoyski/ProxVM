@@ -26,7 +26,6 @@ export interface NavItem {
   icon: LucideIcon;
   /** Permission required to see the link (null = always visible). */
   perm: string | null;
-  legacy: (roles: string[]) => boolean;
   end?: boolean;
 }
 
@@ -35,42 +34,39 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-const all = (): boolean => true;
-const isAdmin = (roles: string[]): boolean => roles.includes("ADMIN");
-
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: null,
-    items: [{ to: "/", label: "Overview", icon: Gauge, perm: null, legacy: all, end: true }],
+    items: [{ to: "/", label: "Overview", icon: Gauge, perm: null, end: true }],
   },
   {
     label: "Virtualization",
     items: [
-      { to: "/vms", label: "Virtual machines", icon: Server, perm: null, legacy: all },
-      { to: "/guacamole", label: "Consoles", icon: Monitor, perm: null, legacy: all },
-      { to: "/automations", label: "Automations", icon: CalendarClock, perm: "vm.manage", legacy: (r) => r.includes("ADMIN") || r.includes("OPERATOR") },
+      { to: "/vms", label: "Virtual machines", icon: Server, perm: null },
+      { to: "/guacamole", label: "Consoles", icon: Monitor, perm: null },
+      { to: "/automations", label: "Automations", icon: CalendarClock, perm: "vm.manage" },
     ],
   },
   {
     label: "Access & security",
     items: [
-      { to: "/users", label: "Users", icon: UsersIcon, perm: "users.manage", legacy: isAdmin },
-      { to: "/access", label: "Access control", icon: ShieldCheck, perm: null, legacy: (r) => r.includes("ADMIN") },
-      { to: "/credentials", label: "Credentials", icon: KeyRound, perm: "cred.reveal", legacy: isAdmin },
-      { to: "/tickets", label: "Support", icon: LifeBuoy, perm: null, legacy: all },
+      { to: "/users", label: "Users", icon: UsersIcon, perm: "users.manage" },
+      { to: "/access", label: "Access control", icon: ShieldCheck, perm: null },
+      { to: "/credentials", label: "Credentials", icon: KeyRound, perm: "cred.reveal" },
+      { to: "/tickets", label: "Support", icon: LifeBuoy, perm: null },
     ],
   },
   {
     label: "System",
     items: [
-      { to: "/system", label: "System & security", icon: Activity, perm: null, legacy: all },
-      { to: "/configuration", label: "Configuration", icon: Settings, perm: "settings.manage", legacy: isAdmin },
-      { to: "/usage", label: "Usage", icon: BarChart3, perm: "users.manage", legacy: isAdmin },
+      { to: "/system", label: "System & security", icon: Activity, perm: null },
+      { to: "/configuration", label: "Configuration", icon: Settings, perm: "settings.manage" },
+      { to: "/usage", label: "Usage", icon: BarChart3, perm: "users.manage" },
     ],
   },
   {
     label: null,
-    items: [{ to: "/about", label: "About & help", icon: Info, perm: null, legacy: all }],
+    items: [{ to: "/about", label: "About & help", icon: Info, perm: null }],
   },
 ];
 
