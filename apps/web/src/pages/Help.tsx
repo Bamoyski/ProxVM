@@ -241,7 +241,7 @@ export default function Help({ can }: { can: (perm: string) => boolean }) {
         <ol style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "2px 24px", margin: 0, padding: 0, listStyle: "none" }}>
           {visible.map((s, i) => (
             <li key={s.id} style={{ padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)", fontSize: "0.85rem" }}>
-              <a href={`#${s.id}`}>
+              <a href={`#${s.id}`} className="pv-link-target">
                 <span className="pv-mono" style={{ color: "var(--pv-text-3)", marginRight: 8 }}>{i + 1}.</span>
                 {s.title}
               </a>

@@ -15,19 +15,20 @@ export default function Automations({ can }: { can: (perm: string) => boolean })
   ];
   const tabs = all.filter((t) => can(t.perm));
   const active = tabs.some((t) => t.id === params.get("tab")) ? params.get("tab")! : (tabs[0]?.id ?? "");
-  const current = tabs.find((t) => t.id === active);
 
   return (
     <div className="pv-page">
-      {tabs.length > 1 && (
+      {tabs.length > 1 ? (
         <Tabs
           tabs={tabs}
           active={active}
           onChange={(t) => setParams({ tab: t }, { replace: true })}
           label="Automation views"
         />
+      ) : (
+        tabs[0]?.panel
       )}
-      {current ? current.panel : (
+      {tabs.length === 0 && (
         <EmptyState title="No access" body="You don't have permission to view automations." />
       )}
     </div>

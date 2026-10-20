@@ -367,7 +367,7 @@ export default function Users() {
                       <td className="pv-faint pv-hide-md">{u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : "never"}</td>
                       <td>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                          <Link to={`/users/${u.id}/permissions`} style={{ fontSize: "0.8rem" }}>Permissions</Link>
+                          <Link to={`/users/${u.id}/permissions`} className="pv-link-target" style={{ fontSize: "0.8rem" }}>Permissions</Link>
                           <Btn size="sm" kind="link" onClick={() => { setResetId(resetId === u.id ? null : u.id); setResetPw({ a: "", b: "" }); }}>
                             Reset password
                           </Btn>

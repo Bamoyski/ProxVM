@@ -1,20 +1,10 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageHeader, Section, Btn, Alert, errText } from "../ui/index.js";
+import { PageHeader, Section, Btn, Alert, Field, errText } from "../ui/index.js";
 
 const input = "pv-input";
 const label = "pv-label";
-
-function Field({ label: l, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="pv-field">
-      <label className={label}>{l}</label>
-      {children}
-      {hint ? <div className="pv-hint">{hint}</div> : null}
-    </div>
-  );
-}
 
 export default function Settings() {
   const qc = useQueryClient();
@@ -420,6 +410,7 @@ function AppSettings() {
             className="pv-input"
             style={{ width: 112 }}
             title="Minutes of no sessions + idle CPU before shutdown"
+            aria-label="Idle minutes before shutdown"
             value={shownIdleMinutes}
             onChange={(e) => {
               setIdleMinutes(e.target.value);
@@ -429,9 +420,14 @@ function AppSettings() {
           <span className="pv-hint">min idle (5–10080)</span>
         </div>
       </Field>
-      <Field label="Threat webhook (blank = disabled)" hint="POSTs fresh threat findings as JSON every 5 minutes. Any http(s) URL works (Discord/Slack-compatible body); cloud metadata endpoints are refused.">
+      <Field
+        label="Threat webhook (blank = disabled)"
+        hint="POSTs fresh threat findings as JSON every 5 minutes. Any http(s) URL works (Discord/Slack-compatible body); cloud metadata endpoints are refused."
+        htmlFor="settings-webhook-url"
+      >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <input
+            id="settings-webhook-url"
             className="pv-input"
             style={{ minWidth: 280, flex: 1 }}
             placeholder="e.g. https://hooks.slack.com/services/…"
@@ -443,6 +439,7 @@ function AppSettings() {
           />
           <select
             className="pv-select"
+            aria-label="Minimum severity that triggers a webhook post"
             value={shownSeverity}
             title="Minimum severity that triggers a webhook post"
             onChange={(e) => {
@@ -472,6 +469,7 @@ function AppSettings() {
             className="pv-input"
             style={{ minWidth: 220, flex: 1 }}
             placeholder="e.g. http://192.168.1.28/"
+            aria-label="Gotify server URL"
             value={shownGotifyUrl}
             onChange={(e) => {
               setGotifyUrl(e.target.value);
@@ -483,6 +481,7 @@ function AppSettings() {
             className="pv-input"
             style={{ minWidth: 160, flex: 1 }}
             placeholder="App token (saved hidden)"
+            aria-label="Gotify application token"
             value={gotifyToken}
             onChange={(e) => {
               setGotifyToken(e.target.value);
@@ -494,6 +493,7 @@ function AppSettings() {
             className="pv-input"
             style={{ width: 100 }}
             title="Gotify priority 0–10"
+            aria-label="Gotify priority (0–10)"
             min={0}
             max={10}
             value={shownGotifyPriority}
@@ -508,9 +508,9 @@ function AppSettings() {
       </Field>
       <Field label="Provisioning ceilings (blank = no ceiling; admins exempt)" hint="Non-admin requests above these are rejected. Applies at request time and again when the worker runs.">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-          <input type="number" className="pv-input" style={{ width: 110 }} placeholder="Max CPU" title="Max vCPU per VM" value={shownMaxCpu} onChange={(e) => { setMaxCpu(e.target.value); setPolicyTouched(true); }} />
-          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max RAM MB" title="Max RAM megabytes per VM" value={shownMaxRam} onChange={(e) => { setMaxRamMb(e.target.value); setPolicyTouched(true); }} />
-          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max disk GB" title="Max disk gigabytes per VM" value={shownMaxDisk} onChange={(e) => { setMaxDiskGb(e.target.value); setPolicyTouched(true); }} />
+          <input type="number" className="pv-input" style={{ width: 110 }} placeholder="Max CPU" title="Max vCPU per VM" aria-label="Max vCPU per VM" value={shownMaxCpu} onChange={(e) => { setMaxCpu(e.target.value); setPolicyTouched(true); }} />
+          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max RAM MB" title="Max RAM megabytes per VM" aria-label="Max RAM megabytes per VM" value={shownMaxRam} onChange={(e) => { setMaxRamMb(e.target.value); setPolicyTouched(true); }} />
+          <input type="number" className="pv-input" style={{ width: 130 }} placeholder="Max disk GB" title="Max disk gigabytes per VM" aria-label="Max disk gigabytes per VM" value={shownMaxDisk} onChange={(e) => { setMaxDiskGb(e.target.value); setPolicyTouched(true); }} />
         </div>
       </Field>
       <Field label="Static-IP subnets (blank = static assignment disabled for non-admins)" hint="Comma-separated IPv4 CIDRs, e.g. 192.168.1.0/24. Static requests outside these are rejected; addresses must also be unique across VMs.">
@@ -565,6 +565,7 @@ function AppSettings() {
             className="pv-input"
             style={{ minWidth: 200, flex: 1 }}
             placeholder={tsSecretConfigured ? "Secret key (saved hidden)" : "Secret key"}
+            aria-label="Turnstile secret key"
             value={tsSecret}
             onChange={(e) => {
               setTsSecret(e.target.value);

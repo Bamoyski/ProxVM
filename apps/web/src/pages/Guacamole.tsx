@@ -121,7 +121,7 @@ export default function Guacamole() {
                 <tr key={c.id}>
                   <td><StatusBadge status={c.status} /></td>
                   <td>
-                    <Link to={`/vms/${c.vmId}`} style={{ fontWeight: 550 }}>{c.vmName}</Link>{" "}
+                    <Link to={`/vms/${c.vmId}`} className="pv-link-target" style={{ fontWeight: 550 }}>{c.vmName}</Link>{" "}
                     <span className="pv-mono pv-faint">({c.vmid}@{c.node})</span>
                   </td>
                   <td className="pv-mono" style={{ textTransform: "uppercase" }}>{c.protocol}</td>
@@ -145,7 +145,7 @@ export default function Guacamole() {
         <EmptyState
           title="No Guacamole connections"
           body="They are created automatically when a VM is provisioned with at least one protocol."
-          action={<Link to="/vms" style={{ fontSize: "0.85rem" }}>Go to virtual machines →</Link>}
+          action={<Link to="/vms" className="pv-link-target" style={{ fontSize: "0.85rem" }}>Go to virtual machines →</Link>}
         />
       )}
       {!isLoading && data && data.connections.length > 0 && rows.length === 0 && (

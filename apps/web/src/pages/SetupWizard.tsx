@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api.js";
+import { Field } from "../ui/index.js";
 
 const STEPS = [
   "Create administrator",
@@ -365,11 +366,5 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="pv-field">
-      <label className="pv-label">{label}</label>
-      {children}
-    </div>
-  );
-}
+/* Field is the shared primitive (ui/index.js) — it wires the label to the
+   control, so every setup input is announced correctly. */

@@ -316,15 +316,16 @@ export default function AppShell({
       <div className="pv-body">
         <header className="pv-header">
           <button
-            className="pv-btn pv-btn-ghost pv-btn-icon pv-hide-md"
+            className="pv-btn pv-btn-ghost pv-btn-icon pv-nav-toggle"
             onClick={() => setMobileOpen(true)}
             aria-label="Open navigation menu"
           >
             <MenuIcon size={16} aria-hidden="true" />
           </button>
           <button
-            className="pv-btn pv-btn-ghost pv-btn-icon pv-hide-sm"
+            className="pv-btn pv-btn-ghost pv-btn-icon pv-sidebar-toggle"
             onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >

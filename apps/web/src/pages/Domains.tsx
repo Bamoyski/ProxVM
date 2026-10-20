@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
-import { PageHeader, Section, EmptyState, Btn, Alert, errText } from "../ui/index.js";
+import { PageHeader, Section, EmptyState, Btn, Alert, Field, errText } from "../ui/index.js";
 
 interface DomainConfig {
   canonical: string | null;
@@ -241,11 +241,13 @@ export default function Domains() {
           <input
             className={input}
             placeholder="proxvm3"
+            aria-label="New canonical hostname"
             value={switchName}
             onChange={(e) => setSwitchName(e.target.value)}
           />
           <select
             className="pv-select"
+            aria-label="Copy settings from an existing record"
             value={copyFrom}
             onChange={(e) => applyCopyFrom(e.target.value)}
           >
@@ -257,10 +259,11 @@ export default function Domains() {
           <input
             className={input}
             placeholder={needsTarget ? "Target IP/hostname (required first time)" : "Target (blank = copy current)"}
+            aria-label="Public target IP or hostname"
             value={targetInput}
             onChange={(e) => { setTargetInput(e.target.value); setCopyFrom(""); }}
           />
-          <select className="pv-select" value={recordType} onChange={(e) => setRecordType(e.target.value)}>
+          <select className="pv-select" aria-label="DNS record type" value={recordType} onChange={(e) => setRecordType(e.target.value)}>
             <option value="">Type: auto</option>
             <option value="A">A (IPv4)</option>
             <option value="AAAA">AAAA (IPv6)</option>
@@ -269,6 +272,7 @@ export default function Domains() {
           <input
             className={input}
             placeholder="Tunnel service target (blank = copy current rule)"
+            aria-label="Tunnel service target"
             value={serviceInput}
             onChange={(e) => setServiceInput(e.target.value)}
             list="tunnel-service-options"
@@ -302,10 +306,9 @@ export default function Domains() {
       </Section>
 
       <Section title="DNS records">
-        <div className="pv-field">
-          <label className={label}>Filter (A / AAAA / CNAME)</label>
+        <Field label="Filter (A / AAAA / CNAME)">
           <input className={input} placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
+        </Field>
         <div style={{ maxHeight: 288, overflowY: "auto", marginBottom: 16 }}>
           {(dns?.records ?? []).map((r) => (
             <div key={r.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: "0.78rem", padding: "5px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
@@ -324,9 +327,7 @@ export default function Domains() {
           {config?.cloudflare.zoneId && !(dns?.records ?? []).length && <EmptyState title="No records match" />}
           {!config?.cloudflare.zoneId && <EmptyState title="No Zone ID wired" body="See .env.example on the server." />}
         </div>
-        <div className="pv-field">
-          <label className={label}>School user email</label>
-          <div className="pv-hint" style={{ marginBottom: 6 }}>Filter-watch oracle scope — a student address from the filtered school.</div>
+        <Field label="School user email" hint="Filter-watch oracle scope — a student address from the filtered school.">
           <div style={{ display: "flex", gap: 8 }}>
             <input
               className={input}
@@ -336,9 +337,8 @@ export default function Domains() {
             />
             <Btn kind="primary" onClick={saveSecurly}>Save</Btn>
           </div>
-        </div>
-        <div className="pv-field">
-          <label className={label}>Redirect an old hostname here</label>
+        </Field>
+        <Field label="Redirect an old hostname here">
           <div style={{ display: "flex", gap: 8 }}>
             <input
               className={input}
@@ -348,10 +348,10 @@ export default function Domains() {
             />
             <Btn kind="primary" onClick={addAlias} disabled={!aliasInput.trim()}>Add</Btn>
           </div>
-        </div>
+        </Field>
         {(config?.aliases ?? []).length > 0 && (
           <div className="pv-field">
-            <label className={label}>Stop redirecting (old URLs will die)</label>
+            <span className="pv-label">Stop redirecting (old URLs will die)</span>
             {(config?.aliases ?? []).map((a) => (
               <div key={a} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: "0.85rem" }}>
                 <span className="pv-mono">{a}</span>

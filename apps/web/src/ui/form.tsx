@@ -1,9 +1,24 @@
-import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useId,
+  type InputHTMLAttributes,
+  type ReactElement,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+} from "react";
 import { Search as SearchIcon } from "lucide-react";
 
 /**
  * Form primitives. Field wires label/description/error to the control with
  * proper ids and aria-invalid so validation is announced, not just colored.
+ *
+ * Children can be a render function (full control over ids) or a subtree —
+ * in the latter case the first form control inside it receives the generated
+ * id and the describedby/aria-invalid wiring automatically. Controls that
+ * already carry an id keep it.
  */
 
 export function Field({
@@ -18,7 +33,9 @@ export function Field({
   hint?: ReactNode;
   error?: string | null;
   required?: boolean;
-  children: (ids: { id: string; describedBy: string | undefined; invalid: boolean }) => ReactNode;
+  children:
+    | ((ids: { id: string; describedBy: string | undefined; invalid: boolean }) => ReactNode)
+    | ReactNode;
   htmlFor?: string;
 }) {
   const auto = useId();
@@ -26,13 +43,59 @@ export function Field({
   const hintId = hint ? `${id}-hint` : undefined;
   const errId = error ? `${id}-err` : undefined;
   const describedBy = [hintId, errId].filter(Boolean).join(" ") || undefined;
+
+  const ariaProps = {
+    "aria-describedby": describedBy,
+    "aria-invalid": error ? (true as const) : undefined,
+  };
+
+  let control: ReactNode;
+  if (typeof children === "function") {
+    control = (children as (ids: { id: string; describedBy: string | undefined; invalid: boolean }) => ReactNode)({
+      id,
+      describedBy,
+      invalid: !!error,
+    });
+  } else {
+    // Attach the id to the first control in the subtree.
+    let assigned = false;
+    const wire = (node: ReactNode): ReactNode =>
+      Children.map(node, (child) => {
+        if (!isValidElement(child)) return child;
+        const props = child.props as {
+          id?: string;
+          "aria-describedby"?: string;
+          "aria-invalid"?: boolean;
+          children?: ReactNode;
+        };
+        const type = child.type as unknown;
+        const isControl =
+          type === "input" || type === "select" || type === "textarea";
+        const isComponent = typeof type === "function";
+        if (isControl || isComponent) {
+          if (assigned) return child;
+          assigned = true;
+          return cloneElement(child, {
+            id: props.id ?? id,
+            "aria-describedby": props["aria-describedby"] ?? ariaProps["aria-describedby"],
+            "aria-invalid": props["aria-invalid"] ?? ariaProps["aria-invalid"],
+          } as never);
+        }
+        if (props.children) {
+          return cloneElement(child, {}, wire(props.children));
+        }
+        return child;
+      });
+    control = wire(children);
+  }
+
   return (
     <div className="pv-field">
       <label className="pv-label" htmlFor={id}>
         {label}
         {required && <span aria-hidden="true" style={{ color: "var(--pv-err)", marginLeft: 3 }}>*</span>}
       </label>
-      {children({ id, describedBy, invalid: !!error })}
+      {control}
       {hint && (
         <div className="pv-hint" id={hintId}>
           {hint}

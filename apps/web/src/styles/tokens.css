@@ -22,7 +22,7 @@
   /* ---- text ---- */
   --pv-text: #e3e9f0;        /* primary */
   --pv-text-2: #9aa7b6;      /* secondary */
-  --pv-text-3: #64717f;      /* tertiary / labels */
+  --pv-text-3: #7d8b9a;      /* tertiary / labels (AA on every dark surface) */
   --pv-text-invert: #0a0d12; /* text on accent fills */
 
   /* ---- accent (action · selection · links — never decoration) ---- */
@@ -33,6 +33,15 @@
   --pv-accent-soft: rgba(91, 130, 246, 0.14);
   --pv-accent-soft-strong: rgba(91, 130, 246, 0.22);
   --pv-accent-border: rgba(91, 130, 246, 0.45);
+  /* Accent used as readable text (chips, links on tinted fills). */
+  --pv-accent-text: #7fa0f8;
+  /* Link colour: readable on every surface in this theme (AA 4.5:1). */
+  --pv-link: #6f95f7;
+  /* Filled surfaces that carry white text: a deeper step than --pv-accent so
+     the label keeps 4.5:1 (WCAG AA) in the dark theme. */
+  --pv-accent-fill: #3f6ce9;
+  --pv-accent-fill-hover: #4c78ee;
+  --pv-accent-fill-press: #3560d8;
 
   /* ---- semantic status ---- */
   --pv-ok: #45c07e;          /* healthy, running, completed */
@@ -118,7 +127,7 @@ html.light {
 
   --pv-text: #18212c;
   --pv-text-2: #4d5b6b;
-  --pv-text-3: #7e8b9a;
+  --pv-text-3: #5c6975;
   --pv-text-invert: #ffffff;
 
   --pv-accent: #356ae6;
@@ -127,11 +136,19 @@ html.light {
   --pv-accent-soft: rgba(53, 106, 230, 0.09);
   --pv-accent-soft-strong: rgba(53, 106, 230, 0.16);
   --pv-accent-border: rgba(53, 106, 230, 0.4);
+  /* Text drawn on accent fills: darkened for AA contrast on light surfaces
+     (the avatar chip and accent-on-soft labels). */
+  --pv-accent-ink: #ffffff;
+  --pv-accent-text: #2a58c2;
+  --pv-link: #2a58c2;
+  --pv-accent-fill: #356ae6;
+  --pv-accent-fill-hover: #2f61d6;
+  --pv-accent-fill-press: #2957c2;
 
-  --pv-ok: #1d8a50;
+  --pv-ok: #177a45;
   --pv-ok-soft: rgba(29, 138, 80, 0.1);
   --pv-ok-border: rgba(29, 138, 80, 0.35);
-  --pv-warn: #9a6a06;
+  --pv-warn: #855b05;
   --pv-warn-soft: rgba(154, 106, 6, 0.1);
   --pv-warn-border: rgba(154, 106, 6, 0.35);
   --pv-err: #c23c38;

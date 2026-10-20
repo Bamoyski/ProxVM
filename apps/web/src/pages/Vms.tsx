@@ -398,14 +398,16 @@ export default function Vms({ me }: { me: Me }) {
               <tr>
                 {canManage && (
                   <th style={{ width: 34 }}>
-                    <input
-                      type="checkbox"
-                      checked={allVisibleSelected}
-                      onChange={(e) =>
-                        setSelected(e.target.checked ? rows.map((r) => r.id).filter((x): x is string => !!x) : [])
-                      }
-                      aria-label={allVisibleSelected ? "Deselect all visible VMs" : "Select all visible VMs"}
-                    />
+                    <label className="pv-check-target">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={(e) =>
+                          setSelected(e.target.checked ? rows.map((r) => r.id).filter((x): x is string => !!x) : [])
+                        }
+                        aria-label={allVisibleSelected ? "Deselect all visible VMs" : "Select all visible VMs"}
+                      />
+                    </label>
                   </th>
                 )}
                 <SortTh k="status" sort={sort} onSort={toggleSort}>Status</SortTh>
@@ -428,12 +430,14 @@ export default function Vms({ me }: { me: Me }) {
                   {canManage && (
                     <td>
                       {row.id ? (
-                        <input
-                          type="checkbox"
-                          checked={selected.includes(row.id)}
-                          onChange={() => toggleSelect(row.id as string)}
-                          aria-label={`Select ${row.name}`}
-                        />
+                        <label className="pv-check-target">
+                          <input
+                            type="checkbox"
+                            checked={selected.includes(row.id)}
+                            onChange={() => toggleSelect(row.id as string)}
+                            aria-label={`Select ${row.name}`}
+                          />
+                        </label>
                       ) : null}
                     </td>
                   )}
@@ -443,7 +447,7 @@ export default function Vms({ me }: { me: Me }) {
                   <td style={{ maxWidth: 260 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
                       {row.id ? (
-                        <Link to={`/vms/${row.id}`} style={{ fontWeight: 550 }} className="pv-truncate">
+                        <Link to={`/vms/${row.id}`} style={{ fontWeight: 550 }} className="pv-truncate pv-link-target">
                           {row.name}
                         </Link>
                       ) : (
@@ -650,6 +654,7 @@ function HealthDot({
   return (
     <Tooltip content={detail}>
       <span
+        role="img"
         aria-label={bad.length ? "Connection problem detected" : "All connections reachable"}
         style={{
           display: "inline-block",

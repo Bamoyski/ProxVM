@@ -178,7 +178,7 @@
   height: 26px;
   border-radius: 999px;
   background: var(--pv-accent-soft-strong);
-  color: var(--pv-accent);
+  color: var(--pv-accent-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -249,6 +249,10 @@
 
 .pv-crumbs a {
   color: var(--pv-text-2);
+  /* Breadcrumb links are standalone targets, not inline prose. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
 }
 
 .pv-crumbs a:hover {
@@ -473,18 +477,18 @@
 }
 
 .pv-btn-primary {
-  background: var(--pv-accent);
-  border-color: var(--pv-accent);
+  background: var(--pv-accent-fill);
+  border-color: var(--pv-accent-fill);
   color: var(--pv-accent-ink);
 }
 
 .pv-btn-primary:hover {
-  background: var(--pv-accent-hover);
-  border-color: var(--pv-accent-hover);
+  background: var(--pv-accent-fill-hover);
+  border-color: var(--pv-accent-fill-hover);
 }
 
 .pv-btn-primary:active {
-  background: var(--pv-accent-press);
+  background: var(--pv-accent-fill-press);
 }
 
 .pv-btn-ghost {
@@ -538,12 +542,38 @@
   height: 26px;
 }
 
+/* Nav affordances follow the sidebar, not the table-column breakpoints:
+   the drawer opener exists only while the sidebar is off-canvas, the
+   collapse control only while it is docked. */
+.pv-btn.pv-nav-toggle {
+  display: none;
+}
+
+.pv-btn.pv-sidebar-toggle {
+  display: inline-flex;
+}
+
+@media (max-width: 900px) {
+  .pv-btn.pv-nav-toggle {
+    display: inline-flex;
+  }
+
+  .pv-btn.pv-sidebar-toggle {
+    display: none;
+  }
+}
+
 .pv-btn-link {
   background: none;
   border: none;
   padding: 0;
   height: auto;
-  color: var(--pv-accent);
+  /* Keep a usable pointer target: `height: auto` would otherwise collapse
+     these to the text height (WCAG 2.5.8 wants 24px minimum). */
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--pv-accent-text);
   font-size: inherit;
   font-weight: inherit;
   cursor: pointer;
@@ -551,6 +581,14 @@
 
 .pv-btn-link:hover {
   text-decoration: underline;
+}
+
+/* Standalone link targets (table actions, in-page contents list): a link on
+   its own line is a pointer target, so it needs the 24px minimum height. */
+.pv-link-target {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
 }
 
 .pv-btn-badge {
@@ -709,6 +747,9 @@
   display: flex;
   align-items: center;
   gap: var(--sp-4);
+  /* The label is the real tap target for the checkbox — keep it big enough
+     to hit on a phone (WCAG 2.5.8 wants 24px). */
+  min-height: 24px;
   font-size: 0.83rem;
   color: var(--pv-text-2);
   cursor: pointer;
@@ -721,6 +762,26 @@
   accent-color: var(--pv-accent);
   cursor: pointer;
   flex: none;
+}
+
+/* Standalone checkboxes (table row select): the label is the pointer target
+   so it clears the 24px minimum (WCAG 2.5.8) while the native checkbox
+   keeps its familiar rendering. */
+.pv-check-target {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.pv-check-target input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--pv-accent);
+  cursor: pointer;
 }
 
 .pv-checkrow input[type="checkbox"]:disabled {
@@ -1027,6 +1088,9 @@
   background: none;
   border: none;
   padding: 0;
+  /* Sortable column headers are buttons, not inline text — keep the target
+     at the 24px minimum (WCAG 2.5.8). */
+  min-height: 24px;
   font: inherit;
   color: inherit;
   text-transform: inherit;

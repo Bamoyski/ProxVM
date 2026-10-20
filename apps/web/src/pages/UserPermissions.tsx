@@ -121,13 +121,13 @@ export default function UserPermissions() {
                   ))}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                <select className="pv-select pv-input-auto" style={{ height: 32 }} value={rolePick} onChange={(e) => setRolePick(e.target.value)}>
+                <select className="pv-select pv-input-auto" style={{ height: 32 }} aria-label="Role to assign" value={rolePick} onChange={(e) => setRolePick(e.target.value)}>
                   <option value="">Select role…</option>
                   {(rolesData?.roles ?? []).map((r) => (
                     <option key={r.id} value={r.id}>{r.name}</option>
                   ))}
                 </select>
-                <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} value={roleExpiry} onChange={(e) => setRoleExpiry(e.target.value)}>
+                <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} aria-label="Role expiry" value={roleExpiry} onChange={(e) => setRoleExpiry(e.target.value)}>
                   <option value="">Never expires</option>
                   <option value="1h">1 hour</option>
                   <option value="1d">1 day</option>
@@ -153,7 +153,7 @@ export default function UserPermissions() {
             </Section>
             <Section title="Direct permission grants" hint="Only for permissions outside the user's roles. Admins cannot grant what they lack.">
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 12 }}>
-                <select className="pv-select pv-input-auto" style={{ height: 32 }} value={permPick} onChange={(e) => setPermPick(e.target.value)}>
+                <select className="pv-select pv-input-auto" style={{ height: 32 }} aria-label="Permission to grant" value={permPick} onChange={(e) => setPermPick(e.target.value)}>
                   <option value="">Select permission…</option>
                   {(catalogData?.permissions ?? [])
                     .filter((p) => !held.has(p.code))
@@ -161,7 +161,7 @@ export default function UserPermissions() {
                       <option key={p.code} value={p.code}>{p.code}</option>
                     ))}
                 </select>
-                <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} value={permExpiry} onChange={(e) => setPermExpiry(e.target.value)}>
+                <select className="pv-select pv-input-auto" style={{ height: 32, fontSize: "0.8rem" }} aria-label="Permission expiry" value={permExpiry} onChange={(e) => setPermExpiry(e.target.value)}>
                   <option value="">Never expires</option>
                   <option value="1h">1 hour</option>
                   <option value="1d">1 day</option>

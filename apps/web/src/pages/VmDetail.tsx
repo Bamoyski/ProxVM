@@ -480,7 +480,7 @@ export default function VmDetail({ me }: { me: Me }) {
   return (
     <div className="pv-page">
       <div style={{ marginBottom: 10 }}>
-        <Link to="/vms" style={{ fontSize: "0.8rem", display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <Link to="/vms" style={{ fontSize: "0.8rem", display: "inline-flex", alignItems: "center", gap: 5, minHeight: 24 }}>
           <ArrowLeft size={12} aria-hidden="true" /> Virtual machines
         </Link>
       </div>

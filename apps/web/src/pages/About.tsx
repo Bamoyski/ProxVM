@@ -17,7 +17,6 @@ export default function About({ can }: { can: (perm: string) => boolean }) {
     { id: "legal", label: "Legal", panel: <Legal /> },
   ];
   const active = tabs.some((t) => t.id === params.get("tab")) ? params.get("tab")! : "help";
-  const current = tabs.find((t) => t.id === active) ?? tabs[0]!;
 
   return (
     <div className="pv-page">
@@ -27,7 +26,6 @@ export default function About({ can }: { can: (perm: string) => boolean }) {
         onChange={(t) => setParams({ tab: t }, { replace: true })}
         label="About views"
       />
-      {current.panel}
     </div>
   );
 }

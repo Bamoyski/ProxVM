@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.js";
 import { usePref } from "../prefs.js";
-import { PageHeader, Section, EmptyState, Btn, Alert, SearchInput, errText } from "../ui/index.js";
+import { PageHeader, Section, EmptyState, Btn, Alert, SearchInput, Field, errText } from "../ui/index.js";
 
 interface OverviewRow {
   vmId: string;
@@ -311,16 +311,14 @@ export default function Backups() {
               </button>
             ))}
           </div>
-          <div className="pv-field">
-            <label className="pv-label">How should the backup run?</label>
+          <Field label="How should the backup run?">
             <select className="pv-select" value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
               <option value="snapshot">Snapshot — safe while running</option>
               <option value="suspend">Suspend — pauses the VM briefly</option>
               <option value="stop">Stop — powers the VM off first</option>
             </select>
-          </div>
-          <div className="pv-field">
-            <label className="pv-label">Back up to (backup storage)</label>
+          </Field>
+          <Field label="Back up to (backup storage)">
             <select
               className="pv-select"
               value={storageValue}
@@ -344,6 +342,7 @@ export default function Backups() {
                 className="pv-input"
                 style={{ marginTop: 6 }}
                 placeholder="Storage ID, e.g. ProxVM"
+                aria-label="Backup storage ID"
                 value={form.storage}
                 onChange={(e) => setForm({ ...form, storage: e.target.value })}
               />
@@ -353,41 +352,37 @@ export default function Backups() {
                 Cannot reach Proxmox right now — check the node is up, then refresh. Typing the ID still works.
               </div>
             )}
-          </div>
+          </Field>
           <div className="pv-grid-3">
-            <div className="pv-field">
-              <label className="pv-label">How often?</label>
+            <Field label="How often?">
               <select className="pv-select" value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
                 {FREQUENCIES.map((f) => (
                   <option key={f.label} value={f.label}>{f.label}</option>
                 ))}
               </select>
-            </div>
-            <div className="pv-field">
-              <label className="pv-label">At hour (UTC)</label>
+            </Field>
+            <Field label="At hour (UTC)">
               <select className="pv-select" value={form.hour} onChange={(e) => setForm({ ...form, hour: e.target.value })}>
                 {HOURS.map((h) => (
                   <option key={h} value={h}>{h}:00</option>
                 ))}
               </select>
-            </div>
-            <div className="pv-field">
-              <label className="pv-label">At minute</label>
+            </Field>
+            <Field label="At minute">
               <select className="pv-select" value={form.minute} onChange={(e) => setForm({ ...form, minute: e.target.value })}>
                 {MINUTES.map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
-            </div>
+            </Field>
           </div>
-          <div className="pv-field">
-            <label className="pv-label">How many to keep?</label>
+          <Field label="How many to keep?">
             <select className="pv-select" value={form.keepLast} onChange={(e) => setForm({ ...form, keepLast: e.target.value })}>
               {KEEP_OPTIONS.map((k) => (
                 <option key={k.label} value={k.value}>{k.label}</option>
               ))}
             </select>
-          </div>
+          </Field>
           <div className="pv-hint" style={{ marginBottom: 8 }}>{summary}</div>
           <Btn kind="primary" style={{ width: "100%" }} disabled={!checked.length || !storageValue.trim()} onClick={() => void createBulk()}>
             {checked.length ? `Schedule backups for ${checked.length} VM${checked.length === 1 ? "" : "s"}` : "Tick VMs above first"}
