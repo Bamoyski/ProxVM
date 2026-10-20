@@ -124,9 +124,10 @@ Green means: typecheck + tests + build, in that order.
 
 `main` is PR-only. Every change — including maintainer changes — lands
 through a short-lived branch and a pull request; never push `main`
-directly, never force-push it. `main` requires a PR, one approving review,
-and resolved conversations before merge; branch protection rejects direct
-pushes from admins too.
+directly, never force-push it. `main` requires a PR and resolved
+conversations before merge, and branch protection rejects direct pushes
+from admins too. No separate approval is required, so the author can
+self-merge after the gates; reviews are still welcome.
 
 1. Start from current `main`:
    `git fetch origin && git switch -c feature/<short-description> origin/main`.
