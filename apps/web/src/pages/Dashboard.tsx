@@ -28,7 +28,7 @@ interface VmRow {
   ip: string | null;
 }
 
-type WidgetId = "stats" | "proxmox" | "discovery" | "events" | "jobs" | "mine";
+type WidgetId = "stats" | "proxmox" | "discovery" | "events" | "jobs" | "drift" | "mine";
 
 const ALL_WIDGETS: Array<{ id: WidgetId; title: string }> = [
   { id: "stats", title: "Overview" },
@@ -37,6 +37,7 @@ const ALL_WIDGETS: Array<{ id: WidgetId; title: string }> = [
   { id: "discovery", title: "Discovered services" },
   { id: "events", title: "Recent events" },
   { id: "jobs", title: "Recent provisioning jobs" },
+  { id: "drift", title: "Drift (ground-truth)" },
 ];
 
 interface Layout {
@@ -113,6 +114,17 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
     queryKey: ["my-activity"],
     queryFn: () => api<{ activity: Array<{ id: string; event: string; vmId: string | null; createdAt: string }> }>("/me/activity"),
     refetchInterval: 30000,
+  });
+  const canDrift = can ? can("drift.manage") : false;
+  const { data: driftBoard } = useQuery({
+    queryKey: ["drift-summary"],
+    // Active findings only (no status filter = default board).
+    queryFn: () =>
+      api<{ findings: Array<{ id: string; severity: "critical" | "high" | "medium" | "low"; status: string }>; lastRun: { liveChecked: boolean; skipped: string | null } | null }>(
+        "/drift",
+      ),
+    refetchInterval: 60000,
+    enabled: canDrift,
   });
 
   const vmList = vmsData?.vms ?? [];
@@ -356,6 +368,42 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
           <Jobs me={me} bare />
         </Section>
       ),
+    },
+    drift: {
+      privilegedOnly: true,
+      node: (() => {
+        const active = (driftBoard?.findings ?? []).filter((f) => f.status !== "RESOLVED");
+        const bySeverity = (s: "critical" | "high" | "medium" | "low") =>
+          active.filter((f) => f.severity === s).length;
+        const skipped = driftBoard?.lastRun && !driftBoard.lastRun.liveChecked ? driftBoard.lastRun.skipped : null;
+        return (
+          <Section title="Drift (ground truth)" hint="Recorded state vs. live infrastructure — remediation is manual.">
+            {active.length === 0 ? (
+              <EmptyState
+                title={skipped ? "Last pass skipped" : "No drift detected"}
+                body={
+                  skipped
+                    ? `Reason: ${skipped}. Nothing was changed — run a pass or check infrastructure access.`
+                    : "Records agree with Proxmox and Guacamole. New discrepancies surface here automatically."
+                }
+              />
+            ) : (
+              <>
+                {skipped && <Alert kind="warn" title="Last pass was skipped">Reason: {skipped}.</Alert>}
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", padding: "8px 0" }}>
+                  <Stat label="Critical" value={String(bySeverity("critical"))} tone={bySeverity("critical") > 0 ? "err" : undefined} />
+                  <Stat label="High" value={String(bySeverity("high"))} tone={bySeverity("high") > 0 ? "err" : "warn"} />
+                  <Stat label="Medium" value={String(bySeverity("medium"))} tone="warn" />
+                  <Stat label="Low" value={String(bySeverity("low"))} tone="ok" />
+                </div>
+                <div style={{ padding: "6px 0" }}>
+                  <Link to="/system?tab=drift" className="pv-link">Review on the Drift board →</Link>
+                </div>
+              </>
+            )}
+          </Section>
+        );
+      })(),
     },
   };
 

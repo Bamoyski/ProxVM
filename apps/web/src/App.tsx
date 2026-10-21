@@ -113,6 +113,7 @@ export default function App() {
     if (perm === "templates.manage") return privileged;
     if (perm === "jobs.read") return privileged;
     if (perm === "audit.read") return privileged || me.roles.includes("USER");
+    if (perm === "drift.manage") return privileged;
     if (perm === "guac.launch") return true;
     return isAdmin;
   };
@@ -144,6 +145,7 @@ export default function App() {
             <Route path="/matrix" element={<Navigate to="/access?tab=matrix" replace />} />
             <Route path="/health" element={<Navigate to="/system?tab=health" replace />} />
             <Route path="/threats" element={<Navigate to="/system?tab=threats" replace />} />
+            <Route path="/drift" element={<Navigate to="/system?tab=drift" replace />} />
             <Route path="/audit" element={<Navigate to="/system?tab=audit" replace />} />
             <Route path="/jobs" element={<Navigate to="/" replace />} />
             <Route path="/jobs/:jobId" element={<Navigate to="/" replace />} />
