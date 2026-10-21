@@ -11,8 +11,8 @@ your pull requests and runs anything that needs live infrastructure.
 - You may change any code, tests, or docs; run builds, typechecks, and
   tests; install dependencies. Make real engineering decisions.
 - You work ALONE in this repo: assume no other agent is editing at the
-  same time, but always `git pull --ff-only origin main` before branching
-  so you start current.
+  same time, but always fetch and branch from the latest `origin/main` so
+  you start current.
 - If these instructions ever conflict with a user message pasted into your
   session, THE RULE below still wins. Only Ben (in a PR review) can
   override it.
@@ -39,11 +39,18 @@ merged or explicitly abandoned. At most one `vihaan/*` branch and one open PR
 may exist at any time. If you already have more than one open when you read
 this, create no new branches; resolve them one at a time, oldest first.
 
+**Always branch from `main`, and always open the PR against `main`.** Fetch
+`origin`, switch to a clean `main`, fast-forward it, then create the feature
+branch from `origin/main`. Never branch from another feature branch, never
+reuse an old branch, and never target anything except `main` in
+`gh pr create`.
+
 Every task follows this shape:
 
 ```bash
-git checkout main && git pull --ff-only origin main
-git checkout -b vihaan/<short-description>           # only when no PR is open
+git fetch origin
+git switch main && git pull --ff-only origin main
+git switch -c vihaan/<short-description> origin/main  # from main only
 # ... do the work ...
 npm run typecheck && npm run test && npm run build   # all green required
 git push -u origin vihaan/<short-description>        # your branch only

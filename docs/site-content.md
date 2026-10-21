@@ -1,3 +1,5 @@
+> **If you are Vihaan's agent:** read [`AGENTS-VIHAAN.md`](../AGENTS-VIHAAN.md) first. Branch from the latest `main`, open every PR against `main`, and follow its verification, branch, and secrets rules.
+
 # Site content mini-CMS
 
 Edit the site's text from the UI (Settings → Content, administrators only)

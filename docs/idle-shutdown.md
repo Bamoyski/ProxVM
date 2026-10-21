@@ -1,3 +1,5 @@
+> **If you are Vihaan's agent:** read [`AGENTS-VIHAAN.md`](../AGENTS-VIHAAN.md) first. Branch from the latest `main`, open every PR against `main`, and follow its verification, branch, and secrets rules.
+
 # Idle auto-shutdown
 
 User-class VMs shut themselves down after sustained disuse; server-class
