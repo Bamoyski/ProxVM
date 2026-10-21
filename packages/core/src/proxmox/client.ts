@@ -262,6 +262,9 @@ export class ProxmoxClient {
         node: String(r.node ?? ""),
         name: String(r.name ?? ""),
         status: (r.status as "running" | "stopped" | "paused") ?? "stopped",
+        // /cluster/resources?type=vm returns LXC containers too; callers that
+        // compare against QEMU guests filter on this.
+        type: String(r.type ?? "qemu"),
         template: Number(r.template ?? 0) === 1 ? 1 : 0,
         maxcpu: Number(r.maxcpu ?? 0),
         cpu: r.cpu === undefined || r.cpu === null ? null : Number(r.cpu),

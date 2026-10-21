@@ -1,5 +1,5 @@
-// ---------------------------------------------------------------------------
-// drift.test.ts — HTTP surface for ground-truth drift (routes/drift.ts).
+﻿// ---------------------------------------------------------------------------
+// drift.test.ts â€” HTTP surface for ground-truth drift (routes/drift.ts).
 // Coverage: real authorization (drift.manage deny-by-default for OPERATOR/
 // USER, allowed for legacy ADMIN), malformed/malshaped finding ids (400/404,
 // never 500), unknown ids, the privacy gate (invisible findings un-actionable),
@@ -105,6 +105,9 @@ describe("drift routes", () => {
     driftHolder = await login(app, "drift-holder", "Holder-Pass-1!");
     const vm = await ctx.vms.create({ vmid: 1200, node: "node1", name: "api-drift-vm", status: "running", osType: "linux" });
     vmId = vm.id;
+    // Drift detection is opt-in (it opens SSH connections to guests). The
+    // manual-run test below needs the switch ON to reach the orchestrator.
+    await ctx.settings.set("drift.enabled", "true", { category: "system" });
   });
 
   afterAll(async () => {
@@ -160,7 +163,7 @@ describe("drift routes", () => {
     it("findings created below the routes surface through the board with vm fields", async () => {
       const result = await applyFindings(ctx.db, [
         { fingerprint: `config:${vmId}:name`, dimension: "config", severity: "low", vmId, title: "t", summary: "s", detail: { field: "name" } },
-      ], { now: new Date() });
+      ], { now: new Date(), resolveStale: false });
       expect(result.created).toBe(1);
       const res = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: admin.cookie } });
       const body = res.json() as { findings: Array<{ id: string; vmId: string | null; dimension: string }> };
@@ -182,7 +185,7 @@ describe("drift routes", () => {
       expect(ack.statusCode).toBe(400);
       expect(ack.json()).toMatchObject({ code: "VALIDATION_ERROR" });
       // Path-traversal-shaped URLs are normalized away by the router and
-      // match no route at all — 404, never 500.
+      // match no route at all â€” 404, never 500.
       const rem = await app.inject({
         method: "POST",
         url: "/api/drift/findings/../../etc/passwd/remediate",
@@ -218,6 +221,60 @@ describe("drift routes", () => {
         payload: { action: "rm -rf" },
       });
       expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe("destructive remediation is confirmed and permission-scoped", () => {
+    it("decommission without the typed confirmation is refused (400)", async () => {
+      // A confirmation that lives only in the browser is not a control: the
+      // API enforces the token itself.
+      await applyFindings(ctx.db, [
+        { fingerprint: `deleted:${vmId}`, dimension: "deleted", severity: "high", vmId, title: "t", summary: "s" },
+      ], { now: new Date(), resolveStale: false });
+      const board = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: admin.cookie } });
+      const row = (board.json() as { findings: Array<{ id: string; dimension: string }> }).findings.find(
+        (f) => f.dimension === "deleted",
+      )!;
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/drift/findings/${row.id}/remediate`,
+        headers: { cookie: admin.cookie, "x-csrf-token": admin.csrf },
+        payload: { action: "decommission" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+      // The wrong token is refused too.
+      const wrong = await app.inject({
+        method: "POST",
+        url: `/api/drift/findings/${row.id}/remediate`,
+        headers: { cookie: admin.cookie, "x-csrf-token": admin.csrf },
+        payload: { action: "decommission", confirmText: "DECOMMISSION wrong-name" },
+      });
+      expect(wrong.statusCode).toBe(400);
+      // The record is untouched.
+      expect(await ctx.vms.findById(vmId)).not.toBeNull();
+    });
+
+    it("drift.manage alone cannot decommission (the blast radius needs vm.delete + guac.manage)", async () => {
+      await applyFindings(ctx.db, [
+        { fingerprint: `deleted:${vmId}`, dimension: "deleted", severity: "high", vmId, title: "t", summary: "s" },
+      ], { now: new Date(), resolveStale: false });
+      const board = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: admin.cookie } });
+      const row = (board.json() as { findings: Array<{ id: string; dimension: string }> }).findings.find(
+        (f) => f.dimension === "deleted",
+      )!;
+      // The holder needs a grant to even SEE the finding, otherwise it reads
+      // as 404 (invisible) - which is an even stronger guarantee.
+      await ctx.vms.setAccess(vmId, holderId);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/drift/findings/${row.id}/remediate`,
+        headers: { cookie: driftHolder.cookie, "x-csrf-token": driftHolder.csrf },
+        payload: { action: "decommission", confirmText: "DECOMMISSION api-drift-vm" },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(await ctx.vms.findById(vmId)).not.toBeNull();
+      await ctx.db.query("DELETE FROM vm_access WHERE vm_id = $1 AND user_id = $2", [vmId, holderId]);
     });
   });
 
@@ -305,7 +362,7 @@ describe("drift routes", () => {
         expect(untouched.rows[0]?.status).toBe("ACKNOWLEDGED"); // denial changed nothing
 
         // The holder's direct vm_access grant is the concrete authorization
-        // the privacy flag requires — it survives the flag.
+        // the privacy flag requires â€” it survives the flag.
         const holderBoard = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: driftHolder.cookie } });
         expect((holderBoard.json() as { findings: Array<{ vmId: string | null }> }).findings.some((f) => f.vmId === vmId)).toBe(true);
       } finally {

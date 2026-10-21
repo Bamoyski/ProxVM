@@ -4,6 +4,12 @@
 //   all-permissions path, custom roles must be granted it explicitly). Every
 //   endpoint re-checks it via the preHandler — authorization is per-route,
 //   never ambient.
+// Destructive actions carry their OWN permission and confirmation: the
+//   decommission remedy drops a VM record and its console connections, so it
+//   needs vm.delete + guac.manage and a server-side typed confirmation —
+//   exactly like DELETE /vms/:id, DELETE /templates/:id and the Guacamole
+//   delete route. A confirmation that exists only in the browser is a UX
+//   nicety, not a control.
 // Audit: remediation/acknowledge writes THROUGH app.audit(request, ...):
 //   actor/ip are filled from the session and redaction is audit-service
 //   policy. Detection passes are logged, not audited (they change nothing).
@@ -17,6 +23,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   AppError,
+  closePowerPeriod,
   getDriftFinding,
   getDriftLastRun,
   listDriftFindings,
@@ -29,6 +36,7 @@ import {
   type CoreContext,
   type DriftActionDeps,
   type DriftPassDeps,
+  type DriftPassResult,
 } from "@proxvm/core";
 import type { FastifyAuthRequest } from "../plugins/auth.js";
 
@@ -51,6 +59,30 @@ export function buildDriftPassDeps(ctx: CoreContext): DriftPassDeps {
   };
 }
 
+/**
+ * ONE drift pass at a time, whoever asked for it.
+ *
+ * WHY the guard lives here and not in the ticker: `startHomelabTickers` kept
+ * its own `driftInFlight` closure, which the manual endpoint could not
+ * reach. A manual run could therefore stack with a ticker pass — both read
+ * `last_probe_at` before either wrote it, so the 24h SSH-probe cooldown was
+ * defeated and the admin alert fired twice. The guard must be reachable by
+ * BOTH callers, so it lives in the module both of them import.
+ *
+ * Returns null when a pass is already running.
+ */
+let driftPassInFlight = false;
+
+export async function runDriftPassExclusive(ctx: CoreContext): Promise<DriftPassResult | null> {
+  if (driftPassInFlight) return null;
+  driftPassInFlight = true;
+  try {
+    return await runDriftPass(buildDriftPassDeps(ctx));
+  } finally {
+    driftPassInFlight = false;
+  }
+}
+
 export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext }): Promise<void> {
   const ctx = opts.ctx;
 
@@ -65,6 +97,8 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
     vms: ctx.vms,
     jobs: ctx.jobs,
     guac: ctx.guac,
+    creds: ctx.creds,
+    closePowerPeriod,
     hostKeys: ctx.hostKeys,
     audit: (entry) => app.audit(request, entry),
     decrypt: ctx.decrypt,
@@ -81,7 +115,16 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
   const assertFindingVisible = async (request: FastifyAuthRequest, findingId: string): Promise<void> => {
     const finding = await getDriftFinding(ctx.db, findingId);
     if (!finding) throw AppError.notFound("Drift finding not found");
-    if (!finding.vmId) return;
+    if (!finding.vmId) {
+      // A finding with no VM target (an orphaned console record) is shown
+      // on the board to privileged roles only; the mutation path must match
+      // the board exactly, otherwise the unguarded path is the reachable one.
+      const bearer = await app.requireAuth(request);
+      if (!bearer.roles.includes("ADMIN") && !bearer.roles.includes("OPERATOR")) {
+        throw AppError.notFound("Drift finding not found");
+      }
+      return;
+    }
     const bearer = await app.requireAuth(request);
     const gate = await ctx.vms.visibleTo(bearer.id, bearer.roles, finding.vmId);
     if (!gate.allowed) throw AppError.notFound("Drift finding not found");
@@ -102,6 +145,21 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       const findings = await listDriftFindings(ctx.db, { status: query.status, limit: query.limit });
       const lastRun = await getDriftLastRun(ctx.settings);
 
+      // Per-request memo: visibleTo() is a findById plus up to two access
+      // queries, and the board polls every 30s over up to 200 findings. The
+      // naive loop was ~4 queries per finding (~800 per request) and
+      // re-read the VM row a second time for the label.
+      const vmCache = new Map<string, { allowed: boolean; vmName: string | null; vmid: number | null }>();
+      const vmInfo = async (vmId: string): Promise<{ allowed: boolean; vmName: string | null; vmid: number | null }> => {
+        const cached = vmCache.get(vmId);
+        if (cached) return cached;
+        const gate = await ctx.vms.visibleTo(bearer.id, bearer.roles, vmId);
+        const vm = gate.allowed ? await ctx.vms.findById(vmId).catch(() => null) : null;
+        const info = { allowed: gate.allowed, vmName: vm?.name ?? null, vmid: vm?.vmid ?? null };
+        vmCache.set(vmId, info);
+        return info;
+      };
+
       // Flag-aware per-finding visibility (same gate as every VM route).
       // Vmless findings (decommissioned VMs / ghost guac records) resolve
       // their gate only for privileged roles: the referenced VM row either
@@ -112,15 +170,12 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       for (const finding of findings) {
         const row: (typeof finding) & { vmName?: string | null; vmid?: number | null } = { ...finding };
         if (finding.vmId) {
-          const gate = await ctx.vms.visibleTo(bearer.id, bearer.roles, finding.vmId);
-          if (!gate.allowed) continue;
-          const vm = await ctx.vms.findById(finding.vmId).catch(() => null);
+          const info = await vmInfo(finding.vmId);
+          if (!info.allowed) continue;
           // Soft-deleted records keep their name/vmid on the finding row so
           // the UI can label the decommission confirm properly.
-          if (vm) {
-            row.vmName = vm.name;
-            row.vmid = vm.vmid;
-          }
+          row.vmName = info.vmName;
+          row.vmid = info.vmid;
         } else if (!privileged) {
           continue;
         }
@@ -133,12 +188,22 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
 
   app.post(
     "/drift/run",
-    { preHandler: app.requirePermission("drift.manage") },
+    {
+      preHandler: app.requirePermission("drift.manage"),
+      // A pass is expensive: one cluster listing, a config read per VM, a
+      // guest-agent round trip per running VM and up to ten SSH probes.
+      // The repo convention for expensive endpoints is an explicit limit
+      // (discovery 10/hr, guacamole 10/hr, backups 5/hr); the global
+      // 400/min was not enough.
+      config: { rateLimit: { max: 10, timeWindow: "1 hour" } },
+    },
     async () => {
       // Manual pass shares the exact orchestrator the ticker uses (same
       // exemptions, same fail-open) — no privileged "force" path: the
       // run cannot mutate anything beyond findings, so force is meaningless.
-      return await runDriftPass(buildDriftPassDeps(ctx));
+      const result = await runDriftPassExclusive(ctx);
+      if (!result) throw AppError.conflict("A drift pass is already running");
+      return result;
     },
   );
 
@@ -164,7 +229,7 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       const bearer = await app.requireAuth(request);
       const params = z.object({ id: FINDING_ID }).parse(request.params);
       const body = z
-        .object({ action: z.enum(REMEDIATE_ACTIONS) })
+        .object({ action: z.enum(REMEDIATE_ACTIONS), confirmText: z.string().optional() })
         .parse(request.body ?? {});
       await assertFindingVisible(request, params.id);
       const deps = actionDeps(request);
@@ -174,8 +239,24 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
           return await adoptDriftFinding(deps, params.id, actor);
         case "resync_ip":
           return await resyncDriftIp(deps, params.id, actor);
-        case "decommission":
+        case "decommission": {
+          // The blast radius is a VM record PLUS its console connections, so
+          // it needs the permissions of that blast radius — not "drift.manage",
+          // which is a review permission.
+          await app.requirePermission("vm.delete")(request);
+          await app.requirePermission("guac.manage")(request);
+          // Server-side typed confirmation, same shape as DELETE /vms/:id.
+          // The browser's DECOMMISSION <name> prompt is a second line of
+          // defence, not the control.
+          const finding = await getDriftFinding(ctx.db, params.id);
+          if (!finding?.vmId) throw AppError.notFound("Drift finding not found");
+          const vm = await ctx.vms.requireById(finding.vmId);
+          const expected = `DECOMMISSION ${vm.name}`;
+          if (body.confirmText !== expected) {
+            throw AppError.validation(`Confirmation text must be exactly: ${expected}`);
+          }
           return await decommissionDriftVm(deps, params.id, actor);
+        }
         case "delete_orphan_connection":
           return await deleteOrphanDriftConnection(deps, params.id, actor);
       }

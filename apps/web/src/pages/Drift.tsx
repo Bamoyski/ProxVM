@@ -45,7 +45,7 @@ interface DriftFinding {
 }
 
 interface DriftLastRun {
-  startedAt: string;
+  at: string;
   skipped: string | null;
   liveChecked: boolean;
   created: number;
@@ -117,10 +117,24 @@ export default function Drift() {
   });
 
   const act = useMutation({
-    mutationFn: ({ finding, action }: { finding: DriftFinding; action: RemediationAction | "acknowledge" }) =>
+    mutationFn: ({
+      finding,
+      action,
+      confirmText,
+    }: {
+      finding: DriftFinding;
+      action: RemediationAction | "acknowledge";
+      /** Server-side confirmation token for the destructive actions. The
+       *  browser prompt is a second line of defence; the API enforces the
+       *  token itself. */
+      confirmText?: string;
+    }) =>
       action === "acknowledge"
         ? api<{ status: string }>(`/drift/findings/${finding.id}/acknowledge`, { method: "POST", body: {} })
-        : api<{ status: string }>(`/drift/findings/${finding.id}/remediate`, { method: "POST", body: { action } }),
+        : api<{ status: string }>(`/drift/findings/${finding.id}/remediate`, {
+            method: "POST",
+            body: confirmText ? { action, confirmText } : { action },
+          }),
     onSuccess: (_r, v) => {
       toast.ok(
         v.action === "acknowledge" ? "Finding acknowledged" : "Remediation applied",
@@ -151,6 +165,7 @@ export default function Drift() {
   const remediate = async (f: DriftFinding): Promise<void> => {
     const action = remediationFor(f);
     if (!action) return;
+    let confirmText: string | undefined;
     if (action === "decommission") {
       const label =
         f.vmName ?? (f.detail.vmid != null ? `vmid ${String(f.detail.vmid)}` : "this record");
@@ -176,6 +191,9 @@ export default function Drift() {
         requireText: typed,
       });
       if (!ok) return;
+      // The API enforces this token itself; the prompt is a second line of
+      // defence, not the control.
+      confirmText = typed;
     } else if (action === "delete_orphan_connection") {
       const ok = await confirm({
         title: "Delete orphan connection",
@@ -193,7 +211,7 @@ export default function Drift() {
       const ok = await confirm({ title: "Apply remediation", body: copy[action], confirmLabel: "Apply" });
       if (!ok) return;
     }
-    act.mutate({ finding: f, action });
+    act.mutate({ finding: f, action, confirmText });
   };
 
   const acknowledge = async (f: DriftFinding): Promise<void> => {

@@ -211,6 +211,8 @@ export interface ProxmoxQemuResource {
   node: string;
   name: string;
   status: "running" | "stopped" | "paused";
+  /** "qemu" or "lxc" - /cluster/resources?type=vm returns BOTH. */
+  type?: string;
   template: 0 | 1;
   maxcpu: number;
   cpu: number | null;

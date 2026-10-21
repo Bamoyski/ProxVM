@@ -149,6 +149,7 @@ function AppSettings() {
           announcementText: string | null;
           announcementLevel: "info" | "warn";
           idleShutdownEnabled: boolean;
+          driftEnabled: boolean;
           idleMinutes: number;
           threatWebhookUrl: string | null;
           threatMinSeverity: string;
@@ -185,6 +186,11 @@ function AppSettings() {
   const shownIdleEnabled = idleEnabled ?? currentIdleEnabled;
   const currentIdleMinutes = data?.settings?.idleMinutes ?? 120;
   const shownIdleMinutes = idleTouched ? idleMinutes : String(currentIdleMinutes);
+
+  // Drift detection is opt-in: it opens SSH connections to guests and probes
+  // the stored passwords, so it stays off until an operator turns it on.
+  const [driftEnabled, setDriftEnabled] = useState<boolean | null>(null);
+  const shownDriftEnabled = driftEnabled ?? (data?.settings?.driftEnabled ?? false);
 
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookTouched, setWebhookTouched] = useState(false);
@@ -242,6 +248,7 @@ function AppSettings() {
         announcementText?: string | null;
         announcementLevel?: "info" | "warn";
         idleShutdownEnabled?: boolean;
+        driftEnabled?: boolean;
         idleMinutes?: number;
         threatWebhookUrl?: string | null;
         threatMinSeverity?: "high" | "medium" | "low";
@@ -306,6 +313,7 @@ function AppSettings() {
         body.idleShutdownEnabled = shownIdleEnabled;
         body.idleMinutes = minutes;
       }
+      if (driftEnabled !== null) body.driftEnabled = shownDriftEnabled;
       if (modeTouched) body.selfServeMode = shownMode;
       if (siteKeyTouched) {
         if (shownSiteKey.trim() !== "" && shownSiteKey.trim().length > 512) {
@@ -320,6 +328,7 @@ function AppSettings() {
       setAnnouncementTouched(false);
       setAnnouncementLevelTouched(false);
       setIdleTouched(false);
+      setDriftEnabled(null);
       setWebhookTouched(false);
       setSeverityTouched(false);
       setGotifyTouched(false);
@@ -419,6 +428,21 @@ function AppSettings() {
           />
           <span className="pv-hint">min idle (5–10080)</span>
         </div>
+      </Field>
+      <Field
+        label="Ground-truth drift detection"
+        hint="Reconciles the ProxVM database against live Proxmox every 15 minutes and records the differences (deleted guests, renames, resized hardware, changed IPs, stale credentials). OFF by default: the pass opens SSH connections to guests and probes the stored passwords. Remediation is always a separate, confirmed action."
+      >
+        <label className="pv-checkrow">
+          <input
+            type="checkbox"
+            checked={shownDriftEnabled}
+            onChange={(e) => {
+              setDriftEnabled(e.target.checked);
+            }}
+          />
+          Enable drift detection
+        </label>
       </Field>
       <Field
         label="Threat webhook (blank = disabled)"

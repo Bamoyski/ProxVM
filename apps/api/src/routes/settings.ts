@@ -52,6 +52,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         announcementText: z.string().max(500).nullable().optional(),
         announcementLevel: z.enum(["info", "warn"]).optional(),
         idleShutdownEnabled: z.boolean().optional(),
+        driftEnabled: z.boolean().optional(),
         idleMinutes: z.number().int().min(5).max(10080).optional(),
         threatWebhookUrl: z.string().max(512).nullable().optional(),
         threatMinSeverity: z.enum(["critical", "high", "medium", "low"]).optional(),
@@ -82,6 +83,14 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     }
     if (body.idleShutdownEnabled !== undefined) {
       await ctx.settings.set("power.idle_shutdown_enabled", body.idleShutdownEnabled ? "true" : "false", {
+        category: "system",
+      });
+    }
+    if (body.driftEnabled !== undefined) {
+      // Drift detection opens SSH connections to guests and probes stored
+      // passwords, so it is opt-in. The pass treats anything other than an
+      // explicit "true" as OFF.
+      await ctx.settings.set("drift.enabled", body.driftEnabled ? "true" : "false", {
         category: "system",
       });
     }
@@ -299,6 +308,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     const announcement = await getAnnouncement(ctx.settings);
     const idleEnabled = await ctx.settings.get("power.idle_shutdown_enabled");
     const idleMinutes = await ctx.settings.get("power.idle_minutes");
+    const driftEnabled = await ctx.settings.get("drift.enabled");
     const threatWebhookUrl = await ctx.settings.get("threats.webhook_url");
     const threatMinSeverity = await ctx.settings.get("threats.min_severity");
     const gotify = await getGotifyConfig(ctx.settings);
@@ -322,6 +332,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         announcementText: announcement?.text ?? null,
         announcementLevel: announcement?.level ?? "info",
         idleShutdownEnabled: (idleEnabled?.value ?? "false") === "true",
+        driftEnabled: (driftEnabled?.value ?? "false") === "true",
         idleMinutes: idleMinutes ? Number(idleMinutes.value) : 120,
         threatWebhookUrl: threatWebhookUrl?.value ?? null,
         threatMinSeverity: threatMinSeverity?.value ?? "high",

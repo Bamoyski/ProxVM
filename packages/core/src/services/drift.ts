@@ -292,14 +292,42 @@ interface VmRecordLite {
 
 // --- Persistence ------------------------------------------------------------
 
+/**
+ * Per-VM set of the dimensions whose check did NOT complete this pass.
+ *
+ * WHY a map of sets and not a flat VM set: "not observed" is not "verified
+ * fixed", and each dimension has its own failure mode (agent down, probe
+ * cooldown, config read error). A flat per-VM set would preserve dimensions
+ * whose check DID run (a config finding whose name no longer differs would
+ * stay open forever) or, worse, a dimension hardcoded into the resolution
+ * rule would silently auto-resolve the dimensions nobody listed.
+ *
+ * Key = vmId, value = the dimensions that could not be checked.
+ */
+export type UnrefinedMap = Map<string, Set<DriftDimension>>;
+
+/** Mark the given dimensions as "not checked this pass" for one VM. */
+export function markUnrefined(
+  map: UnrefinedMap,
+  vmId: string,
+  ...dimensions: DriftDimension[]
+): void {
+  const current = map.get(vmId) ?? new Set<DriftDimension>();
+  for (const dim of dimensions) current.add(dim);
+  map.set(vmId, current);
+}
+
 export interface ApplyOpts {
   /** Last-seen row (Date) for idempotent upserts/in resolve stamps. */
   now: Date;
   /** VMs exempt this pass: their findings are preserved, never auto-resolved. */
   exemptVmIds?: Set<string>;
-  /** VMs whose ip/credential comparison did NOT run this pass (probe skipped,
-   * agent down, stopped...): their ip/credential findings are preserved. */
-  unrefinedVmIds?: Set<string>;
+  /**
+   * Dimensions whose check could not complete this pass. A finding in one of
+   * these dimensions is PRESERVED, never auto-resolved: absence of evidence
+   * is not evidence of a fixed state.
+   */
+  unrefined?: UnrefinedMap;
   /**
    * Whether findings that did not reproduce get auto-resolved this call.
    * The orchestrator's main pass leaves this on; internal callers (the
@@ -378,6 +406,13 @@ export async function applyFindings(
       // Still reproducing: bump evidence, refresh detail. A RESOLVED row
       // re-opens (re-occurrence); OPEN/ACKNOWLEDGED keep their state so an
       // acknowledged drift stays acknowledged while it persists.
+      //
+      // remediated_at/remediated_by are the LAST remediation of this finding
+      // and are deliberately NOT cleared on re-open: the file's contract is
+      // that the resolution history survives ("resolved_at history is the
+      // whole point"), so a drift that comes back must not erase the record
+      // of who remediated it last time. They do NOT claim that the CURRENT
+      // occurrence was remediated - the status does.
       await db.query(
         `UPDATE drift_findings SET
            severity = $2, title = $3, summary = $4, detail = $5,
@@ -386,8 +421,6 @@ export async function applyFindings(
            occurrences = CASE WHEN status = 'RESOLVED' THEN occurrences + 1 ELSE occurrences END,
            resolved_at = CASE WHEN status = 'RESOLVED' THEN NULL ELSE resolved_at END,
            resolved_reason = CASE WHEN status = 'RESOLVED' THEN NULL ELSE resolved_reason END,
-           remediated_at = CASE WHEN status = 'RESOLVED' THEN NULL ELSE remediated_at END,
-           remediated_by = CASE WHEN status = 'RESOLVED' THEN NULL ELSE remediated_by END,
            updated_at = $6
          WHERE fingerprint = $1`,
         [d.fingerprint, d.severity, d.title, d.summary, JSON.stringify(d.detail ?? {}), nowIso],
@@ -410,15 +443,13 @@ export async function applyFindings(
   for (const row of active.rows) {
     if (produced.has(row.fingerprint)) continue;
     if (row.vm_id && opts.exemptVmIds?.has(row.vm_id)) continue;
-    // ip/credential findings survive a pass whose check could not run
-    // (agent down, stopped guest, probe cooldown): absence of evidence is
-    // not evidence of fixed state.
-    if (
-      row.vm_id &&
-      (row.dimension === "ip" || row.dimension === "credential") &&
-      opts.unrefinedVmIds?.has(row.vm_id)
-    ) {
-      continue;
+    // A finding whose dimension could not be checked this pass is PRESERVED,
+    // never auto-resolved. The scope is the (vm, dimension) pair: a config
+    // finding whose name no longer differs must still resolve even when the
+    // credential probe for the same VM was inconclusive.
+    if (row.vm_id) {
+      const dims = opts.unrefined?.get(row.vm_id);
+      if (dims && dims.has(row.dimension as DriftDimension)) continue;
     }
     toResolve.push(row.fingerprint);
   }
@@ -500,34 +531,106 @@ async function upsertVmState(db: Pool, vmId: string, patch: Partial<VmStateRow>)
   );
 }
 
-export function findableResources(resources: ProxmoxQemuResource[] | unknown): DriftLiveResource[] {
+interface RawLiveResource {
+  vmid: number;
+  node: string;
+  name: string | null;
+  status: string;
+  template: boolean;
+}
+
+/** Normalize a Proxmox cluster resource listing into the shape the detectors
+ *  consume. LXC containers are dropped: ProxVM tracks QEMU guests only, and
+ *  /cluster/resources?type=vm returns both kinds. */
+function normalizeResources(resources: ProxmoxQemuResource[] | unknown): RawLiveResource[] {
   const rows = Array.isArray(resources) ? (resources as ProxmoxQemuResource[]) : [];
   return rows
-    .filter((r) => r && typeof r.vmid === "number" && r.template !== 1)
+    .filter((r) => r && typeof r.vmid === "number")
+    .filter((r) => (r as { type?: string }).type !== "lxc")
     .map((r) => ({
       vmid: r.vmid,
       node: String(r.node ?? ""),
       name: typeof r.name === "string" ? r.name : null,
       status: String(r.status ?? ""),
+      template: Number(r.template ?? 0) === 1,
     }));
+}
+
+/**
+ * Every QEMU guest in the cluster view, TEMPLATES INCLUDED.
+ *
+ * WHY templates count as "exists": a guest that was converted to a Proxmox
+ * template out-of-band still occupies its vmid. Excluding templates from the
+ * deletion check would report such a guest as deleted, and the decommission
+ * remedy would then soft-delete a live record.
+ */
+export function allQemuResources(resources: ProxmoxQemuResource[] | unknown): DriftLiveResource[] {
+  return normalizeResources(resources).map((r) => ({
+    vmid: r.vmid,
+    node: r.node,
+    name: r.name,
+    status: r.status,
+  }));
+}
+
+/** The guests that are running VMs (templates excluded) - the set a ProxVM
+ *  record can be compared against for config/hardware drift. */
+export function findableResources(resources: ProxmoxQemuResource[] | unknown): DriftLiveResource[] {
+  return normalizeResources(resources)
+    .filter((r) => !r.template)
+    .map((r) => ({
+      vmid: r.vmid,
+      node: r.node,
+      name: r.name,
+      status: r.status,
+    }));
+}
+
+/**
+ * A cluster view is "degraded" when an implausible share of the tracked
+ * fleet vanishes at once.
+ *
+ * WHY: GET /cluster/resources is silently PARTIAL when a node is offline or
+ * the API token lacks VM.Audit on it. Treating a partial listing as "these
+ * guests were deleted" turns a read-only detector into a mass-deletion
+ * recommendation - and the decommission remedy re-verifies against the SAME
+ * degraded source, so the re-verify passes.
+ *
+ * Small fleets get no statistical signal, so the guard needs BOTH an
+ * absolute and a relative threshold before it fires.
+ */
+export function clusterViewLooksDegraded(recorded: number, deleted: number): boolean {
+  if (recorded < 5) return false;
+  return deleted >= 3 && deleted / recorded >= 0.2;
 }
 
 /**
  * Record the in-band hardware baseline after Proxmox accepts an edit. The
  * snapshot is Proxmox-owned reality: routes write it only after a confirmed
  * task, never instead of one.
+ *
+ * A partial/garbled config is REFUSED, not written: a baseline of 0 cores
+ * would produce a permanent false finding, because the baseline is never
+ * advanced while a finding exists, so it could never self-heal.
+ * Returns whether a baseline was written.
  */
 export async function bumpHardwareSnapshot(
   db: Pool,
   vmId: string,
   hw: { cores: number; memory: number; net: Array<Record<string, unknown>> | null },
-): Promise<void> {
+): Promise<boolean> {
+  const cores = Number(hw.cores);
+  const memory = Number(hw.memory);
+  if (!Number.isFinite(cores) || cores <= 0 || !Number.isFinite(memory) || memory <= 0) {
+    return false;
+  }
   await upsertVmState(db, vmId, {
-    cores: hw.cores,
-    memory_mb: hw.memory,
+    cores,
+    memory_mb: memory,
     net_json: canonNet(hw.net),
     snapshotted_at: new Date(),
   });
+  return true;
 }
 
 export interface DriftPassDeps {
@@ -551,21 +654,60 @@ export interface DriftPassDeps {
  * the settings markers; remediation is a separate, explicit path.
  */
 export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promise<DriftPassResult> {
+  /**
+   * Persist the "this pass did not run" outcome so the board can say WHY it
+   * is stale. Without it the skip reason only ever reached the caller of a
+   * manual run, and a ticker pass that failed open looked like a healthy
+   * board.
+   *
+   * A DISABLED feature is not persisted: nobody is looking at the board and
+   * a settings row per pass would be pure churn. "Unconfigured" and
+   * "Proxmox down" ARE persisted — the feature is on, so the operator must
+   * be able to see that nothing was checked.
+   */
+  const skip = async (reason: "disabled" | "unconfigured" | "proxmox_down"): Promise<DriftPassResult> => {
+    const result: DriftPassResult = {
+      created: 0, updated: 0, resolved: 0, exempted: 0, liveChecked: false, newFingerprints: [], skipped: reason,
+    };
+    if (reason !== "disabled") {
+      await deps.settings.set(
+        DRIFT_LAST_RUN_KEY,
+        JSON.stringify({
+          at: now.toISOString(),
+          created: 0, updated: 0, resolved: 0, exempted: 0,
+          liveChecked: false,
+          skipped: reason,
+        }),
+        { category: "system" },
+      );
+    }
+    return result;
+  };
+
+  // Opt-in: a drift pass opens SSH connections to guests and probes stored
+  // passwords, so it must be switched ON deliberately. UNSET means OFF (an
+  // unset key used to mean ON, which ran the pass on every install).
   const enabled = (await deps.settings.getPlain(DRIFT_ENABLED_KEY))?.trim().toLowerCase();
-  if (enabled === "false") {
-    return { created: 0, updated: 0, resolved: 0, exempted: 0, liveChecked: false, newFingerprints: [], skipped: "disabled" };
+  if (enabled !== "true") {
+    return await skip("disabled");
   }
 
+  let allResources: DriftLiveResource[];
   let resources: DriftLiveResource[];
   try {
-    resources = findableResources(await (await deps.getProxmoxClient()).clusterResources());
+    const raw = await (await deps.getProxmoxClient()).clusterResources();
+    // Two views: the full guest list (templates included) answers "does this
+    // guest still exist?", the non-template list answers "can I compare this
+    // record against a running VM?".
+    allResources = allQemuResources(raw);
+    resources = findableResources(raw);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof AppError && err.code === "CONFIGURATION_ERROR") {
-      return { created: 0, updated: 0, resolved: 0, exempted: 0, liveChecked: false, newFingerprints: [], skipped: "unconfigured" };
+      return await skip("unconfigured");
     }
     deps.logger.warn({ error: message }, "drift pass skipped: Proxmox unreachable");
-    return { created: 0, updated: 0, resolved: 0, exempted: 0, liveChecked: false, newFingerprints: [], skipped: "proxmox_down" };
+    return await skip("proxmox_down");
   }
 
   const recorded = await deps.vms.list();
@@ -574,42 +716,75 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
   const active = recorded.filter((vm) => !exemptIds.has(vm.id));
 
   const detected: Detected[] = [];
-  const unrefined = new Set<string>();
+  const unrefined: UnrefinedMap = new Map();
   const probed = new Set<string>();
 
   detected.push(...detectConfigDrift(active, resources));
-  detected.push(...detectDeletedVms(active, resources));
+
+  // Deletion detection compares against the FULL guest list (templates count
+  // as existing) and is guarded against a partial cluster listing: a node
+  // that is offline or not visible to the API token makes GET
+  // /cluster/resources silently incomplete, and treating that as "these
+  // guests were deleted" would recommend destroying live records.
+  const deletedFindings = detectDeletedVms(active, allResources);
+  if (clusterViewLooksDegraded(active.length, deletedFindings.length)) {
+    deps.logger.warn(
+      { tracked: active.length, vanished: deletedFindings.length },
+      "cluster view looks partial; deletion findings suppressed this pass",
+    );
+    // Nothing can be compared this pass: preserve every per-VM dimension.
+    for (const vm of active) markUnrefined(unrefined, vm.id, "hw", "ip", "credential");
+  } else {
+    detected.push(...deletedFindings);
+  }
 
   for (const vm of active) {
     const lr = resources.find((r) => r.vmid === vm.vmid);
-    if (!lr) continue; // deleted finding already emitted
+    if (!lr) {
+      // Not in the live guest view: the deletion check (above) already had
+      // its say. No per-VM comparison ran, so every per-VM dimension is
+      // unrefined - otherwise a still-real IP/credential finding would be
+      // auto-resolved by a guest that merely vanished from a partial listing.
+      markUnrefined(unrefined, vm.id, "hw", "ip", "credential");
+      continue;
+    }
     try {
       // Hardware snapshot comparison (any power state — qemuConfig works while stopped).
       const cfg = await (await deps.getProxmoxClient()).qemuConfig(lr.node, vm.vmid);
       const state = await getVmState(deps.db, vm.id);
-      const hwFindings = detectHardwareDrift(
-        vm.id,
-        vm.name,
-        state ? { cores: state.cores, memoryMb: state.memory_mb, net: state.net_json } : null,
-        {
-          cores: Number(cfg.cores ?? 0),
-          memory: Number(cfg.memory ?? 0),
-          net: cfg.net ?? null,
-        },
-      );
-      detected.push(...hwFindings);
-      // Advance the baseline ONLY when the detector stayed silent. Writing the
-      // live config unconditionally would overwrite the baseline it just
-      // compared against, so the finding would auto-resolve on the next pass
-      // without anyone adopting (or reverting) the out-of-band change — the
-      // exact false-resolution loop this snapshot exists to prevent.
-      if (hwFindings.length === 0) {
-        await upsertVmState(deps.db, vm.id, {
-          cores: Number(cfg.cores ?? 0),
-          memory_mb: Number(cfg.memory ?? 0),
-          net_json: canonNet(cfg.net ?? null),
-          snapshotted_at: now,
-        });
+      // A partial/garbled config must not become the baseline: a baseline of
+      // 0 cores would produce a permanent false finding (the baseline is
+      // never advanced while a finding exists, so it could never self-heal).
+      const liveCores = Number(cfg.cores);
+      const liveMemory = Number(cfg.memory);
+      const hwUsable = Number.isFinite(liveCores) && liveCores > 0 && Number.isFinite(liveMemory) && liveMemory > 0;
+      if (!hwUsable) {
+        markUnrefined(unrefined, vm.id, "hw");
+      } else {
+        const hwFindings = detectHardwareDrift(
+          vm.id,
+          vm.name,
+          state ? { cores: state.cores, memoryMb: state.memory_mb, net: state.net_json } : null,
+          {
+            cores: liveCores,
+            memory: liveMemory,
+            net: cfg.net ?? null,
+          },
+        );
+        detected.push(...hwFindings);
+        // Advance the baseline ONLY when the detector stayed silent. Writing the
+        // live config unconditionally would overwrite the baseline it just
+        // compared against, so the finding would auto-resolve on the next pass
+        // without anyone adopting (or reverting) the out-of-band change — the
+        // exact false-resolution loop this snapshot exists to prevent.
+        if (hwFindings.length === 0) {
+          await upsertVmState(deps.db, vm.id, {
+            cores: liveCores,
+            memory_mb: liveMemory,
+            net_json: canonNet(cfg.net ?? null),
+            snapshotted_at: now,
+          });
+        }
       }
 
       // IP drift (agent round-trip): only comparable for running guests; a
@@ -622,13 +797,13 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
           if (liveIp) {
             detected.push(...detectIpDrift(vm, liveIp));
           } else {
-            unrefined.add(vm.id);
+            markUnrefined(unrefined, vm.id, "ip");
           }
         } else {
-          unrefined.add(vm.id);
+          markUnrefined(unrefined, vm.id, "ip");
         }
       } else {
-        unrefined.add(vm.id);
+        markUnrefined(unrefined, vm.id, "ip");
       }
 
       // Credential staleness (SSH only for v1; Windows RDP port probing can
@@ -642,26 +817,26 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
         const stateRow = await getVmState(deps.db, vm.id);
         const lastProbe = stateRow?.last_probe_at?.getTime() ?? 0;
         if (now.getTime() - lastProbe < CREDENTIAL_PROBE_COOLDOWN_MS) {
-          unrefined.add(vm.id);
+          markUnrefined(unrefined, vm.id, "credential");
         } else if (probed.size < MAX_CREDENTIAL_PROBES_PER_PASS) {
           probed.add(vm.id);
           const outcome = await probeCredential(deps, vm, now);
           detected.push(...outcome.findings);
           // Transport failures (and probe-cap deferrals) prove nothing about
           // the credential: preserve an existing finding instead of resolving it.
-          if (!outcome.conclusive) unrefined.add(vm.id);
+          if (!outcome.conclusive) markUnrefined(unrefined, vm.id, "credential");
         } else {
-          unrefined.add(vm.id);
+          markUnrefined(unrefined, vm.id, "credential");
         }
       } else {
-        unrefined.add(vm.id);
+        markUnrefined(unrefined, vm.id, "credential");
       }
     } catch (err) {
       deps.logger.warn(
         { vmId: vm.id, vmid: vm.vmid, error: err instanceof Error ? err.message : String(err) },
-        "drift check failed for VM; its findings are preserved this pass",
+        "drift check failed for this VM; its hw/ip/credential findings are preserved this pass",
       );
-      unrefined.add(vm.id);
+      markUnrefined(unrefined, vm.id, "hw", "ip", "credential");
     }
   }
 
@@ -676,7 +851,7 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
   const counts = await applyFindings(deps.db, detected, {
     now,
     exemptVmIds: exemptIds,
-    unrefinedVmIds: unrefined,
+    unrefined,
   });
 
   const summary = {
@@ -686,6 +861,10 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
     resolved: counts.resolved,
     exempted,
     liveChecked: true,
+    // The skip reason is part of the summary: the board has to be able to say
+    // "the last pass did not run" (feature off / Proxmox unreachable),
+    // otherwise a stale board looks like a healthy one.
+    skipped: null as string | null,
   };
   await deps.settings.set(DRIFT_LAST_RUN_KEY, JSON.stringify(summary), { category: "system" });
 
@@ -812,7 +991,17 @@ export async function listDriftFindings(
 
 export async function getDriftLastRun(
   settings: Pick<SettingsService, "getJson" | "getPlain">,
-): Promise<{ at: string; created: number; updated: number; resolved: number; exempted: number; liveChecked: boolean } | null> {
+): Promise<{
+  at: string;
+  created: number;
+  updated: number;
+  resolved: number;
+  exempted: number;
+  liveChecked: boolean;
+  /** Why the last pass did not run ("disabled"/"unconfigured"/"proxmox_down"),
+   *  or null when it ran. Persisted so the board can flag a stale pass. */
+  skipped: string | null;
+} | null> {
   const raw = await settings.getJson<Record<string, unknown>>(DRIFT_LAST_RUN_KEY);
   if (!raw || typeof raw.at !== "string") return null;
   return {
@@ -822,6 +1011,7 @@ export async function getDriftLastRun(
     resolved: Number(raw.resolved ?? 0),
     exempted: Number(raw.exempted ?? 0),
     liveChecked: raw.liveChecked === true,
+    skipped: typeof raw.skipped === "string" ? raw.skipped : null,
   };
 }
 
@@ -829,9 +1019,18 @@ export async function getDriftLastRun(
 
 export interface DriftActionDeps {
   db: Pool;
-  vms: Pick<VmsRepository, "findById" | "requireById" | "softDelete" | "updateName" | "updateNode" | "updateIp">;
+  vms: Pick<
+    VmsRepository,
+    "findById" | "requireById" | "softDelete" | "updateName" | "updateNode" | "updateIp" | "revokeAllAccess" | "list"
+  >;
   jobs: Pick<JobsRepository, "activeJobsForVm">;
   guac: Pick<GuacamoleService, "listConnectionRecords" | "updateConnectionHostname" | "deleteVmResources" | "deleteConnectionRecord">;
+  /** Vault cleanup: a soft delete does NOT cascade, so the stored password
+   *  of a decommissioned VM would otherwise stay encrypted in the DB. */
+  creds: Pick<CredentialsService, "delete">;
+  /** Metering cleanup: an open power period keeps accruing usage for a VM
+   *  that no longer exists (monthlyUsage counts open periods up to now). */
+  closePowerPeriod: (db: Pool, vmId: string) => Promise<number>;
   hostKeys: Pick<HostKeyService, "policy">;
   audit: (entry: AuditEntryInput) => Promise<void>;
   decrypt: (stored: string) => string;
@@ -882,6 +1081,16 @@ async function activeFinding(deps: DriftActionDeps, findingId: string): Promise<
  * Decommission: the VM's guest is GONE from Proxmox. Soft-delete the ProxVM
  * record and remove its Guacamole connections. Never touches Proxmox (there
  * is nothing there). Re-verifies absence + no active job before acting.
+ *
+ * Two safety rules beyond the plain re-verification:
+ * 1. The re-verification uses the FULL guest list (templates included). A
+ *    guest converted to a Proxmox template still occupies its vmid, so
+ *    "absent from the template-filtered list" would be a false deletion.
+ * 2. A cluster view that looks partial (a node offline or invisible to the
+ *    API token makes /cluster/resources silently incomplete) refuses the
+ *    whole operation. Re-verifying against the SAME degraded source proves
+ *    nothing, and the blast radius is a live record plus its console
+ *    connections.
  */
 export async function decommissionDriftVm(
   deps: DriftActionDeps,
@@ -897,11 +1106,24 @@ export async function decommissionDriftVm(
   if (!vm) throw AppError.notFound("VM record not found");
   await assertNoActiveJob(deps, vm.id);
   // Re-verify against live Proxmox right now — not against the finding.
-  const resources = findableResources(await (await deps.getProxmoxClient()).clusterResources());
-  if (resources.some((r) => r.vmid === vm.vmid)) {
-    // The guest reappeared (created again under the same vmid?): auto-resolve
-    // on the next pass. Acting now could nuke a legitimate record.
+  const client = await deps.getProxmoxClient();
+  const allGuests = allQemuResources(await client.clusterResources());
+  if (allGuests.some((r) => r.vmid === vm.vmid)) {
+    // The guest reappeared (or was converted to a template, which still
+    // occupies the vmid): auto-resolve on the next pass. Acting now could
+    // nuke a legitimate record.
     throw AppError.conflict("A guest with this vmid exists again; the finding is stale (auto-resolves on the next pass)");
+  }
+  // A partial cluster view would make EVERY missing guest look deleted, so
+  // the same evidence that produced the finding must not be enough to act
+  // on it. Refuse while the view looks incomplete.
+  const tracked = await deps.vms.list();
+  const vanished = tracked.filter((t) => !allGuests.some((r) => r.vmid === t.vmid)).length;
+  if (clusterViewLooksDegraded(tracked.length, vanished)) {
+    throw AppError.conflict(
+      `The Proxmox cluster view looks incomplete (${vanished} of ${tracked.length} tracked guests are missing); ` +
+        "decommission is refused until the cluster view is whole again",
+    );
   }
   let guacCleanupAttempted = false;
   try {
@@ -916,7 +1138,14 @@ export async function decommissionDriftVm(
       "Guacamole resource cleanup failed during decommission; orphaned records will be re-detected",
     );
   }
+  // Soft delete is an UPDATE, so the FK cascades never fire. Replicate the
+  // cleanup the canonical DELETE /vms/:id path performs, otherwise the
+  // decommissioned VM keeps its access grants, its stored password and an
+  // open metering period.
+  await deps.creds.delete(vm.id);
+  await deps.closePowerPeriod(deps.db, vm.id);
   await deps.vms.softDelete(vm.id);
+  const revokedGrants = await deps.vms.revokeAllAccess(vm.id);
   await resolveFinding(deps.db, finding, actor, now);
   await deps.audit({
     event: "DRIFT_REMEDIATED",
@@ -928,6 +1157,7 @@ export async function decommissionDriftVm(
       vmName: vm.name,
       vmid: vm.vmid,
       guacCleanupAttempted,
+      revokedGrants,
     },
   });
   return { resolved: true, action: "decommission" };
@@ -973,13 +1203,20 @@ export async function adoptDriftFinding(
       throw AppError.validation(`Unknown config drift field "${field}"`);
     }
   } else {
-    // hw: record Proxmox's current hardware as the new baseline.
+    // hw: record Proxmox's current hardware as the new baseline. A partial
+    // config is refused rather than adopted - adopting zeros would poison
+    // the baseline and produce a permanent false finding.
     const cfg = await client.qemuConfig(lr.node, vm.vmid);
-    await bumpHardwareSnapshot(deps.db, vm.id, {
+    const wrote = await bumpHardwareSnapshot(deps.db, vm.id, {
       cores: Number(cfg.cores ?? 0),
       memory: Number(cfg.memory ?? 0),
       net: cfg.net ?? null,
     });
+    if (!wrote) {
+      throw AppError.conflict(
+        "Proxmox reported an incomplete hardware configuration for this guest; refusing to record it as the baseline",
+      );
+    }
   }
   await resolveFinding(deps.db, finding, actor, now);
   await deps.audit({
@@ -1009,6 +1246,16 @@ export async function resyncDriftIp(
   }
   const vm = await deps.vms.requireById(finding.vmId);
   await assertNoActiveJob(deps, vm.id);
+  // A static address is an operator assignment, not a DHCP lease. The ip
+  // detector never raises findings for static VMs, but an OPEN finding from
+  // before the address was made static would still be actionable here, and
+  // the re-sync would overwrite the operator's assignment with the guest's
+  // DHCP address (and trip the static-IP unique index on the way).
+  if (vm.ipStatic) {
+    throw AppError.conflict(
+      "This VM has a statically assigned address; re-syncing would overwrite the operator's assignment",
+    );
+  }
   const client = await deps.getProxmoxClient();
   // Prefer the live node: the record's node may itself be stale after an
   // out-of-band migration, and the agent call must target where the guest

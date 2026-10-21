@@ -1,5 +1,5 @@
-// ---------------------------------------------------------------------------
-// drift.test.ts — ground-truth drift detection & reconciliation.
+﻿// ---------------------------------------------------------------------------
+// drift.test.ts â€” ground-truth drift detection & reconciliation.
 // Coverage: pure detectors (positive/negative/boundary/malformed), the
 // finding lifecycle (create/bump/auto-resolve/re-open/acknowledge),
 // exemptions (active provisioning jobs + unrefined dimensions), the
@@ -16,6 +16,8 @@ import RedisMock from "ioredis-mock";
 import {
   createCore,
   hashPassword,
+  closePowerPeriod,
+  openPowerPeriod,
   detectDeletedVms,
   detectConfigDrift,
   detectHardwareDrift,
@@ -326,9 +328,33 @@ describe("applyFindings lifecycle", () => {
       { now: ticks() },
     );
     // No output this pass; the ip dimension's check could not run for the VM.
-    await applyFindings(pool, [], { now: ticks(), unrefinedVmIds: new Set([vmId]) });
+    // The scope is the (vm, DIMENSION) pair: the config check DID run, so
+    // its non-reproducing finding must still resolve.
+    await applyFindings(pool, [], {
+      now: ticks(),
+      unrefined: new Map([[vmId, new Set(["ip" as const])]]),
+    });
     const rows = await listDriftFindings(pool, {});
     expect(rows.map((r) => r.fingerprint)).toEqual([`ip:${vmId}`]);
+  });
+
+  it("an unrefined DIMENSION is preserved while the other dimensions still resolve", async () => {
+    // Regression: the carve-out used to be hardcoded to ip/credential, so a
+    // hw finding whose check could not run was auto-resolved.
+    await applyFindings(
+      pool,
+      [
+        { ...finding(), fingerprint: `hw:${vmId}:cores`, dimension: "hw" },
+        { ...finding(), fingerprint: `ip:${vmId}`, dimension: "ip" },
+      ],
+      { now: ticks() },
+    );
+    await applyFindings(pool, [], {
+      now: ticks(),
+      unrefined: new Map([[vmId, new Set(["hw" as const])]]),
+    });
+    const rows = await listDriftFindings(pool, {});
+    expect(rows.map((r) => r.fingerprint)).toEqual([`hw:${vmId}:cores`]);
   });
 
   it("resolveStale:false (internal single-finding callers) never auto-resolves others", async () => {
@@ -365,6 +391,10 @@ describe("drift orchestrator", () => {
     config?: { cores: number; memory: number; net: Array<Record<string, unknown>> | null };
     agent?: { ipv4s: string[] } | null;
     fail?: boolean;
+    /** The config read throws (Proxmox hiccup, node offline). */
+    failConfig?: boolean;
+    /** The config read comes back incomplete (no cores/memory). */
+    partialConfig?: boolean;
   }
 
   function fakeClient(o: ClientOverrides = {}): ProxmoxClient {
@@ -373,7 +403,11 @@ describe("drift orchestrator", () => {
         if (o.fail) throw new Error("cluster is down");
         return (o.resources ?? liveResources).map((r) => ({ ...r, template: 0, maxcpu: 1, cpu: 1, mem: 1, maxmem: 1, maxdisk: 1, disk: 1, uptime: 1, netin: 1, netout: 1 }));
       },
-      qemuConfig: async () => o.config ?? { cores: 2, memory: 4096, net: null },
+      qemuConfig: async () => {
+        if (o.failConfig) throw new Error("proxmox: config read failed");
+        if (o.partialConfig) return { net: null } as never;
+        return o.config ?? { cores: 2, memory: 4096, net: null };
+      },
       guestIpAddresses: async () => (o.agent === undefined ? { ipv4s: ["10.0.0.50"] } : o.agent),
     } as unknown as ProxmoxClient;
   }
@@ -400,6 +434,9 @@ describe("drift orchestrator", () => {
     await pool.query("DELETE FROM drift_vm_state");
     await pool.query("DELETE FROM provisioning_jobs");
     await pool.query("DELETE FROM guacamole_connections");
+    // Drift detection is opt-in (it opens SSH connections to guests), so the
+    // pass only runs when the switch is explicitly ON.
+    await ctx.settings.set(DRIFT_ENABLED_KEY, "true", { category: "system" });
   });
 
   it("skips cleanly when Proxmox is not configured (fail-open)", async () => {
@@ -417,6 +454,19 @@ describe("drift orchestrator", () => {
     const result = await runDriftPass(passDeps(fakeClient()));
     expect(result.skipped).toBe("disabled");
     await ctx.settings.set(DRIFT_ENABLED_KEY, "true", { category: "system" });
+  });
+
+  it("is OFF unless it is explicitly enabled (an unset switch means no pass)", async () => {
+    await ctx.settings.set(DRIFT_ENABLED_KEY, "false", { category: "system" });
+    const off = await runDriftPass(passDeps(fakeClient()));
+    expect(off.skipped).toBe("disabled");
+    // Anything that is not exactly "true" is off too.
+    await ctx.settings.set(DRIFT_ENABLED_KEY, "yes", { category: "system" });
+    const notTrue = await runDriftPass(passDeps(fakeClient()));
+    expect(notTrue.skipped).toBe("disabled");
+    await ctx.settings.set(DRIFT_ENABLED_KEY, "true", { category: "system" });
+    const on = await runDriftPass(passDeps(fakeClient()));
+    expect(on.skipped).toBeNull();
   });
 
   it("first pass baselines hardware without false findings; second pass flags changes", async () => {
@@ -458,13 +508,72 @@ describe("drift orchestrator", () => {
     expect(await listDriftFindings(pool, {})).toHaveLength(0);
   });
 
+  it("PRESERVES a hardware finding when the config read throws (the check never ran)", async () => {
+    await runDriftPass(passDeps(fakeClient())); // baseline
+    const driftConfig = { cores: 2, memory: 8192, net: null };
+    const second = await runDriftPass(passDeps(fakeClient({ config: driftConfig })));
+    expect(second.created).toBe(1);
+
+    // Regression: the per-VM catch logged "its findings are preserved this
+    // pass" but the carve-out only covered ip/credential, so the hw finding
+    // was auto-resolved even though the hardware was never re-checked.
+    const third = await runDriftPass(passDeps(fakeClient({ failConfig: true })));
+    expect(third.resolved).toBe(0);
+    const rows = await listDriftFindings(pool, {});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "OPEN", dimension: "hw" });
+  });
+
+  it("PRESERVES an ip finding when the guest vanishes from the cluster view", async () => {
+    // The guest reports a different address -> ip finding.
+    const first = await runDriftPass(passDeps(fakeClient({ agent: { ipv4s: ["10.0.0.99"] } })));
+    expect(first.created).toBe(1);
+    let rows = await listDriftFindings(pool, {});
+    expect(rows.find((r) => r.dimension === "ip")?.status).toBe("OPEN");
+
+    // Regression: the VM was skipped with `continue` BEFORE the unrefined
+    // set was touched, so its ip finding was auto-resolved by a guest that
+    // merely disappeared from a partial listing.
+    const second = await runDriftPass(passDeps(fakeClient({ resources: [] })));
+    rows = await listDriftFindings(pool, {});
+    const ipRow = rows.find((r) => r.dimension === "ip");
+    expect(ipRow?.status).toBe("OPEN");
+    expect(second.resolved).toBe(0);
+  });
+
+  it("does not report a guest that was converted to a Proxmox template as deleted", async () => {
+    // The guest still occupies its vmid - it is a template now, not gone.
+    const asTemplate = [{ vmid: 700, node: "node1", name: "drift-vm", status: "stopped", template: 1 }];
+    const result = await runDriftPass(
+      passDeps({
+        clusterResources: async () => asTemplate,
+        qemuConfig: async () => ({ cores: 2, memory: 4096, net: null }),
+        guestIpAddresses: async () => null,
+      } as unknown as ProxmoxClient),
+    );
+    const rows = await listDriftFindings(pool, {});
+    expect(rows.filter((r) => r.dimension === "deleted")).toHaveLength(0);
+    expect(result.newFingerprints.filter((f) => f.startsWith("deleted:"))).toHaveLength(0);
+  });
+
+  it("refuses to store a poisoned hardware baseline from an incomplete config", async () => {
+    await runDriftPass(passDeps(fakeClient({ partialConfig: true })));
+    const state = await pool.query<{ cores: number | null; memory_mb: number | null }>(
+      "SELECT cores, memory_mb FROM drift_vm_state WHERE vm_id = $1",
+      [vmId],
+    );
+    // A baseline of 0 cores would produce a permanent false finding.
+    expect(state.rows[0]?.cores ?? null).toBeNull();
+    expect(state.rows[0]?.memory_mb ?? null).toBeNull();
+  });
+
   it("exempts VMs with active provisioning jobs from every per-VM comparison", async () => {
     const first = await runDriftPass(passDeps(fakeClient({ config: { cores: 9, memory: 9999, net: null }, agent: { ipv4s: ["10.0.0.77"] } })));
     expect(first.exempted).toBe(0);
     await ctx.jobs.create({ vmId, request: {}, createdByUserId: null });
     const second = await runDriftPass(passDeps(fakeClient({ config: { cores: 8, memory: 8888, net: null }, agent: { ipv4s: ["10.0.0.88"] } })));
     expect(second.exempted).toBe(1);
-    // No new findings for the exempt VM — its conflicts were invisible.
+    // No new findings for the exempt VM â€” its conflicts were invisible.
     expect(second.created).toBe(0);
   });
 
@@ -517,7 +626,7 @@ describe("drift orchestrator", () => {
     expect((await listDriftFindings(pool, {})).filter((f) => f.dimension === "ip")).toHaveLength(1);
 
     // An agent that answers but reports no usable IPv4 is equally
-    // inconclusive — it must not resolve the finding either.
+    // inconclusive â€” it must not resolve the finding either.
     const pass3 = await runDriftPass(passDeps(fakeClient({ agent: { ipv4s: [] } })));
     expect(pass3.resolved).toBe(0);
     expect((await listDriftFindings(pool, {})).filter((f) => f.dimension === "ip")).toHaveLength(1);
@@ -547,6 +656,9 @@ describe("credential drift probe", () => {
   beforeEach(async () => {
     await pool.query("DELETE FROM drift_findings");
     await pool.query("DELETE FROM drift_vm_state");
+    // Drift detection is opt-in: without the switch the pass never runs, so
+    // the probe would never be reached.
+    await ctx.settings.set(DRIFT_ENABLED_KEY, "true", { category: "system" });
   });
 
   function deps(probe: DriftPassDeps["probeSshFn"]): DriftPassDeps {
@@ -718,6 +830,8 @@ describe("remediation", () => {
       vms: ctx.vms,
       jobs: ctx.jobs,
       guac: ctx.guac,
+      creds: ctx.creds,
+      closePowerPeriod,
       hostKeys: ctx.hostKeys,
       audit: async (entry) => {
         audits.push({ event: entry.event as string, detail: (entry.detail ?? {}) as Record<string, unknown> });
@@ -752,6 +866,74 @@ describe("remediation", () => {
     const audit = audits.find((a) => a.event === "DRIFT_REMEDIATED")!;
     expect(audit.detail).toMatchObject({ action: "decommission", vmId, vmName: "fix-vm" });
     expect(JSON.stringify(audits)).not.toMatch(/password/i);
+  });
+
+  it("decommission also cleans up what a soft delete does NOT cascade", async () => {
+    // A soft delete is an UPDATE: the FK cascades never fire, so the access
+    // grants, the stored credential and an open metering period would all
+    // survive a decommission.
+    const user = await ctx.users.create({
+      username: "drift-grantee",
+      passwordHash: await hashPassword("Drift-Password-2"),
+      roles: ["USER"],
+    });
+    await ctx.vms.setAccess(vmId, user.id);
+    await ctx.creds.store(vmId, "root", "vault-pw");
+    await openPowerPeriod(ctx.db, vmId);
+
+    const finding = await seed({ fingerprint: `deleted:${vmId}`, dimension: "deleted", severity: "high" });
+    await decommissionDriftVm(actionDeps(), finding.id, actor);
+
+    const access = await pool.query("SELECT * FROM vm_access WHERE vm_id = $1", [vmId]);
+    expect(access.rows).toHaveLength(0);
+    const creds = await pool.query("SELECT * FROM vm_credentials WHERE vm_id = $1", [vmId]);
+    expect(creds.rows).toHaveLength(0);
+    const periods = await pool.query<{ n: number }>(
+      "SELECT COUNT(*)::int AS n FROM vm_power_periods WHERE vm_id = $1 AND ended_at IS NULL",
+      [vmId],
+    );
+    expect(periods.rows[0]?.n).toBe(0);
+  });
+
+  it("decommission refuses when the cluster view looks partial (mass disappearance)", async () => {
+    // The re-verification uses the same source that produced the finding, so
+    // a degraded listing would "confirm" the deletion of live records.
+    const tracked = await ctx.vms.list();
+    for (let i = 0; i < 6; i++) {
+      await ctx.vms.create({ vmid: 950 + i, node: "node1", name: `bulk-${i}`, status: "running", osType: "linux" });
+    }
+    const finding = await seed({ fingerprint: `deleted:${vmId}`, dimension: "deleted", severity: "high" });
+    // Only the fixture's own vmid is missing from the listing, but the fleet
+    // is now large enough for the mass-disappearance guard to fire.
+    await expect(decommissionDriftVm(actionDeps(), finding.id, actor)).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await ctx.vms.findById(vmId)).not.toBeNull();
+    await pool.query("DELETE FROM vms WHERE vmid >= 950");
+    expect(tracked.length).toBeGreaterThan(0);
+  });
+
+  it("decommission refuses a guest that was converted to a template (it still exists)", async () => {
+    const finding = await seed({ fingerprint: `deleted:${vmId}`, dimension: "deleted", severity: "high" });
+    await expect(
+      decommissionDriftVm(
+        actionDeps({ resources: [{ vmid: 900, node: "node1", name: "fix-vm", status: "stopped", template: 1 }] }),
+        finding.id,
+        actor,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await ctx.vms.findById(vmId)).not.toBeNull();
+  });
+
+  it("resync_ip refuses to overwrite a statically assigned address", async () => {
+    await pool.query("UPDATE vms SET ip_static = true WHERE id = $1", [vmId]);
+    try {
+      const finding = await seed({ fingerprint: `ip:${vmId}`, dimension: "ip", severity: "medium" });
+      await expect(
+        resyncDriftIp(actionDeps({ agent: { ipv4s: ["10.0.0.77"] } }), finding.id, actor),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect((await ctx.vms.findById(vmId))?.ipAddress).toBe("10.0.0.90");
+    } finally {
+      await pool.query("UPDATE vms SET ip_static = false WHERE id = $1", [vmId]);
+    }
   });
 
   it("decommission refuses when the guest reappeared (stale) or a job is active", async () => {
