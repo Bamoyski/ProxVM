@@ -70,6 +70,55 @@ export class GuacamoleService {
     return result.rows;
   }
 
+  /** Every connection record in the app DB — used by drift orphan detection. */
+  async listAllConnectionRecords(): Promise<GuacConnectionRow[]> {
+    const result = await this.db.query<GuacConnectionRow>(
+      "SELECT * FROM guacamole_connections ORDER BY created_at ASC",
+    );
+    return result.rows;
+  }
+
+  /**
+   * Delete ONE connection record (app row + the real Guacamole connection).
+   * Drift's orphan remediation targets a single record; deleteVmResources
+   * is the bulk sibling and stays the provisioning/VM-delete path.
+   *
+   * WHY the shared-name guard: the real Guacamole connection is addressed by
+   * NAME (`proxvm-<vmName>`), and `vms.name` is NOT unique (only
+   * (vmid, node) is). Two VMs named "web" on different nodes therefore share
+   * one Guacamole connection name, and `DELETE ... WHERE connection_name = $1`
+   * would take the LIVE VM's console with it. When another app row still
+   * references the same name, only the app row is removed.
+   */
+  async deleteConnectionRecord(connectionRecordId: string, guacDb: GuacamoleDbClient): Promise<boolean> {
+    const result = await this.db.query<GuacConnectionRow>(
+      "SELECT * FROM guacamole_connections WHERE id = $1",
+      [connectionRecordId],
+    );
+    const record = result.rows[0];
+    if (!record) return false;
+    if (record.guac_connection_name && !(await this.isConnectionNameShared(record))) {
+      await guacDb.deleteConnection(record.guac_connection_name);
+    }
+    await this.db.query("DELETE FROM guacamole_connections WHERE id = $1", [connectionRecordId]);
+    return true;
+  }
+
+  /**
+   * True when another app row still points at the same real Guacamole
+   * connection name. `vms.name` is not unique, so two VMs can share one
+   * `proxvm-<name>` connection - deleting it for one of them would break the
+   * other one's console.
+   */
+  private async isConnectionNameShared(record: GuacConnectionRow): Promise<boolean> {
+    if (!record.guac_connection_name) return false;
+    const other = await this.db.query<{ id: string }>(
+      "SELECT id FROM guacamole_connections WHERE guac_connection_name = $1 AND id <> $2 LIMIT 1",
+      [record.guac_connection_name, record.id],
+    );
+    return other.rows.length > 0;
+  }
+
   async upsertConnection(opts: {
     vmId: string;
     vmName: string;
@@ -178,6 +227,21 @@ export class GuacamoleService {
   }
 
   // -- Users, grants, tokens: access sync + single-live-token launch ----
+  /** Hostname-only endpoint refresh: each record keeps its own protocol port
+   *  (updateConnectionEndpoint broadcasts one port to ALL records, which is
+   *  wrong for multi-protocol VMs — ssh 22 would rewrite the rdp 3389 row). */
+  async updateConnectionHostname(vmId: string, hostname: string, guacDb: GuacamoleDbClient): Promise<number> {
+    const records = await this.listConnectionRecords(vmId);
+    for (const record of records) {
+      await this.db.query(
+        "UPDATE guacamole_connections SET hostname = $2, updated_at = NOW() WHERE id = $1",
+        [record.id, hostname],
+      );
+      await guacDb.updateConnectionParams(record.guac_connection_name, { hostname });
+    }
+    return records.length;
+  }
+
   async findUserRecord(userId: string): Promise<GuacUserRow | null> {
     const result = await this.db.query<GuacUserRow>(
       "SELECT * FROM guacamole_users WHERE user_id = $1",
@@ -283,8 +347,11 @@ export class GuacamoleService {
   async deleteVmResources(vmId: string, guacDb: GuacamoleDbClient): Promise<void> {
     const connections = await this.listConnectionRecords(vmId);
     for (const connection of connections) {
+      // Shared-name guard: the real connection is addressed by name and
+      // `vms.name` is not unique, so another VM can still be using it.
+      const shared = await this.isConnectionNameShared(connection);
       try {
-        await guacDb.deleteConnection(connection.guac_connection_name);
+        if (!shared) await guacDb.deleteConnection(connection.guac_connection_name);
       } catch (err) {
         throw AppError.external(
           "Guacamole",

@@ -41,6 +41,7 @@ import {
   resolveProvisionRequest,
   scanVmServices,
   selectUsableIpv4,
+  bumpHardwareSnapshot,
   applyStartOnBoot,
   setScheduleEnabled,
   startVmForLaunchIfStopped,
@@ -1194,6 +1195,34 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       if (body.ramMb !== undefined) updates.memory = body.ramMb;
       const upid = await client.updateConfig(vm.node, vm.vmid, updates);
       if (upid) await client.waitForTask(vm.node, upid, 120000);
+      // Bump the drift hardware baseline AFTER Proxmox accepts, from the live
+      // resulting config: ProxVM's own in-band edits must never read as
+      // out-of-band hardware drift on the next pass. Advisory only — if the
+      // read-back fails (or comes back incomplete), the next drift pass
+      // surfaces a finding the admin can adopt, which re-baselines cleanly.
+      // An incomplete config is refused rather than stored: a baseline of
+      // zero cores would produce a permanent false finding.
+      if (body.cpu !== undefined || body.ramMb !== undefined) {
+        try {
+          const live = await client.qemuConfig(vm.node, vm.vmid);
+          const wrote = await bumpHardwareSnapshot(ctx.db, vm.id, {
+            cores: live.cores,
+            memory: live.memory,
+            net: live.net ?? null,
+          });
+          if (!wrote) {
+            ctx.logger.warn(
+              { vmId: vm.id },
+              "drift hardware snapshot skipped: Proxmox reported an incomplete configuration",
+            );
+          }
+        } catch (err) {
+          ctx.logger.warn(
+            { vmId: vm.id, error: err instanceof Error ? err.message : String(err) },
+            "drift hardware snapshot refresh failed after edit",
+          );
+        }
+      }
     }
     if (body.assignToUserIds !== undefined) {
       // Diff DIRECT grants only: group-derived access is owned by groups and

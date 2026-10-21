@@ -1,4 +1,4 @@
-// ---------------------------------------------------------------------------
+﻿// ---------------------------------------------------------------------------
 // ProxVM API composition root: builds the Fastify app, registers the auth
 // plugin FIRST (everything below depends on requireAuth/requirePermission),
 // mounts every route group, and starts the background tickers (schedules,
@@ -37,15 +37,16 @@ import { guacamoleRoutes } from "./routes/guacamole.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { auditRoutes } from "./routes/audit.js";
 import { threatRoutes } from "./routes/threats.js";
+import { driftRoutes, runDriftPassExclusive } from "./routes/drift.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { healthRoutes } from "./routes/health.js";
 import { iamRoutes } from "./routes/iam.js";
 import { notificationRoutes } from "./routes/notifications.js";
 
 /**
- * Parses PROXVM_TRUST_PROXY into a Fastify trustProxy value. Empty/unset —
- * trust nothing (socket IP only). "1"/"true" — trust every hop (legacy,
- * only behind a fully controlled proxy). Anything else — a comma-separated
+ * Parses PROXVM_TRUST_PROXY into a Fastify trustProxy value. Empty/unset â€”
+ * trust nothing (socket IP only). "1"/"true" â€” trust every hop (legacy,
+ * only behind a fully controlled proxy). Anything else â€” a comma-separated
  * list of CIDRs/hosts whose X-Forwarded-For chain is honored.
  */
 export function parseTrustProxy(raw: string | undefined): boolean | string[] {
@@ -67,7 +68,7 @@ export interface BuildAppOptions {
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   // Parsed once, used twice: Fastify resolves client IPs with it, and
-  // threat detection reuses the list as "shared egress" addresses — an
+  // threat detection reuses the list as "shared egress" addresses â€” an
   // address trusted as a proxy hop can never identify a client (every
   // tunneled user arrives as the hop), so IP-correlation rules must not
   // attribute findings to it. The legacy trust-everything values
@@ -104,7 +105,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   // CORS allowlist is dynamic: the configured env origin is always honored,
   // and once a canonical domain exists its https origin (plus every redirect
-  // alias) is accepted too — otherwise a domain switch would lock the new
+  // alias) is accepted too â€” otherwise a domain switch would lock the new
   // domain out until someone edits the env and restarts. Evaluated per
   // request from settings so switches take effect with no restart.
   if (opts.webOrigin) {
@@ -179,7 +180,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       );
       // Infrastructure detail (hostnames, ports, paths) goes only to infra
       // operators; everyone else gets code + message. request.user is the
-      // already-loaded session user — no extra query on the error path.
+      // already-loaded session user â€” no extra query on the error path.
       const roles = request.user?.roles ?? [];
       const infraViewer = roles.includes("ADMIN") || roles.includes("OPERATOR");
       void reply.status(502).send({
@@ -248,6 +249,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(jobRoutes, { prefix: "/api", ctx });
     await app.register(auditRoutes, { prefix: "/api", ctx });
     await app.register(threatRoutes, { prefix: "/api", ctx, sharedEgressIps });
+    await app.register(driftRoutes, { prefix: "/api", ctx });
     await app.register(settingsRoutes, { prefix: "/api", ctx });
     await app.register(healthRoutes, { prefix: "/api", ctx });
     await app.register(iamRoutes, { prefix: "/api", ctx });
@@ -286,7 +288,7 @@ const HEALTH_TICK_MS = 5 * 60 * 1000;
  * Reconnaissance detection: counts denied/error responses per client IP in
  * Redis and writes a single SCAN_DETECTED audit row when an IP crosses the
  * threshold inside the window (then stays quiet for a cooldown hour). Login
- * attempts are excluded — each already gets its own LOGIN_FAILED row.
+ * attempts are excluded â€” each already gets its own LOGIN_FAILED row.
  * Fail-open by design: telemetry must never break responses.
  */
 const SCAN_WINDOW_S = 600;
@@ -532,7 +534,7 @@ export function startHomelabTickers(
       if (result.fired > 0) {
         ctx.logger.info(result, "threat webhook alerts fired");
         // Admin delivery for the same findings (best-effort; the webhook
-        // post already happened — this feeds the in-app bell + Gotify).
+        // post already happened â€” this feeds the in-app bell + Gotify).
         await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
           kind: "threat",
           title: `${result.fired} threat finding${result.fired === 1 ? "" : "s"} need review`,
@@ -599,11 +601,42 @@ export function startHomelabTickers(
       );
     }
   };
+  // Ground-truth drift: reconciles ProxVM's DB against live Proxmox, guest
+  // agents and the Guacamole DB every 15 minutes (read-only detection; only
+  // findings rows are written). Gated by the drift.enabled switch; fails
+  // open (a down Proxmox just skips the pass). New findings alert admins.
+  const DRIFT_TICK_MS = 15 * 60 * 1000;
+  const runDrift = async (): Promise<void> => {
+    // The "one pass at a time" guard lives in routes/drift.ts so the manual
+    // endpoint reaches it too â€” a guard only the ticker can see lets a
+    // manual run stack with a ticker pass, defeating the SSH-probe cooldown.
+    const result = await runDriftPassExclusive(ctx);
+    if (!result) {
+      ctx.logger.debug({}, "drift pass still running; skipping overlapping tick");
+      return;
+    }
+    if (result.liveChecked && (result.created > 0 || result.resolved > 0)) {
+      ctx.logger.info(
+        { created: result.created, updated: result.updated, resolved: result.resolved, exempted: result.exempted },
+        "drift pass completed",
+      );
+    }
+    if (result.newFingerprints.length > 0) {
+      await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+        kind: "system",
+        title: `${result.newFingerprints.length} new drift finding${result.newFingerprints.length === 1 ? "" : "s"}`,
+        body: `A drift pass recorded ${result.newFingerprints.length} new ground-truth discrepancies (and resolved ${result.resolved}); ${result.exempted} VM(s) were exempt for active jobs. Review them on the Drift page.`,
+        link: "/drift",
+        priority: 6,
+      });
+    }
+  };
   void runSchedules();
   void runMetering();
   void runPower();
   void runThreats();
   void runInfra();
+  void runDrift();
   const scheduleTimer = setInterval(() => {
     void runSchedules();
   }, scheduleIntervalMs);
@@ -622,7 +655,10 @@ export function startHomelabTickers(
   const infraTimer = setInterval(() => {
     void runInfra();
   }, healthIntervalMs);
-  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer, infraTimer]) {
+  const driftTimer = setInterval(() => {
+    void runDrift();
+  }, DRIFT_TICK_MS);
+  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer, infraTimer, driftTimer]) {
     (timer as unknown as { unref?: () => void }).unref?.();
   }
   app.addHook("onClose", async () => {
@@ -632,6 +668,7 @@ export function startHomelabTickers(
     clearInterval(powerTimer);
     clearInterval(threatTimer);
     clearInterval(infraTimer);
+    clearInterval(driftTimer);
   });
 }
 

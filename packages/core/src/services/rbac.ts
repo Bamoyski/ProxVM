@@ -59,6 +59,10 @@ export const PERMISSIONS = [
   "settings.manage",
   "health.read",
   "proxmox.read",
+  // Drift reconciliation. Only ADMIN holds it by default (ADMIN = all
+  // PERMISSIONS); it must be granted explicitly to custom roles. Every
+  // enforcement site is in routes/drift.ts.
+  "drift.manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
