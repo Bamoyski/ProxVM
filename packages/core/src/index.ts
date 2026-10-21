@@ -54,6 +54,7 @@ export * from "./services/notifications.js";
 export * from "./services/gotify.js";
 export * from "./services/turnstile.js";
 export * from "./services/threats.js";
+export * from "./services/drift.js";
 export * from "./provisioning/pipeline.js";
 export * from "./provisioning/defaults.js";
 export * from "./provisioning/reschedule.js";

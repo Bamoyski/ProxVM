@@ -195,12 +195,34 @@ export class JobsRepository {
   }
 
   async activeJobsForVm(vmId: string): Promise<JobRecord[]> {
+    // NOT IN is expanded to <> chains: identical Postgres semantics, but
+    // pg-mem's NOT IN over an indexed column (idx_jobs_status) panics, and
+    // this query runs in core tests. See drift.test.ts.
     const result = await this.db.query<JobRow>(
       `SELECT * FROM provisioning_jobs
-       WHERE vm_id = $1 AND status NOT IN ('READY','FAILED','CANCELLED')`,
+       WHERE vm_id = $1
+         AND status <> 'READY' AND status <> 'FAILED' AND status <> 'CANCELLED'`,
       [vmId],
     );
     return result.rows.map(toJobRecord);
+  }
+
+  /**
+   * VM ids with at least one non-terminal provisioning job, in ONE query.
+   * Drift detection uses this to exempt whole VMs from state comparisons:
+   * a VM mid-provisioning legitimately disagrees with its recorded state
+   * (config just applied, IP still undiscovering), and remediation during
+   * a live job would act on transient data.
+   */
+  async activeJobVmIds(): Promise<string[]> {
+    // <> chains instead of NOT IN — same Postgres semantics, but pg-mem's
+    // NOT IN against the btree index on status panics (used by core tests).
+    const result = await this.db.query<{ vm_id: string }>(
+      `SELECT DISTINCT vm_id FROM provisioning_jobs
+        WHERE vm_id IS NOT NULL
+          AND status <> 'READY' AND status <> 'FAILED' AND status <> 'CANCELLED'`,
+    );
+    return result.rows.map((r) => r.vm_id);
   }
 }
 

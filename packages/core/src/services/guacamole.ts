@@ -70,6 +70,33 @@ export class GuacamoleService {
     return result.rows;
   }
 
+  /** Every connection record in the app DB — used by drift orphan detection. */
+  async listAllConnectionRecords(): Promise<GuacConnectionRow[]> {
+    const result = await this.db.query<GuacConnectionRow>(
+      "SELECT * FROM guacamole_connections ORDER BY created_at ASC",
+    );
+    return result.rows;
+  }
+
+  /**
+   * Delete ONE connection record (app row + the real Guacamole connection).
+   * Drift's orphan remediation targets a single record; deleteVmResources
+   * is the bulk sibling and stays the provisioning/VM-delete path.
+   */
+  async deleteConnectionRecord(connectionRecordId: string, guacDb: GuacamoleDbClient): Promise<boolean> {
+    const result = await this.db.query<GuacConnectionRow>(
+      "SELECT * FROM guacamole_connections WHERE id = $1",
+      [connectionRecordId],
+    );
+    const record = result.rows[0];
+    if (!record) return false;
+    if (record.guac_connection_name) {
+      await guacDb.deleteConnection(record.guac_connection_name);
+    }
+    await this.db.query("DELETE FROM guacamole_connections WHERE id = $1", [connectionRecordId]);
+    return true;
+  }
+
   async upsertConnection(opts: {
     vmId: string;
     vmName: string;
@@ -178,6 +205,21 @@ export class GuacamoleService {
   }
 
   // -- Users, grants, tokens: access sync + single-live-token launch ----
+  /** Hostname-only endpoint refresh: each record keeps its own protocol port
+   *  (updateConnectionEndpoint broadcasts one port to ALL records, which is
+   *  wrong for multi-protocol VMs — ssh 22 would rewrite the rdp 3389 row). */
+  async updateConnectionHostname(vmId: string, hostname: string, guacDb: GuacamoleDbClient): Promise<number> {
+    const records = await this.listConnectionRecords(vmId);
+    for (const record of records) {
+      await this.db.query(
+        "UPDATE guacamole_connections SET hostname = $2, updated_at = NOW() WHERE id = $1",
+        [record.id, hostname],
+      );
+      await guacDb.updateConnectionParams(record.guac_connection_name, { hostname });
+    }
+    return records.length;
+  }
+
   async findUserRecord(userId: string): Promise<GuacUserRow | null> {
     const result = await this.db.query<GuacUserRow>(
       "SELECT * FROM guacamole_users WHERE user_id = $1",

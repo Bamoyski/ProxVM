@@ -161,6 +161,10 @@ export const AUDIT_EVENTS = [
   "SSH_HOST_KEY_MISMATCH",
   "SSH_HOST_KEY_ROTATED",
   "SSH_HOST_KEY_UNPINNED",
+  // Drift reconciliation (services/drift.ts): remediation + acknowledge.
+  // Detection passes are logged, not audited (they change nothing).
+  "DRIFT_REMEDIATED",
+  "DRIFT_FINDING_ACKNOWLEDGED",
 ] as const;
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 
