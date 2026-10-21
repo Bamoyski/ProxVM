@@ -57,7 +57,7 @@ export const DRIFT_ENABLED_KEY = "drift.enabled";
 export const DRIFT_LAST_RUN_KEY = "drift.last_run";
 /** Min interval between credential probes of the same VM (rate-limit safety). */
 export const CREDENTIAL_PROBE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-/** Cap on findings resolved/created per pass surfaced in alerts (bounded work). */
+/** Cap on SSH credential probes per pass (deferred VMs are unrefined, not resolved). */
 const MAX_CREDENTIAL_PROBES_PER_PASS = 10;
 
 export const DRIFT_DIMENSIONS = ["deleted", "hw", "config", "ip", "guac", "credential"] as const;
