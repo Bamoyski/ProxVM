@@ -36,6 +36,10 @@ deliberately:
 
 Anything other than an explicit `true` means off.
 
+While it is off, the Drift board and the Dashboard widget say so — an empty
+board would otherwise read as "no drift detected" when in truth nothing was
+ever checked.
+
 ## Lifecycle
 
 ```

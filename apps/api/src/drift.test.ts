@@ -149,6 +149,24 @@ describe("drift routes", () => {
       expect(body.lastRun).toBeNull();
     });
 
+    it("the board reports whether the feature is enabled at all", async () => {
+      // An empty board with no banner reads as "no drift detected" when in
+      // truth nothing was ever checked. The API has to say which it is.
+      const on = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: admin.cookie } });
+      expect((on.json() as { enabled: boolean }).enabled).toBe(true);
+      await ctx.settings.set("drift.enabled", "false", { category: "system" });
+      try {
+        const off = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: admin.cookie } });
+        expect(off.statusCode).toBe(200);
+        expect((off.json() as { enabled: boolean }).enabled).toBe(false);
+        // A disabled feature is not persisted as a skipped run, so lastRun
+        // stays null and the UI has to rely on `enabled`.
+        expect((off.json() as { lastRun: unknown }).lastRun).toBeNull();
+      } finally {
+        await ctx.settings.set("drift.enabled", "true", { category: "system" });
+      }
+    });
+
     it("manual run fails open: unconfigured Proxmox reports 'unconfigured' (never 500)", async () => {
       const res = await app.inject({
         method: "POST",
