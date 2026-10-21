@@ -193,3 +193,474 @@ Each request becomes exactly one branch and one PR:
   never run it, never gate on it.
 - Windows note: if `npm.ps1` is blocked by execution policy, invoke
   `npm.cmd`/`npx.cmd` instead. No eslint/prettier configs in this repo.
+
+## Hard-won lessons: mass ops, drift detection, and destructive remediation
+
+Everything below came out of review on two pull requests: PR #4 (bulk VM
+operations) and PR #8 (ground-truth drift detection). Every defect named
+here was real, was found in review, and has a file path and an identifier
+you can grep for. Read this before you write a bulk endpoint, widen a
+validator, add a detection pass, or write anything that deletes.
+
+### 1. A mass operation is a SET, never a toggle
+
+**RULE.** A bulk endpoint receives an explicit target state and writes it,
+exactly like the single-VM endpoints already do (`PATCH /vms/:id/privacy`
+takes `{ enabled }`). It never derives "the other value" from what it read.
+
+**WHY.** `POST /vms/bulk-action` in `apps/api/src/routes/vms.ts` derived
+the target from the row it read: a retry flipped the flag back (one call
+set `privacy_flag` true, an identical second set it false again and still
+answered `{ok:true, private:false}`), and a mixed selection flipped in
+opposite directions. Worst variant: isolation's "off" branch calls
+`removeIsolation()` in `packages/core/src/services/firewall.ts`, which
+DELETES the default-deny ruleset and resets the guest to
+`policy_in: ACCEPT, policy_out: ACCEPT` — "Isolate" on a mixed selection
+DE-ISOLATED the already-isolated VMs.
+
+```ts
+// BEFORE: the target is derived from the row the loop just read.
+const enabled = !vm.privacyFlag;                          // privacy
+const target = vm.vmClass === "user" ? "server" : "user";  // class
+// AFTER: the caller supplies the target; the route writes it verbatim.
+const target = body.enabled;                             // body: { ids, action, enabled }
+results.push({ vmId, ok: true, private: item.private });  // persisted value
+// PR #4 also shipped the mirror image: bulkSetPrivacy compared the target
+// against the INVERTED flag, so "turn privacy on" wrote NOTHING and still
+// returned ok: true plus a PRIVACY_ENABLED audit line.
+```
+
+**TEST.** Call the endpoint twice with the same body and assert the second
+call changes nothing; on a mixed selection, assert every VM lands in the
+one explicit `enabled` state.
+
+### 2. A widened validator is a security change, not a convenience
+
+**RULE.** When you widen a validator, first enumerate the values the
+DOWNSTREAM system treats specially, then add an explicit denylist and a
+test that pins the REJECTED cases, not just the accepted one.
+
+**WHY.** `assertAddress()` in `packages/core/src/services/firewall.ts` used
+to accept only IPv4/CIDR. PR #4 widened it to accept RFC-1123 hostnames so
+the Guacamole host could be used as a firewall rule source — and the new
+regex also matches the bare label `any`, Proxmox's SPECIAL FIREWALL
+KEYWORD for `0.0.0.0/0`. Verified: `buildIsolationRules({ allowFrom:
+"any" })` produced `ACCEPT in tcp 22/3389/5900:5910 source=any`, so the
+"default-deny" ruleset became allow-all-inbound from the internet while
+the API still reported `isolated: true`.
+
+The same question ("what does this mean to Proxmox?") had to be asked of
+the form that was ALLOWED: the CIDR branch accepted a `/0` prefix, so
+`0.0.0.0/0` — the same hole spelled out — was already accepted before the
+widening. Both are refused now.
+
+```ts
+// BEFORE: IPv4/CIDR only.
+/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/([0-9]|[12][0-9]|3[0-2]))?$/
+// AFTER: hostnames too - so the Proxmox keywords must be refused by name,
+//         and a /0 prefix must be refused too.
+const PROXMOX_FIREWALL_KEYWORDS = new Set(["any", "all", "$allowlist"]);
+if (PROXMOX_FIREWALL_KEYWORDS.has(value.trim().toLowerCase())) {
+  throw AppError.validation(`${field} must not be the Proxmox keyword "${value}"`);
+}
+if (match[6] !== undefined && Number(match[6]) === 0) {
+  throw AppError.validation(`${field} must not be a 0.0.0.0/0 network (it would allow every source)`);
+}
+```
+
+A validator shared by several routes is shared by several attack surfaces:
+`assertAddress` is reached from `buildIsolationRules` AND from
+`assertFirewallRuleInput` for hand-written rules.
+
+**TEST.** Pin the REJECTED cases — `any`, `ALL`, `$ALLOWLIST`, `0.0.0.0/0`,
+`1.2.3.4/33`, `*`, `a b` — not only the accepted one
+(`guac.example.com`, `192.168.1.22`). Widening a validator an existing
+endpoint uses is a behaviour change too: `docs/network-isolation.md`
+still said "IPv4 only" afterwards — update it in the same PR.
+
+### 3. A partial write must fail OPEN, not closed
+
+**RULE.** When a change is several writes (a policy plus its rules, a
+record plus its dependents), order them so that an interruption leaves the
+system in its PREVIOUS, working state — never in a stricter one it cannot
+recover from on its own.
+
+**WHY.** `applyIsolation()` in `packages/core/src/services/firewall.ts`
+used to set the guest firewall policy to DROP **first** and create the
+exception rules second. A rule Proxmox refused to create — an unresolvable
+DNS source, a Proxmox-side error — left the guest with `policy_in: DROP`
+and no inbound exception: locked out, unreachable, while the database
+still said "not isolated" and the bulk route reported the item as failed
+without saying the guest was half-firewalled. `removeIsolation()` had the
+mirror image (delete the rules, then open the policies), so a failed
+delete left a locked-out guest with `firewall_isolated` still true.
+
+```ts
+// BEFORE: DROP first, rules second - a failure locks the guest out.
+await proxmox.setGuestFirewallOptions(node, vmid, { enable: true, policy_in: "DROP", policy_out: "DROP" });
+for (const rule of reversed) await proxmox.createGuestFirewallRule(node, vmid, rule);
+// AFTER: enable WITHOUT changing the policy, create the rules, THEN flip it.
+await proxmox.setGuestFirewallOptions(node, vmid, { enable: true });       // policy untouched
+for (const rule of reversed) await proxmox.createGuestFirewallRule(node, vmid, rule);
+await proxmox.setGuestFirewallOptions(node, vmid, { enable: true, policy_in: "DROP", policy_out: "DROP" });
+```
+
+The same rule applies to the reverse direction: open the policies BEFORE
+deleting the rules, so a failure leaves the guest open (which is where the
+operator wanted it anyway) instead of locked out.
+
+A failed item must also be VISIBLE: the bulk route audits a failed
+isolation item with `applied: false` rather than dropping it, so a
+half-applied firewall is not invisible in the audit trail.
+
+**TEST.** Stub the rule creation to throw. Assert the guest's policy is
+still the pre-call one, the database flag was not flipped, and the audit
+trail records the failure.
+
+### 4. "Not observed" is not "verified fixed" — scope to the DIMENSION
+
+**RULE.** A finding may only be auto-resolved if its check RAN for its VM
+and did not reproduce. Track that per (vm, dimension): different
+dimensions have different failure modes.
+
+**WHY.** `applyFindings()` in `packages/core/src/services/drift.ts`
+auto-resolved any active finding whose fingerprint was not re-emitted. It
+had a per-VM `unrefined` set, but the carve-out was hardcoded to two
+dimensions. Two holes, both verified: the per-VM `catch` block logged "its
+findings are preserved this pass" while only ip and credential were
+preserved (a thrown `qemuConfig()` auto-resolved an open `hw` finding:
+`resolved = 1`, finding gone, hardware never re-checked), and
+`if (!lr) continue;` skipped a VM missing from the cluster resource list
+BEFORE any `unrefined.add(...)` could run, so its ip/credential findings
+were auto-resolved too.
+
+```ts
+// BEFORE: unrefinedVmIds?: Set<string> + a carve-out hardcoded to "ip" | "credential".
+// AFTER: per (vm, dimension) - every dimension that did not run is listed.
+unrefined?: Map<string, Set<DriftDimension>>;   // vmId -> dimensions not checked
+const preserved = row.vm_id && (opts.unrefined?.get(row.vm_id)?.has(row.dimension as DriftDimension) ?? false);
+if (preserved) continue;
+```
+
+Mark EVERY dimension that did not run, including when the VM was skipped
+entirely: agent down (ip), SSH probe in its 24h cooldown (credential) and a
+failing config read (hw) are three different failures, so "unrefined" is a
+per-dimension fact, not a per-VM one. The log message is part of the
+contract: "its findings are preserved this pass" was a lie the code did not
+implement — write it AFTER the behaviour, naming the limitation.
+
+**TEST.** Open a finding in dimension `hw`, make `qemuConfig()` throw, run
+one pass, assert the finding is still OPEN and the pass reported
+`resolved: 0`.
+
+### 5. Fail-open must never lead into a destructive path
+
+**RULE.** Detect deletion against the FULL resource list (templates
+included — a template still exists), sanity-check the cluster view before
+acting on a bulk disappearance, and re-verify against an INDEPENDENT
+source.
+
+**WHY.** `detectDeletedVms()` treats "vmid absent from
+`clusterResources()`" as "the guest was deleted out-of-band". But `GET
+/cluster/resources` is silently PARTIAL when a node is offline or the API
+token lacks `VM.Audit` on that node, and `decommissionDriftVm()` then
+re-verified against THE SAME degraded source — so the re-verify passed and
+it soft-deleted the VM record and hard-deleted the real Guacamole
+connections for guests that were alive. A second trigger:
+`findableResources()` filtered `r.template !== 1`, so a tracked VM
+converted to a Proxmox TEMPLATE out-of-band was reported as `deleted`
+(severity high, "VM \"web\" no longer exists in Proxmox") and could be
+decommissioned even though the guest exists.
+
+```ts
+// BEFORE: templates filtered out, so "absent" meant "deleted".
+.filter((r) => r && typeof r.vmid === "number" && r.template !== 1)
+// AFTER: a template still exists, so it stays in the list.
+.filter((r) => r && typeof r.vmid === "number")
+export function clusterViewLooksDegraded(recorded: number, deleted: number): boolean {
+  if (recorded < 5) return false;          // small fleets: no statistical signal
+  return deleted >= 3 && deleted / recorded >= 0.2;   // partial listing, not mass deletion
+}
+```
+
+The decommission path applies the same guard and refuses with 409.
+"Re-verify before acting" is worthless if the re-verification uses the
+same possibly-degraded source: re-verify with a per-VM API call
+(`client.qemuConfig(node, vmid)`), or sanity-check the source.
+
+**TEST.** Stub `clusterResources()` to omit 3 of 5 tracked VMs; assert the
+pass reports them as deleted, and assert the decommission refuses with a
+conflict instead of deleting anything.
+
+### 6. Destructive actions need typed confirmation AND the right permission
+
+**RULE.** A confirmation that lives only in the browser is a UX nicety, not
+a control. The API must require the typed token AND the permission that
+matches the blast radius.
+
+**WHY.** The repo convention is a typed confirmation string on every
+destructive route: `DELETE /vms/:id` in `apps/api/src/routes/vms.ts`
+requires `body.confirmText === \`DELETE ${vm.name}\`` plus `vm.delete`;
+`apps/api/src/routes/templates.ts` and `apps/api/src/routes/guacamole.ts`
+require the same, and the Guacamole one ALSO requires `guac.manage`. The
+drift decommission endpoint had NO server-side confirmation — the
+`DECOMMISSION <name>` token existed only in `apps/web/src/pages/Drift.tsx` —
+so one authenticated POST destroyed a VM record plus its Guacamole
+connections, and it needed only `drift.manage`, handing a "review
+findings" permission the destructive power of `vm.delete` + `guac.manage`
+without either.
+
+```ts
+const body = z.object({ action: z.enum(REMEDIATE_ACTIONS), confirmText: z.string().optional() }).parse(request.body ?? {});
+if (body.action === "decommission") {
+  const vm = await ctx.vms.requireById(finding.vmId);
+  if (body.confirmText !== `DECOMMISSION ${vm.name}`) {
+    throw AppError.validation(`Confirmation text must be exactly: DECOMMISSION ${vm.name}`);
+  }
+  await app.requirePermission("vm.delete")(request);      // blast radius, not "drift.manage"
+  await app.requirePermission("guac.manage")(request);
+}
+```
+
+**TEST.** Wrong token → 400. Right token but only `drift.manage` → 403.
+`vm.delete` + `guac.manage` and the right token → record and console
+connections gone.
+
+### 7. A soft delete is not a delete — replicate the canonical cleanup
+
+**RULE.** When you write a new path that soft-deletes, copy the cleanup
+list from the canonical delete path, and diff the two functions side by
+side before you ship.
+
+**WHY.** `DELETE /vms/:id` in `apps/api/src/routes/vms.ts` stops the
+guest, deletes it in Proxmox, then cleans up the ProxVM records. The drift
+decommission only called `softDelete`. Because that is an UPDATE, the FK
+cascades never fire — `vm_credentials`, `vm_access` and `vm_power_periods`
+are all `ON DELETE CASCADE` on `vms(id)`, and an UPDATE does not trigger
+them. So `vm_access` grants survive, `vm_credentials` survives (the
+encrypted password of a decommissioned VM is still stored), and
+`vm_power_periods` keeps an OPEN row: `reconcileVmPower()` only closes it
+when it can reach the guest, the metering ticker skips VMs whose
+`qemuStatus` throws, and `monthlyUsage()` counts "Open periods count up to
+now". Usage kept accruing for a VM that no longer existed.
+
+```ts
+await ctx.guac.deleteVmResources(vm.id, guacDb);   // real console connections
+await ctx.creds.delete(vm.id);                     // vault entries
+await closePowerPeriod(ctx.db, vm.id);             // metering
+await ctx.vms.softDelete(vm.id);
+await ctx.vms.revokeAllAccess(vm.id);              // "Soft-delete does not trigger FK cascades"
+```
+
+**TEST.** After the decommission path, assert there is no `vm_access` row,
+no `vm_credentials` row, and no open `vm_power_periods` row for that VM —
+not merely that the `vms` row is soft-deleted.
+
+### 8. New background work that touches credentials is opt-in and rate-limited
+
+**RULE.** (1) New background features default OFF and ship with a real UI
+toggle, not just a settings row. (2) Anything that opens network
+connections or costs money gets a per-route rate limit. (3) The "only one
+at a time" guard must live where BOTH the ticker and the manual endpoint
+can reach it.
+
+**WHY.** `drift.enabled` only skipped the pass when the stored value was
+literally the string `"false"`, so UNSET meant ENABLED. There was no
+seeded default and no UI toggle — the key was written nowhere outside
+tests — so every install ran a full drift pass every 15 minutes, including
+up to 10 real SSH PASSWORD login attempts against guests
+(`MAX_CREDENTIAL_PROBES_PER_PASS` in
+`packages/core/src/services/drift.ts`), plus admin alerts. The repo
+convention for expensive endpoints is an explicit per-route limit:
+`POST /discovery/run` → `rateLimit: { max: 10, timeWindow: "1 hour" }`,
+`apps/api/src/routes/guacamole.ts` → 10/hour,
+`apps/api/src/routes/backups.ts` → 5/hour. The drift manual run had only
+the global 400/min, and it called `runDriftPass` DIRECTLY, bypassing the
+ticker's in-flight guard (`driftInFlight` was a closure local to
+`startHomelabTickers` in `apps/api/src/app.ts`), so a manual run could
+stack with a ticker pass and defeat the 24h probe cooldown.
+
+```ts
+// BEFORE: the guard lived in the ticker's closure; the route bypassed it.
+let driftInFlight = false;   // local to startHomelabTickers in apps/api/src/app.ts
+// AFTER: one exported guard both callers can reach, plus a route limit.
+let driftPassInFlight = false;
+export async function runDriftPassOnce(deps: DriftPassDeps): Promise<DriftPassResult | null> {
+  if (driftPassInFlight) return null;      // one at a time, whoever asked
+  driftPassInFlight = true;
+  try { return await runDriftPass(deps); } finally { driftPassInFlight = false; }
+}
+// apps/api/src/routes/drift.ts - the route rate limit plus the shared guard.
+app.post("/drift/run", { preHandler: app.requirePermission("drift.manage"),
+  config: { rateLimit: { max: 10, timeWindow: "1 hour" } } },
+  async () => runDriftPassOnce(buildDriftPassDeps(ctx)));
+```
+
+"Unset means off" is the important half: the pass now treats anything
+other than an explicit `"true"` as disabled, and the operator gets a real
+toggle in Settings → Application (`driftEnabled` on `PUT /settings/app`).
+
+**TEST.** With `drift.enabled` unset, assert the ticker performs no pass.
+Start a pass and immediately POST `/drift/run`; assert the second call
+reports "already running" instead of starting a second pass.
+
+### 9. An existence oracle is a disclosure
+
+**RULE.** Run the AUTHORIZATION check FIRST, and make "not found" and "not
+allowed" answer identically. Never let a helper's `NOT_FOUND` leak past
+the access gate.
+
+**WHY.** The bulk loop called `ctx.vms.requireById(vmId)` BEFORE the access
+check, so the per-item error distinguished `"VM not found"` from `"No
+access to this VM"`. The single-VM endpoints return a generic 403 for
+both, because `visibleTo()` returns `allowed: false` for a missing VM. For
+the privacy action the access check was skipped entirely, so ANY
+authenticated user got an existence + grant oracle out of the error
+strings: probe a UUID, and the difference between "VM not found" and "No
+access to this VM" tells you whether the VM exists and whether you hold a
+grant on it.
+
+```ts
+// BEFORE: the existence lookup ran first, so its NOT_FOUND leaked.
+const vm = await ctx.vms.requireById(vmId);
+if (action !== "privacy") { const access = await resolveVmAccess(request, vmId); ... }
+// AFTER: the access gate runs first, and both refusals read the same.
+const access = await resolveVmAccess(request, vmId);
+if (!access.allowed) throw AppError.forbidden("No access to this VM");
+const vm = await ctx.vms.requireById(vmId);
+```
+
+**TEST.** Call the bulk endpoint with a random UUID and with the UUID of a
+VM you cannot see; assert both return the same status code and message.
+
+### 10. Do not change a shared write helper without auditing every caller
+
+**RULE.** A shared setter's contract is every caller's contract. Before
+you change one: (1) grep every caller, (2) decide whether each caller's
+behaviour changes, (3) make the INVARIANT hold on every write path, not
+just the one you touched, and (4) write the behaviour change into the PR
+description and the docs.
+
+**WHY.** Moving a guard into `setVmClass()` in
+`packages/core/src/services/vms.ts` changed the behaviour of the
+pre-existing single-VM endpoint `PATCH /vms/:id/class`: it now returns 400
+for a request that previously succeeded, and the PR body described only
+the bulk path. It also changed `setVmClass` to skip the write when the
+class is unchanged, while the routes still audited `VM_EDITED` — an audit
+entry for a mutation that did not happen. And the guard was ONE-SIDED:
+`POST /api/schedules` never looked at `vm_class`, so you could still
+create the exact conflict the guard existed to prevent (verified: creating
+an enabled schedule on a user-class VM returned 200).
+
+```ts
+// BEFORE: the guard lived only in the bulk path.
+await this.db.query("UPDATE vms SET vm_class = $2 ...", [id, vmClass]);
+// AFTER: the shared setter blocks server -> user, and EVERY write path asks.
+async setVmClass(id: string, vmClass: "server" | "user"): Promise<boolean> {
+  if (vmClass === "user" && vm.vmClass !== "user") { /* enabled vm_schedules? refuse */ }
+}
+// apps/api/src/routes/vms.ts - the schedule write blocks create/enable too.
+app.post("/schedules", async (request) => {
+  if (vm.vmClass === "user") throw AppError.validation("A user-class VM may not have an enabled schedule");
+```
+
+**TEST.** `rg "setVmClass\(" --type ts` lists every caller; assert each
+caller's documented behaviour still holds, and assert `POST /schedules` on
+a user-class VM is refused too.
+
+### 11. A "bulk" helper that is called with one element is not a bulk helper
+
+**RULE.** If the signature says "bulk", the implementation must be one
+pass with one write per item, and the caller must pass the whole array.
+Otherwise rename it to the single-item thing it really is.
+
+**WHY.** `bulkSetPrivacy`, `bulkSetVmClass`, `bulkToggleIsolation` and
+`bulkSetStartOnBoot` all take an array, but the route called them one
+item at a time. The "bulk" orchestration was in the route; the helpers
+were single-item wrappers with array-shaped signatures. Each call re-read
+the VM, so the request was N+1 queries, and the `[0]` indexing meant the
+helper's own per-item error handling was re-implemented by the route's
+`catch`.
+
+```ts
+// BEFORE: the route called the "bulk" helper one item at a time.
+const item = (await ctx.vms.bulkSetPrivacy([vmId], enabled, user.id, user.roles))[0];
+// AFTER: the whole array goes in, one write per item inside the helper.
+const items = await ctx.vms.bulkSetPrivacy(body.ids, target, user.id, user.roles);
+for (const item of items) results.push({ vmId: item.vmId, ok: item.ok, error: item.error });
+```
+
+**TEST.** Assert the number of VM reads for a 10-item selection is 10, not
+10 reads plus 10 re-reads inside the helper.
+
+### 12. The PR description is part of the deliverable
+
+**RULE.** Write the description LAST, from the diff, not from memory. Every
+number in it must be verifiable from the branch. If you push follow-up
+commits that change the design, update the description in the same push.
+
+**WHY.** PR #4's description had drifted from the code in five separate
+ways: it documented per-action permission arrays the code did not use
+(`privacy requires ["vm.manage"]` when the code had NO policy permission
+at all for privacy; `class/isolation/start-on-boot require
+["vm.manage","vm.edit"]` when the code required `["vm.edit"]` only); it
+quoted core method signatures with parameters that did not exist
+(`bulkToggleIsolation(vmIds, enabled, userId, roles, proxmox?)` against
+the real `(vmIds, enabled, proxmox?, opts?)`); it described behaviour the
+code never implemented ("reports the post-write visibility state via
+`visibleTo()`"); it quoted wrong file sizes and test counts; and it claimed
+"branch is current with origin/main (no divergence)" when the branch was 13
+commits behind and CONFLICTED with main. A reviewer trusts the
+description and stops looking; a description that lies about permissions
+is worse than no description at all.
+
+### 13. Keep one branch's session log out of another branch's diff
+
+**RULE.** Before you push, read `git diff main...HEAD --stat` and check
+every file for content that does not belong to this PR.
+
+**WHY.** PR #8 added ~87 lines to `AGENTS-VIHAAN.md` that were the
+session log of a DIFFERENT feature branch (PR #4), carried in by a commit
+titled "docs: session log for ground-truth drift (merge stash from
+bulk-vm-ops)". A stash pop or a merge from another branch is the usual
+cause. Session logs belong in the branch they describe.
+
+```bash
+git diff main...HEAD --stat
+git diff main...HEAD -- AGENTS-VIHAAN.md
+```
+
+### Pre-flight checklist
+
+Run through this before you open a PR:
+
+1. **Mass ops** — set semantics? Does every bulk action take an explicit
+   target (`enabled` / `vmClass`), so a retry and a mixed selection do the
+   same thing? Does the response report the PERSISTED value?
+2. **Widened validator** — did you enumerate what the downstream system
+   treats specially (`any`, `ALL`, `$ALLOWLIST`, a `/0` prefix)? Is there a
+   denylist and a test pinning the REJECTED cases? Did the "IPv4 only"
+   doc get updated?
+3. **Partial write** — does an interruption leave the system in its
+   PREVIOUS working state? Is the strict setting applied LAST, after the
+   permissive one? Does a failed item still show up in the audit trail?
+4. **Drift scope** — is every dimension that did not run marked unrefined,
+   per (vm, dimension)? Does the log message say what the code does?
+5. **Destructive path** — is the typed confirmation enforced SERVER-side?
+   Is the permission the blast radius (`vm.delete` + `guac.manage`)?
+6. **Soft delete** — does your new path replicate the canonical delete
+   path's cleanup (creds, access rows, power periods, Guacamole)?
+7. **New background feature** — does it default OFF (unset means off) AND
+   ship a UI toggle? Does it have a per-route rate limit? Can the ticker
+   AND the manual endpoint both reach the in-flight guard?
+8. **Shared helper** — did you grep every caller and decide whether each
+   caller's behaviour changes? Does the invariant hold on EVERY write
+   path? Is the behaviour change in the PR description?
+9. **Authorization** — does the access gate run BEFORE the existence
+   lookup, and do "not found" and "not allowed" answer identically?
+10. **Bulk helper** — is it really one pass with one write per item, and
+    does the caller pass the whole array?
+11. **PR description** — written LAST from the diff? Every number
+    verifiable from the branch? Does it match what the code does?
+12. **Diff hygiene** — `git diff main...HEAD --stat` read; no stray session
+    log, no other branch's file.
