@@ -43,6 +43,12 @@ const SORT_LABEL: Record<SortKey, string> = {
   uptime: "Uptime",
 };
 
+type BulkPolicy =
+  | { action: "privacy"; enabled: boolean }
+  | { action: "class"; vmClass: "server" | "user" }
+  | { action: "isolation"; enabled: boolean }
+  | { action: "start-on-boot"; enabled: boolean };
+
 export default function Vms({ me }: { me: Me }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -84,6 +90,8 @@ export default function Vms({ me }: { me: Me }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [provisionOpen, setProvisionOpen] = useState(false);
   const [grantUserId, setGrantUserId] = useState("");
+  // The chosen bulk POLICY (an explicit target state), not an action to fire.
+  const [bulkPolicy, setBulkPolicy] = useState("");
   const [granting, setGranting] = useState(false);
   const [actionVm, setActionVm] = useState<string | null>(null);
 
@@ -229,6 +237,104 @@ export default function Vms({ me }: { me: Me }) {
       void qc.invalidateQueries({ queryKey: ["vms"] });
     } catch (err) {
       toast.err(`Bulk ${action} failed`, errText(err));
+    }
+  };
+
+  // Bulk policy actions: PRIVACY, VM CLASS, ISOLATION, START-ON-BOOT.
+  //
+  // WHY THE TARGET IS EXPLICIT: the endpoint is a SET (it takes the state to
+  // write, like the single-VM endpoints do), never a flip. A flip cannot be
+  // retried safely - an identical retry flips the flag back - and it cannot
+  // be applied to a mixed selection without moving the items in opposite
+  // directions. The isolation case was the sharpest one: "off" DELETES the
+  // default-deny ruleset and reopens the guest, so an implicit flip on a
+  // mixed selection would have DE-isolated the already-isolated VMs.
+  // The operator picks the target from a list of concrete operations, so the
+  // confirmation can state exactly what will change.
+  const bulkPolicyOptions: Array<{ value: string; label: string; policy: BulkPolicy }> = [
+    { value: "privacy:true", label: "Make private", policy: { action: "privacy", enabled: true } },
+    { value: "privacy:false", label: "Make public", policy: { action: "privacy", enabled: false } },
+  ];
+  if (canEdit) {
+    bulkPolicyOptions.push(
+      { value: "class:server", label: "Set class: server", policy: { action: "class", vmClass: "server" } },
+      { value: "class:user", label: "Set class: user", policy: { action: "class", vmClass: "user" } },
+      { value: "isolation:true", label: "Enable isolation", policy: { action: "isolation", enabled: true } },
+      { value: "isolation:false", label: "Remove isolation", policy: { action: "isolation", enabled: false } },
+      { value: "start-on-boot:true", label: "Enable start-on-boot", policy: { action: "start-on-boot", enabled: true } },
+      { value: "start-on-boot:false", label: "Disable start-on-boot", policy: { action: "start-on-boot", enabled: false } },
+    );
+  }
+
+  const doBulkPolicy = async (policy: BulkPolicy) => {
+    const count = selected.length;
+    const describe = (): { title: string; body: string; danger: boolean } => {
+      if (policy.action === "privacy") {
+        return {
+          title: `Make ${count} VM(s) ${policy.enabled ? "private" : "public"}?`,
+          body: policy.enabled
+            ? `Sets the privacy flag on ${count} selected VM(s). A private VM is hidden from administrators who have no direct grant for it.`
+            : `Clears the privacy flag on ${count} selected VM(s). A public VM is listed for every administrator. Clearing it needs ownership, vm.edit or ADMIN.`,
+          danger: false,
+        };
+      }
+      if (policy.action === "class") {
+        return {
+          title: `Set ${count} VM(s) to class "${policy.vmClass}"?`,
+          body:
+            policy.vmClass === "user"
+              ? `User-class VMs are eligible for idle auto-shutdown. The switch is refused per VM while that VM has enabled schedules.`
+              : `Server-class VMs are never touched by the idle auto-shutdown ticker.`,
+          danger: false,
+        };
+      }
+      if (policy.action === "isolation") {
+        return {
+          title: `${policy.enabled ? "Enable" : "Remove"} isolation on ${count} VM(s)?`,
+          body: policy.enabled
+            ? "Applies the default-deny guest-firewall ruleset per VM (Guacamole console traffic stays open). The Proxmox cluster firewall must be enabled."
+            : "Removes the default-deny guest-firewall ruleset per VM and reopens the guests.",
+          danger: !policy.enabled,
+        };
+      }
+      return {
+        title: `${policy.enabled ? "Enable" : "Disable"} start-on-boot on ${count} VM(s)?`,
+        body: policy.enabled
+          ? "Sets Proxmox's native onboot flag so each VM starts when its node boots."
+          : "Clears Proxmox's native onboot flag so each VM stays down when its node boots.",
+        danger: false,
+      };
+    };
+    const copy = describe();
+    const ok = await confirm({
+      title: copy.title,
+      body: copy.body,
+      danger: copy.danger,
+      confirmLabel: "Apply",
+      requireText: `APPLY ${count}`,
+    });
+    if (!ok) return;
+    try {
+      const body: Record<string, unknown> = { ids: selected, action: policy.action };
+      if (policy.action === "class") body.vmClass = policy.vmClass;
+      else body.enabled = policy.enabled;
+      const res = await api<{ results: Array<{ vmId: string; ok: boolean; error?: string }> }>("/vms/bulk-action", {
+        method: "POST",
+        body,
+      });
+      const failed = res.results.filter((r) => !r.ok);
+      if (failed.length) {
+        toast.warn(
+          `${res.results.length - failed.length}/${res.results.length} applied`,
+          `Failures: ${failed.map((r) => `${r.vmId.slice(0, 8)} (${r.error})`).join("; ")}`,
+        );
+      } else {
+        toast.ok(`${res.results.length} VM(s) updated`);
+      }
+      setSelected([]);
+      void qc.invalidateQueries({ queryKey: ["vms"] });
+    } catch (err) {
+      toast.err("Bulk policy action failed", errText(err));
     }
   };
 
@@ -381,6 +487,32 @@ export default function Vms({ me }: { me: Me }) {
               </Btn>
             </>
           )}
+          {/* Policy actions: the operator picks the TARGET STATE, never an
+              implicit flip (see doBulkPolicy). */}
+          <span className="pv-selbar-sep" aria-hidden="true" />
+          <span className="pv-faint" style={{ fontSize: "0.8rem" }}>Policy</span>
+          <Select
+            autoWidth
+            small
+            value={bulkPolicy}
+            onChange={(e) => setBulkPolicy(e.target.value)}
+            aria-label="Bulk policy action"
+          >
+            <option value="">Select action…</option>
+            {bulkPolicyOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </Select>
+          <Btn
+            size="sm"
+            disabled={!bulkPolicy}
+            onClick={() => {
+              const option = bulkPolicyOptions.find((o) => o.value === bulkPolicy);
+              if (option) void doBulkPolicy(option.policy);
+            }}
+          >
+            Apply
+          </Btn>
           <span style={{ marginLeft: "auto" }}>
             <Btn size="sm" kind="ghost" onClick={() => setSelected([])}>Clear selection</Btn>
           </span>

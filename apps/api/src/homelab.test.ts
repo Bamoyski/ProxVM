@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+﻿import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { newDb } from "pg-mem";
 import { Pool } from "pg";
 import {
@@ -172,7 +172,7 @@ describe("homelab endpoints", () => {
     admin = await login(app, "admin", "Admin-Password-1!");
     user = await login(app, "alice", "User-Password-1!");
     // OPERATOR: role carries vm.manage, but no grant/ownership on the VMs
-    // below — pins the shared privacy authorization against the classic
+    // below â€” pins the shared privacy authorization against the classic
     // public-VM regression case.
     await ctx.users.create({
       username: "op-bulk",
@@ -355,14 +355,105 @@ describe("homelab endpoints", () => {
     expect(emptyIds.statusCode).toBe(400);
   });
 
+  it("a policy action without an explicit target is refused (400), never an implicit flip", async () => {
+    // The endpoint is a SET: a missing target is a malformed request, not an
+    // invitation to derive "the other value" from the current state.
+    for (const action of ["privacy", "isolation", "start-on-boot"] as const) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/vms/bulk-action",
+        headers: authA(),
+        payload: { ids: [vmId], action },
+      });
+      expect(res.statusCode, action).toBe(400);
+    }
+    const classRes = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: authA(),
+      payload: { ids: [vmId], action: "class" },
+    });
+    expect(classRes.statusCode).toBe(400);
+    // Nothing was written.
+    expect((await ctx.vms.requireById(vmId)).privacyFlag).toBe(false);
+    expect((await ctx.vms.requireById(vmId)).vmClass).toBe("server");
+  });
+
+  it("the same target lands on every selected VM, and an identical retry changes nothing", async () => {
+    // Regression: the actions used to derive the target from each row, so a
+    // mixed selection flipped in opposite directions and an identical retry
+    // flipped the successful items BACK.
+    const second = await ctx.vms.create({ vmid: 302, node: "node1", name: "lab-vm-2", status: "stopped", osType: "linux" });
+    await ctx.vms.setVmClass(vmId, "server");
+    await ctx.vms.setVmClass(second.id, "user");
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/vms/bulk-action",
+        headers: authA(),
+        payload: { ids: [vmId, second.id], action: "class", vmClass: "server" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect((await ctx.vms.requireById(vmId)).vmClass).toBe("server");
+      expect((await ctx.vms.requireById(second.id)).vmClass).toBe("server");
+
+      // The identical retry is a no-op, not a flip.
+      const retry = await app.inject({
+        method: "POST",
+        url: "/api/vms/bulk-action",
+        headers: authA(),
+        payload: { ids: [vmId, second.id], action: "class", vmClass: "server" },
+      });
+      expect(retry.statusCode).toBe(200);
+      expect((await ctx.vms.requireById(vmId)).vmClass).toBe("server");
+      expect((await ctx.vms.requireById(second.id)).vmClass).toBe("server");
+    } finally {
+      await ctx.db.query("DELETE FROM vms WHERE id = $1", [second.id]);
+      await ctx.vms.setVmClass(vmId, "server");
+    }
+  });
+
+  it("a missing VM answers exactly like an ungranted one (no existence oracle)", async () => {
+    // The privacy action needs no policy permission, so ANY signed-in user
+    // can call it - the per-item errors must not tell them whether a VM
+    // exists or whether they hold a grant on it.
+    const stranger = await ctx.users.create({
+      username: "stranger",
+      passwordHash: await hashPassword("Stranger-Pass-1!"),
+      roles: ["USER"],
+    });
+    const s = await login(app, "stranger", "Stranger-Pass-1!");
+    const missing = "55555555-5555-4555-8555-555555555555";
+    const unknown = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: { cookie: s.cookie, "x-csrf-token": s.csrf },
+      payload: { ids: [missing], action: "privacy", enabled: true },
+    });
+    const ungranted = await app.inject({
+      method: "POST",
+      url: "/api/vms/bulk-action",
+      headers: { cookie: s.cookie, "x-csrf-token": s.csrf },
+      payload: { ids: [vmId], action: "privacy", enabled: true },
+    });
+    expect(unknown.statusCode).toBe(200);
+    expect(ungranted.statusCode).toBe(200);
+    const unknownItem = (unknown.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
+    const ungrantedItem = (ungranted.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
+    expect(unknownItem.ok).toBe(false);
+    expect(ungrantedItem.ok).toBe(false);
+    expect(unknownItem.error).toBe(ungrantedItem.error);
+    expect(stranger.id).toBeTruthy();
+  });
+
   it("bulk privacy mirrors the single-VM endpoint rules exactly", async () => {
-    // Granted USER (alice) can enable — mirrors PATCH /vms/:id/privacy: no
+    // Granted USER (alice) can enable â€” mirrors PATCH /vms/:id/privacy: no
     // management rights needed for granting-based protection of own VMs.
     const on = await app.inject({
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authU(),
-      payload: { ids: [vmId], action: "privacy" },
+      payload: { ids: [vmId], action: "privacy", enabled: true },
     });
     expect(on.statusCode).toBe(200);
     const onItem = (on.json() as { results: Array<{ ok: boolean; private: boolean; granted?: boolean }> }).results[0]!;
@@ -377,7 +468,7 @@ describe("homelab endpoints", () => {
 
     // Regression (blocking #1): OPERATOR has vm.manage but no grant/ownership
     // on this VM. The single endpoint denies with 403; the bulk path must
-    // refuse the same way — no visibleTo-style bypass, no write-before-check.
+    // refuse the same way â€” no visibleTo-style bypass, no write-before-check.
     const opSingle = await app.inject({
       method: "PATCH",
       url: `/api/vms/${vmId}/privacy`,
@@ -389,7 +480,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authO(),
-      payload: { ids: [vmId], action: "privacy" },
+      payload: { ids: [vmId], action: "privacy", enabled: true },
     });
     expect(opBulk.statusCode).toBe(200);
     const opItem = (opBulk.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
@@ -397,12 +488,12 @@ describe("homelab endpoints", () => {
     expect(opItem.error).toBe("Toggling privacy requires a direct grant for this VM");
 
     // Ungranted admin CAN clear (the single endpoint allows ADMIN without a
-    // grant — previously resolveVmAccess wrongly rejected this in bulk).
+    // grant â€” previously resolveVmAccess wrongly rejected this in bulk).
     const adminClear = await app.inject({
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "privacy" },
+      payload: { ids: [vmId], action: "privacy", enabled: false },
     });
     expect((adminClear.json() as { results: Array<{ ok: boolean; private: boolean; granted?: boolean }> }).results[0]!).toMatchObject({
       ok: true,
@@ -412,12 +503,12 @@ describe("homelab endpoints", () => {
 
     // Regression (blocking #1, clear direction): a custom vm.manage-only role
     // WITH a grant must not be able to clear the flag without vm.edit/
-    // ownership/ADMIN — single endpoint and bulk agree.
+    // ownership/ADMIN â€” single endpoint and bulk agree.
     const bobOn = await app.inject({
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authB(),
-      payload: { ids: [vmId], action: "privacy" },
+      payload: { ids: [vmId], action: "privacy", enabled: true },
     });
     expect((bobOn.json() as { results: Array<{ ok: boolean; private: boolean }> }).results[0]!).toMatchObject({ ok: true, private: true });
     const bobSingleClear = await app.inject({
@@ -431,7 +522,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authB(),
-      payload: { ids: [vmId], action: "privacy" },
+      payload: { ids: [vmId], action: "privacy", enabled: false },
     });
     const bobClearItem = (bobBulkClear.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
     expect(bobClearItem.ok).toBe(false);
@@ -447,7 +538,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "class" },
+      payload: { ids: [vmId], action: "class", vmClass: "user" },
     });
     expect(first.statusCode).toBe(200);
     expect((first.json() as { results: Array<{ ok: boolean; vmClass?: string }> }).results[0]).toMatchObject({ ok: true, vmClass: "user" });
@@ -455,7 +546,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "class" },
+      payload: { ids: [vmId], action: "class", vmClass: "server" },
     });
     expect((back.json() as { results: Array<{ ok: boolean; vmClass?: string }> }).results[0]).toMatchObject({ ok: true, vmClass: "server" });
     // With an enabled schedule, server -> user is refused per item: idle
@@ -471,14 +562,14 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "class" },
+      payload: { ids: [vmId], action: "class", vmClass: "user" },
     });
     expect(guarded.statusCode).toBe(200);
     const guardedItem = (guarded.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
     expect(guardedItem.ok).toBe(false);
     expect(guardedItem.error).toMatch(/enabled schedules/);
     // Shared-guard regression (review #4): the SINGLE endpoint now fails the
-    // same way — one guard in setVmClass protects every write path.
+    // same way â€” one guard in setVmClass protects every write path.
     const singleGuarded = await app.inject({
       method: "PATCH",
       url: `/api/vms/${vmId}/class`,
@@ -494,7 +585,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "class" },
+      payload: { ids: [vmId], action: "class", vmClass: "user" },
     });
     expect((after.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
     // Flip back to server for the start-on-boot/isolation tests below.
@@ -511,7 +602,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "start-on-boot" },
+      payload: { ids: [vmId], action: "start-on-boot", enabled: true },
     });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
@@ -522,7 +613,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "start-on-boot" },
+      payload: { ids: [vmId], action: "start-on-boot", enabled: false },
     });
     expect((off.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
     expect(calls).toContain('updateConfig:{"onboot":0}');
@@ -539,14 +630,14 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "isolation" },
+      payload: { ids: [vmId], action: "isolation", enabled: true },
     });
     expect(on.statusCode).toBe(200);
     expect((on.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
     expect(calls).toContain('setGuestFirewallOptions:{"enable":true,"policy_in":"DROP","policy_out":"DROP"}');
     expect((await ctx.vms.requireById(vmId)).firewallIsolated).toBe(true);
     // Blocking #2: the inbound ACCEPT rules MUST exist with the guacd host as
-    // source and the console ports as dport — policy_in DROP otherwise drops
+    // source and the console ports as dport â€” policy_in DROP otherwise drops
     // every new RDP/SSH/VNC session.
     const accepts = guestRules.filter((r) => r.action === "ACCEPT" && r.type === "in" && r.proto === "tcp");
     expect(accepts).toHaveLength(3);
@@ -559,7 +650,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "isolation" },
+      payload: { ids: [vmId], action: "isolation", enabled: false },
     });
     expect((off.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
     expect(calls).toContain('setGuestFirewallOptions:{"policy_in":"ACCEPT","policy_out":"ACCEPT"}');
@@ -573,7 +664,7 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "isolation", allowFrom: "10.9.9.7", allowDnsTo: "10.9.9.1" },
+      payload: { ids: [vmId], action: "isolation", enabled: true, allowFrom: "10.9.9.7", allowDnsTo: "10.9.9.1" },
     });
     expect((onExplicit.json() as { results: Array<{ ok: boolean }> }).results[0]!.ok).toBe(true);
     const explicitAccepts = guestRules.filter((r) => r.action === "ACCEPT" && r.type === "in" && r.proto === "tcp");
@@ -589,19 +680,19 @@ describe("homelab endpoints", () => {
       method: "POST",
       url: "/api/vms/bulk-action",
       headers: authA(),
-      payload: { ids: [vmId], action: "isolation" },
+      payload: { ids: [vmId], action: "isolation", enabled: false },
     });
     expect((await ctx.vms.requireById(vmId)).firewallIsolated).toBe(false);
 
     // Guard: with the cluster firewall disabled, guest rules would be silently
-    // ignored — the item must fail instead of lying about success.
+    // ignored â€” the item must fail instead of lying about success.
     clusterFirewallOn = false;
     try {
       const blocked = await app.inject({
         method: "POST",
         url: "/api/vms/bulk-action",
         headers: authA(),
-        payload: { ids: [vmId], action: "isolation" },
+      payload: { ids: [vmId], action: "isolation", enabled: true },
       });
       const blockedItem = (blocked.json() as { results: Array<{ ok: boolean; error?: string }> }).results[0]!;
       expect(blockedItem.ok).toBe(false);
@@ -615,13 +706,17 @@ describe("homelab endpoints", () => {
 
   it("vm.manage-only custom role cannot run vm.edit-gated bulk policy actions", async () => {
     // Blocking #3: entry gating has no OR-list with vm.manage for these
-    // actions — exactly MATCH the single endpoints (vm.edit only).
-    for (const action of ["class", "isolation", "start-on-boot"] as const) {
+    // actions â€” exactly MATCH the single endpoints (vm.edit only).
+    for (const [action, target] of [
+      ["class", { vmClass: "server" }],
+      ["isolation", { enabled: true }],
+      ["start-on-boot", { enabled: true }],
+    ] as const) {
       const denied = await app.inject({
         method: "POST",
         url: "/api/vms/bulk-action",
         headers: authB(),
-        payload: { ids: [vmId], action },
+        payload: { ids: [vmId], action, ...target },
       });
       expect(denied.statusCode).toBe(403);
     }
@@ -635,8 +730,32 @@ describe("homelab endpoints", () => {
     expect(single.statusCode).toBe(403);
   });
 
-  it("manages schedules with validation and guards", async () => {
-    const created = await app.inject({
+  it("a user-class VM may not get an enabled schedule (the invariant holds from both sides)", async () => {
+    // setVmClass refuses to move a scheduled VM into the user class; this
+    // refuses to create the conflict in the first place. Before this, only
+    // one of the two write paths was guarded, so the conflict the guard
+    // exists to prevent was still reachable.
+    await ctx.vms.setVmClass(vmId, "user");
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/schedules",
+        headers: authA(),
+        payload: { vmId, action: "stop", hour: 4, minute: 15, days: "1,2,3,4,5" },
+      });
+      expect(created.statusCode).toBe(400);
+      expect((created.json() as { message?: string }).message ?? "").toMatch(/user-class VM may not have an enabled schedule/);
+      const rows = await ctx.db.query<{ n: number }>(
+        "SELECT COUNT(*)::int AS n FROM vm_schedules WHERE vm_id = $1 AND enabled",
+        [vmId],
+      );
+      expect(rows.rows[0]?.n).toBe(0);
+    } finally {
+      await ctx.vms.setVmClass(vmId, "server");
+    }
+  });
+
+  it("manages schedules with validation and guards", async () => {    const created = await app.inject({
       method: "POST",
       url: "/api/schedules",
       headers: authA(),

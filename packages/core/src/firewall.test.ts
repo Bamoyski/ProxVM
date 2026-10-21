@@ -66,6 +66,20 @@ describe("isolation rule builder", () => {
     expect(() => buildIsolationRules({ allowFrom: "10.0.0.1", inboundPorts: ["80; rm"] })).toThrow(/ports like/);
     expect(buildIsolationRules({ allowFrom: "10.0.0.0/24", inboundPorts: ["80", "5900:5910"] })).toHaveLength(10);
   });
+  it("refuses the Proxmox firewall keywords a hostname could otherwise smuggle in", async () => {
+    // Regression: the hostname branch also matched the bare label "any",
+    // which Proxmox treats as 0.0.0.0/0 - so a caller could build the
+    // "default-deny" ruleset with source=any (inbound SSH/RDP/VNC from the
+    // whole internet) while the API reported the VM as isolated.
+    expect(() => buildIsolationRules({ allowFrom: "any" })).toThrow(/must not be the Proxmox keyword/);
+    expect(() => buildIsolationRules({ allowFrom: "ANY" })).toThrow(/must not be the Proxmox keyword/);
+    expect(() => buildIsolationRules({ allowFrom: "all" })).toThrow(/must not be the Proxmox keyword/);
+    expect(() => buildIsolationRules({ allowFrom: "$ALLOWLIST" })).toThrow(/IPv4 address, CIDR, or hostname/);
+    // The literal network form is refused too - "any" was not the only way
+    // to say "every source".
+    expect(() => buildIsolationRules({ allowFrom: "0.0.0.0/0" })).toThrow(/must not be a 0.0.0.0\/0 network/);
+    expect(() => buildIsolationRules({ allowFrom: "10.0.0.0/8" })).not.toThrow();
+  });
 });
 
 describe("hand-written rule validation", () => {
@@ -86,6 +100,10 @@ describe("hand-written rule validation", () => {
     expect(
       assertFirewallRuleInput({ action: "ACCEPT", type: "in", source: "guac.example.com" }),
     ).toMatchObject({ source: "guac.example.com" });
+    // ...but not the Proxmox keyword "any" (= 0.0.0.0/0).
+    expect(() =>
+      assertFirewallRuleInput({ action: "ACCEPT", type: "in", source: "any" }),
+    ).toThrow(/must not be the Proxmox keyword/);
     expect(() => assertFirewallRuleInput(null)).toThrow();
   });
 });
@@ -131,8 +149,62 @@ describe("applyIsolation rule order", () => {
   });
 });
 
-describe("proxvm rule identification", () => {
-  it("matches only our comment prefix", () => {
+describe("isolation applies fail-OPEN", () => {
+  it("only flips the policy to DROP after the exception rules exist", async () => {
+    // Regression: the policy used to be set to DROP BEFORE the rules were
+    // created, so a rule Proxmox refused (an unresolvable DNS source) left
+    // the guest with a DROP policy and no inbound exception - locked out,
+    // while the database still said "not isolated".
+    const calls: string[] = [];
+    const proxmox = {
+      clusterFirewallOptions: async () => ({ enable: 1 }),
+      setGuestFirewallOptions: async (_n: string, _v: number, opts: Record<string, unknown>) => {
+        calls.push(`options:${JSON.stringify(opts)}`);
+        return {};
+      },
+      guestFirewallRules: async () => [],
+      deleteGuestFirewallRule: async () => ({}),
+      createGuestFirewallRule: async () => {
+        calls.push("createRule");
+        return {};
+      },
+    };
+    const db = { query: async () => ({ rows: [] }) };
+    const { applyIsolation: apply } = await import("./index.js");
+    await apply(db as never, proxmox as never, "vm-id", "node", 100, { allowFrom: "192.168.1.22" });
+
+    const dropIndex = calls.findIndex((c) => c.includes('"policy_in":"DROP"'));
+    const lastRule = calls.lastIndexOf("createRule");
+    expect(dropIndex).toBeGreaterThan(-1);
+    expect(dropIndex).toBeGreaterThan(lastRule);
+    // The first call only ENABLES the firewall - it does not change the
+    // policies, so a failure in between leaves the guest as reachable as it
+    // was before the call.
+    expect(calls[0]).toBe('options:{"enable":true}');
+  });
+
+  it("opens the policies before deleting the rules when isolation is removed", async () => {
+    const calls: string[] = [];
+    const proxmox = {
+      setGuestFirewallOptions: async (_n: string, _v: number, opts: Record<string, unknown>) => {
+        calls.push(`options:${JSON.stringify(opts)}`);
+        return {};
+      },
+      guestFirewallRules: async () => [{ pos: 0, comment: `${PROXVM_RULE_COMMENT}: remote access from x` }],
+      deleteGuestFirewallRule: async () => {
+        calls.push("deleteRule");
+        return {};
+      },
+    };
+    const db = { query: async () => ({ rows: [] }) };
+    const { removeIsolation: remove } = await import("./index.js");
+    await remove(db as never, proxmox as never, "vm-id", "node", 100);
+    expect(calls[0]).toBe('options:{"policy_in":"ACCEPT","policy_out":"ACCEPT"}');
+    expect(calls.indexOf("deleteRule")).toBeGreaterThan(0);
+  });
+});
+
+describe("proxvm rule identification", () => {  it("matches only our comment prefix", () => {
     expect(isProxvmRule({ comment: "proxvm-isolation: remote access" })).toBe(true);
     expect(isProxvmRule({ comment: "hand-made rule" })).toBe(false);
     expect(isProxvmRule({})).toBe(false);

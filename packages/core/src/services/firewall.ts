@@ -200,6 +200,11 @@ function assertAddress(value: string, field: string): void {
     for (const octet of match.slice(1, 5)) {
       if (Number(octet) > 255) throw AppError.validation(`${field} has an octet above 255`);
     }
+    // A /0 prefix is "every source" in CIDR form - the same hole as the
+    // "any" keyword, and just as wrong inside a default-deny ruleset.
+    if (match[6] !== undefined && Number(match[6]) === 0) {
+      throw AppError.validation(`${field} must not be a 0.0.0.0/0 network (it would allow every source)`);
+    }
     return;
   }
   // Proxmox itself accepts resolvable hostnames as rule sources — and the
