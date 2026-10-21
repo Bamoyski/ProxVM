@@ -15,7 +15,7 @@ import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, alertAdmins, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, listConnectionHealth, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, alertAdmins, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, listConnectionHealth, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDriftPass, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
@@ -37,6 +37,7 @@ import { guacamoleRoutes } from "./routes/guacamole.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { auditRoutes } from "./routes/audit.js";
 import { threatRoutes } from "./routes/threats.js";
+import { driftRoutes, buildDriftPassDeps } from "./routes/drift.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { healthRoutes } from "./routes/health.js";
 import { iamRoutes } from "./routes/iam.js";
@@ -248,6 +249,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(jobRoutes, { prefix: "/api", ctx });
     await app.register(auditRoutes, { prefix: "/api", ctx });
     await app.register(threatRoutes, { prefix: "/api", ctx, sharedEgressIps });
+    await app.register(driftRoutes, { prefix: "/api", ctx });
     await app.register(settingsRoutes, { prefix: "/api", ctx });
     await app.register(healthRoutes, { prefix: "/api", ctx });
     await app.register(iamRoutes, { prefix: "/api", ctx });
@@ -599,11 +601,42 @@ export function startHomelabTickers(
       );
     }
   };
+  // Ground-truth drift: reconciles ProxVM's DB against live Proxmox, guest
+  // agents and the Guacamole DB every 15 minutes (read-only detection; only
+  // findings rows are written). Gated by the drift.enabled switch; fails
+  // open (a down Proxmox just skips the pass). New findings alert admins.
+  const DRIFT_TICK_MS = 15 * 60 * 1000;
+  const runDrift = async (): Promise<void> => {
+    try {
+      const result = await runDriftPass(buildDriftPassDeps(ctx));
+      if (result.liveChecked && (result.created > 0 || result.resolved > 0)) {
+        ctx.logger.info(
+          { created: result.created, updated: result.updated, resolved: result.resolved, exempted: result.exempted },
+          "drift pass completed",
+        );
+      }
+      if (result.newFingerprints.length > 0) {
+        await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+          kind: "system",
+          title: `${result.newFingerprints.length} new drift finding${result.newFingerprints.length === 1 ? "" : "s"}`,
+          body: `A drift pass recorded ${result.newFingerprints.length} new ground-truth discrepancies (and resolved ${result.resolved}); ${result.exempted} VM(s) were exempt for active jobs. Review them on the Drift page.`,
+          link: "/drift",
+          priority: 6,
+        });
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "drift pass failed",
+      );
+    }
+  };
   void runSchedules();
   void runMetering();
   void runPower();
   void runThreats();
   void runInfra();
+  void runDrift();
   const scheduleTimer = setInterval(() => {
     void runSchedules();
   }, scheduleIntervalMs);
@@ -622,7 +655,10 @@ export function startHomelabTickers(
   const infraTimer = setInterval(() => {
     void runInfra();
   }, healthIntervalMs);
-  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer, infraTimer]) {
+  const driftTimer = setInterval(() => {
+    void runDrift();
+  }, DRIFT_TICK_MS);
+  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer, infraTimer, driftTimer]) {
     (timer as unknown as { unref?: () => void }).unref?.();
   }
   app.addHook("onClose", async () => {
@@ -632,6 +668,7 @@ export function startHomelabTickers(
     clearInterval(powerTimer);
     clearInterval(threatTimer);
     clearInterval(infraTimer);
+    clearInterval(driftTimer);
   });
 }
 
