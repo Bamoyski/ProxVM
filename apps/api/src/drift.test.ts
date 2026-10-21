@@ -71,6 +71,8 @@ describe("drift routes", () => {
   let admin: Session;
   let operator: Session;
   let plainUser: Session;
+  let driftHolder: Session;
+  let holderId: string;
   let vmId: string;
   let findingId: string;
   let adminId: string;
@@ -88,10 +90,19 @@ describe("drift routes", () => {
     adminId = adminUser.id;
     await ctx.users.create({ username: "op", passwordHash: await hashPassword("Operator-Pass-1!"), roles: ["OPERATOR"] });
     await ctx.users.create({ username: "u1", passwordHash: await hashPassword("User-Pass-1!"), roles: ["USER"] });
+    const holder = await ctx.users.create({ username: "drift-holder", passwordHash: await hashPassword("Holder-Pass-1!"), roles: ["USER"] });
+    holderId = holder.id;
+    // UUID columns in pg-mem reject text params on INSERT: inline the
+    // generated ids. This also proves drift.manage is grantable (FK into
+    // the permissions catalog, migration 024).
+    await ctx.db.query(
+      `INSERT INTO user_permissions (user_id, permission) VALUES ('${holderId}', 'drift.manage')`,
+    );
     app = await buildApp({ setupMode: false, ctx });
     admin = await login(app, "admin", "Admin-Password-1!");
     operator = await login(app, "op", "Operator-Pass-1!");
     plainUser = await login(app, "u1", "User-Pass-1!");
+    driftHolder = await login(app, "drift-holder", "Holder-Pass-1!");
     const vm = await ctx.vms.create({ vmid: 1200, node: "node1", name: "api-drift-vm", status: "running", osType: "linux" });
     vmId = vm.id;
   });
@@ -245,6 +256,61 @@ describe("drift routes", () => {
         "SELECT COUNT(*)::text AS c FROM audit_logs WHERE event = 'DRIFT_FINDING_ACKNOWLEDGED'",
       );
       expect(after.rows[0]!.c).toBe(before.rows[0]!.c);
+    });
+  });
+
+  describe("privacy + multi-tenant visibility", () => {
+    it("a non-privileged drift.manage holder needs a VM grant to see or action findings", async () => {
+      // No vm_access yet: the finding exists, but the holder's board excludes
+      // it and every mutation reads as not-found (never "exists but denied").
+      const before = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: driftHolder.cookie } });
+      expect(before.statusCode).toBe(200);
+      expect((before.json() as { findings: Array<{ vmId: string | null }> }).findings.some((f) => f.vmId === vmId)).toBe(false);
+
+      const denied = await app.inject({
+        method: "POST",
+        url: `/api/drift/findings/${findingId}/acknowledge`,
+        headers: { cookie: driftHolder.cookie, "x-csrf-token": driftHolder.csrf },
+        payload: {},
+      });
+      expect(denied.statusCode).toBe(404);
+
+      await ctx.db.query(`INSERT INTO vm_access (vm_id, user_id) VALUES ('${vmId}', '${holderId}')`);
+      const after = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: driftHolder.cookie } });
+      expect((after.json() as { findings: Array<{ vmId: string | null }> }).findings.some((f) => f.vmId === vmId)).toBe(true);
+
+      const allowed = await app.inject({
+        method: "POST",
+        url: `/api/drift/findings/${findingId}/acknowledge`,
+        headers: { cookie: driftHolder.cookie, "x-csrf-token": driftHolder.csrf },
+        payload: {},
+      });
+      expect(allowed.statusCode).toBe(200);
+    });
+
+    it("privacy-flagged VMs require a concrete grant, even for ADMIN with drift.manage", async () => {
+      await ctx.vms.setPrivacyFlag(vmId, true);
+      try {
+        const adminBoard = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: admin.cookie } });
+        expect((adminBoard.json() as { findings: Array<{ vmId: string | null }> }).findings.some((f) => f.vmId === vmId)).toBe(false);
+
+        const adminDenied = await app.inject({
+          method: "POST",
+          url: `/api/drift/findings/${findingId}/acknowledge`,
+          headers: { cookie: admin.cookie, "x-csrf-token": admin.csrf },
+          payload: {},
+        });
+        expect(adminDenied.statusCode).toBe(404);
+        const untouched = await ctx.db.query<{ status: string }>("SELECT status FROM drift_findings WHERE id = $1", [findingId]);
+        expect(untouched.rows[0]?.status).toBe("ACKNOWLEDGED"); // denial changed nothing
+
+        // The holder's direct vm_access grant is the concrete authorization
+        // the privacy flag requires — it survives the flag.
+        const holderBoard = await app.inject({ method: "GET", url: "/api/drift", headers: { cookie: driftHolder.cookie } });
+        expect((holderBoard.json() as { findings: Array<{ vmId: string | null }> }).findings.some((f) => f.vmId === vmId)).toBe(true);
+      } finally {
+        await ctx.vms.setPrivacyFlag(vmId, false);
+      }
     });
   });
 });

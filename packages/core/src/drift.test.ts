@@ -274,6 +274,15 @@ describe("applyFindings lifecycle", () => {
     expect((await listDriftFindings(pool, {}))[0]?.summary).toBe("was renamed (still)");
   });
 
+  it("advances last_seen on every reproducing pass (open findings stay fresh)", async () => {
+    await applyFindings(pool, [finding()], { now: ticks() });
+    const first = await pool.query<{ last_seen: Date }>("SELECT last_seen FROM drift_findings");
+    await applyFindings(pool, [finding()], { now: ticks() });
+    const second = await pool.query<{ last_seen: Date }>("SELECT last_seen FROM drift_findings");
+    expect(second.rows[0]!.last_seen.getTime()).toBeGreaterThan(first.rows[0]!.last_seen.getTime());
+    expect((await listDriftFindings(pool, {}))[0]).toMatchObject({ status: "OPEN", occurrences: 1 });
+  });
+
   it("auto-resolves when the finding stops reproducing", async () => {
     await applyFindings(pool, [finding()], { now: ticks() });
     const result = await applyFindings(pool, [], { now: ticks() });
@@ -428,6 +437,27 @@ describe("drift orchestrator", () => {
     expect(rows[0]).toMatchObject({ dimension: "hw", fingerprint: `hw:${vmId}:memoryMb` });
   });
 
+  it("keeps a hardware finding across passes until the change is adopted or reverted", async () => {
+    await runDriftPass(passDeps(fakeClient())); // baseline 2 cores / 4096 MB
+    const driftConfig = { cores: 2, memory: 8192, net: null };
+    const second = await runDriftPass(passDeps(fakeClient({ config: driftConfig })));
+    expect(second.created).toBe(1);
+
+    // Regression: the detector must not overwrite the baseline it compared
+    // against, or the finding auto-resolves on the very next pass.
+    const third = await runDriftPass(passDeps(fakeClient({ config: driftConfig })));
+    expect(third).toMatchObject({ created: 0, resolved: 0 });
+    const rows = await listDriftFindings(pool, {});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "OPEN", fingerprint: `hw:${vmId}:memoryMb` });
+
+    // Reverting in Proxmox makes the drift disappear: only then does the
+    // pass resolve it (no adoption needed because the value matches again).
+    const reverted = await runDriftPass(passDeps(fakeClient()));
+    expect(reverted.resolved).toBe(1);
+    expect(await listDriftFindings(pool, {})).toHaveLength(0);
+  });
+
   it("exempts VMs with active provisioning jobs from every per-VM comparison", async () => {
     const first = await runDriftPass(passDeps(fakeClient({ config: { cores: 9, memory: 9999, net: null }, agent: { ipv4s: ["10.0.0.77"] } })));
     expect(first.exempted).toBe(0);
@@ -484,6 +514,12 @@ describe("drift orchestrator", () => {
 
     const pass2 = await runDriftPass(passDeps(fakeClient({ agent: null })));
     expect(pass2.resolved).toBe(0);
+    expect((await listDriftFindings(pool, {})).filter((f) => f.dimension === "ip")).toHaveLength(1);
+
+    // An agent that answers but reports no usable IPv4 is equally
+    // inconclusive — it must not resolve the finding either.
+    const pass3 = await runDriftPass(passDeps(fakeClient({ agent: { ipv4s: [] } })));
+    expect(pass3.resolved).toBe(0);
     expect((await listDriftFindings(pool, {})).filter((f) => f.dimension === "ip")).toHaveLength(1);
   });
 });
@@ -557,6 +593,70 @@ describe("credential drift probe", () => {
     expect(cred?.status).toBe("VERIFIED");
   });
 
+  it("preserves an existing credential finding when the probe cannot decide (transport failure)", async () => {
+    await applyFindings(
+      pool,
+      [{ fingerprint: `credential:${vmId}`, dimension: "credential", severity: "high", vmId, title: "t", summary: "s" }],
+      { now: new Date(), resolveStale: false },
+    );
+    const result = await runDriftPass(deps(CONNECTION_FAILED));
+    expect(result.resolved).toBe(0);
+    const rows = await listDriftFindings(pool, {});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ fingerprint: `credential:${vmId}`, status: "OPEN" });
+  });
+
+  it("caps probes per pass and preserves findings for VMs that were not probed", async () => {
+    const extras: string[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      const vm = await ctx.vms.create({ vmid: 810 + i, node: "node1", name: `cap-vm-${i}`, status: "running", osType: "linux" });
+      await ctx.vms.updateIp(vm.id, "10.0.0.80", { static: false });
+      await ctx.creds.store(vm.id, "deployer", "Password-Test-1");
+      extras.push(vm.id);
+    }
+    try {
+      await applyFindings(
+        pool,
+        [vmId, ...extras].map((id) => ({
+          fingerprint: `credential:${id}`,
+          dimension: "credential" as const,
+          severity: "high" as const,
+          vmId: id,
+          title: "t",
+          summary: "s",
+        })),
+        { now: new Date(), resolveStale: false },
+      );
+
+      let probes = 0;
+      const resources = [
+        { vmid: 800, node: "node1", name: "probe-vm", status: "running" },
+        ...extras.map((_, i) => ({ vmid: 810 + i, node: "node1", name: `cap-vm-${i}`, status: "running" })),
+      ];
+      const capped: DriftPassDeps = {
+        ...deps(() => {
+          probes += 1;
+          return Promise.resolve({ status: "AUTHENTICATED", detail: "ok", output: "host" });
+        }),
+        getProxmoxClient: async () =>
+          ({
+            clusterResources: async () => resources,
+            qemuConfig: async () => ({ cores: 1, memory: 1024, net: null }),
+            guestIpAddresses: async () => ({ ipv4s: ["10.0.0.80"] }),
+          }) as unknown as ProxmoxClient,
+      };
+
+      const result = await runDriftPass(capped);
+      expect(probes).toBe(10); // MAX_CREDENTIAL_PROBES_PER_PASS
+      // The 10 probed VMs authenticated -> findings resolved. The 3 VMs
+      // deferred by the cap were never refuted -> findings preserved.
+      expect(result.resolved).toBe(10);
+      expect(await listDriftFindings(pool, {})).toHaveLength(3);
+    } finally {
+      await pool.query("DELETE FROM vms WHERE vmid >= 810");
+    }
+  });
+
   it("does not probe non-linux guests (v1 scope) and leaves no findings", async () => {
     await pool.query("UPDATE vms SET os_type = 'windows' WHERE id = $1", [vmId]);
     try {
@@ -608,7 +708,7 @@ describe("remediation", () => {
     await pool.query("DELETE FROM guacamole_connections");
     // The decommission happy-path soft-deletes the fixture; restore it so
     // every test starts from a live record at the fixture IP.
-    await pool.query("UPDATE vms SET deleted_at = NULL, ip_address = '10.0.0.90' WHERE id = $1", [vmId]);
+    await pool.query("UPDATE vms SET deleted_at = NULL, ip_address = '10.0.0.90', name = 'fix-vm' WHERE id = $1", [vmId]);
     audits = [];
   });
 
@@ -680,6 +780,17 @@ describe("remediation", () => {
     expect((await ctx.vms.findById(vmId))?.node).toBe("node2");
     expect(await listDriftFindings(ctx.db, {})).toHaveLength(0);
     expect(audits.some((a) => a.event === "DRIFT_REMEDIATED")).toBe(true);
+  });
+
+  it("adopt syncs rename when the live name extends the recorded one", async () => {
+    const finding = await seed({ fingerprint: `config:${vmId}:name`, detail: { field: "name" } });
+    await adoptDriftFinding(
+      actionDeps({ resources: [{ vmid: 900, node: "node1", name: "fix-vm-2", status: "running", template: 0 }] }),
+      finding.id,
+      actor,
+    );
+    expect((await ctx.vms.findById(vmId))?.name).toBe("fix-vm-2");
+    expect(await listDriftFindings(ctx.db, {})).toHaveLength(0);
   });
 
   it("adopt on hardware records the live qemuConfig as the baseline", async () => {
@@ -795,5 +906,12 @@ describe("bumpHardwareSnapshot (in-band edit support)", () => {
     await bumpHardwareSnapshot(ctx.db, vm.id, { cores: 9, memory: 16384, net: null });
     const count = await pool.query<{ c: string }>("SELECT COUNT(*)::text AS c FROM drift_vm_state WHERE vm_id = $1", [vm.id]);
     expect(count.rows[0]?.c).toBe("1");
+    // An explicit null clears the stored net (a removed device must not keep
+    // reading as drift forever).
+    const cleared = await pool.query<{ net_json: string | null }>(
+      "SELECT net_json FROM drift_vm_state WHERE vm_id = $1",
+      [vm.id],
+    );
+    expect(cleared.rows[0]?.net_json).toBeNull();
   });
 });

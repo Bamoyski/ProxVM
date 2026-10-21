@@ -37,6 +37,7 @@ import { notificationsMigration } from "./migrations/020_notifications.js";
 import { guacDirectLoginMigration } from "./migrations/021_guac_direct_login.js";
 import { guestRoleMigration } from "./migrations/022_guest_role.js";
 import { driftMigration } from "./migrations/023_drift.js";
+import { driftPermissionMigration } from "./migrations/024_drift_permission.js";
 import { sshHostKeysMigration } from "./migrations/018_ssh_host_keys.js";
 import { csrfTokenDerivationMigration } from "./migrations/019_csrf_token_derivation.js";
 
@@ -64,6 +65,7 @@ export const MIGRATIONS: Migration[] = [
   { id: "021", name: "guac_direct_login", sql: guacDirectLoginMigration },
   { id: "022", name: "guest_role", sql: guestRoleMigration },
   { id: "023", name: "drift", sql: driftMigration },
+  { id: "024", name: "drift_permission", sql: driftPermissionMigration },
 ];
 
 // --- Runner ----------------------------------------------------------------

@@ -606,7 +606,15 @@ export function startHomelabTickers(
   // findings rows are written). Gated by the drift.enabled switch; fails
   // open (a down Proxmox just skips the pass). New findings alert admins.
   const DRIFT_TICK_MS = 15 * 60 * 1000;
+  let driftInFlight = false;
   const runDrift = async (): Promise<void> => {
+    // A slow cluster (or a manual run racing the ticker) must not stack two
+    // passes: they would double-probe past the cooldown and duplicate alerts.
+    if (driftInFlight) {
+      ctx.logger.debug({}, "drift pass still running; skipping overlapping tick");
+      return;
+    }
+    driftInFlight = true;
     try {
       const result = await runDriftPass(buildDriftPassDeps(ctx));
       if (result.liveChecked && (result.created > 0 || result.resolved > 0)) {
@@ -629,6 +637,8 @@ export function startHomelabTickers(
         { error: err instanceof Error ? err.message : String(err) },
         "drift pass failed",
       );
+    } finally {
+      driftInFlight = false;
     }
   };
   void runSchedules();

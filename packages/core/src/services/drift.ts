@@ -381,7 +381,7 @@ export async function applyFindings(
       await db.query(
         `UPDATE drift_findings SET
            severity = $2, title = $3, summary = $4, detail = $5,
-           last_seen = CASE WHEN status = 'RESOLVED' THEN $6 ELSE last_seen END,
+           last_seen = $6,
            status = CASE WHEN status = 'RESOLVED' THEN 'OPEN' ELSE status END,
            occurrences = CASE WHEN status = 'RESOLVED' THEN occurrences + 1 ELSE occurrences END,
            resolved_at = CASE WHEN status = 'RESOLVED' THEN NULL ELSE resolved_at END,
@@ -470,26 +470,33 @@ async function getVmState(db: Pool, vmId: string): Promise<VmStateRow | null> {
 }
 
 async function upsertVmState(db: Pool, vmId: string, patch: Partial<VmStateRow>): Promise<void> {
+  // Column-wise upsert: only fields present in the patch are written, so a
+  // probe-only patch preserves the hardware baseline AND an explicit null
+  // (e.g. a removed net device) actually clears the stored value. COALESCE
+  // could express the first but never the second.
+  const cols = ["vm_id"];
+  const placeholders = ["$1"];
+  const params: unknown[] = [vmId];
+  const add = (col: string, value: unknown): void => {
+    params.push(value);
+    cols.push(col);
+    placeholders.push(`$${params.length}`);
+  };
+  if (patch.last_probe_at !== undefined) add("last_probe_at", patch.last_probe_at);
+  if (patch.last_probe_ok_at !== undefined) add("last_probe_ok_at", patch.last_probe_ok_at);
+  if (patch.cores !== undefined) add("cores", patch.cores);
+  if (patch.memory_mb !== undefined) add("memory_mb", patch.memory_mb);
+  if (patch.net_json !== undefined) add("net_json", patch.net_json);
+  if (patch.snapshotted_at !== undefined) add("snapshotted_at", patch.snapshotted_at);
+  const updates = cols
+    .slice(1)
+    .map((col) => `${col} = EXCLUDED.${col}`)
+    .concat("updated_at = NOW()");
   await db.query(
-    `INSERT INTO drift_vm_state (vm_id, last_probe_at, last_probe_ok_at, cores, memory_mb, net_json, snapshotted_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (vm_id) DO UPDATE SET
-       last_probe_at = COALESCE(EXCLUDED.last_probe_at, drift_vm_state.last_probe_at),
-       last_probe_ok_at = COALESCE(EXCLUDED.last_probe_ok_at, drift_vm_state.last_probe_ok_at),
-       cores = COALESCE(EXCLUDED.cores, drift_vm_state.cores),
-       memory_mb = COALESCE(EXCLUDED.memory_mb, drift_vm_state.memory_mb),
-       net_json = COALESCE(EXCLUDED.net_json, drift_vm_state.net_json),
-       snapshotted_at = COALESCE(EXCLUDED.snapshotted_at, drift_vm_state.snapshotted_at),
-       updated_at = NOW()`,
-    [
-      vmId,
-      patch.last_probe_at ?? null,
-      patch.last_probe_ok_at ?? null,
-      patch.cores ?? null,
-      patch.memory_mb ?? null,
-      patch.net_json ?? null,
-      patch.snapshotted_at ?? null,
-    ],
+    `INSERT INTO drift_vm_state (${cols.join(", ")})
+     VALUES (${placeholders.join(", ")})
+     ON CONFLICT (vm_id) DO UPDATE SET ${updates.join(", ")}`,
+    params,
   );
 }
 
@@ -570,10 +577,8 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
   const unrefined = new Set<string>();
   const probed = new Set<string>();
 
-  if (resources.length >= 0) {
-    detected.push(...detectConfigDrift(active, resources));
-    detected.push(...detectDeletedVms(active, resources));
-  }
+  detected.push(...detectConfigDrift(active, resources));
+  detected.push(...detectDeletedVms(active, resources));
 
   for (const vm of active) {
     const lr = resources.find((r) => r.vmid === vm.vmid);
@@ -582,28 +587,43 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
       // Hardware snapshot comparison (any power state — qemuConfig works while stopped).
       const cfg = await (await deps.getProxmoxClient()).qemuConfig(lr.node, vm.vmid);
       const state = await getVmState(deps.db, vm.id);
-      detected.push(
-        ...detectHardwareDrift(vm.id, vm.name, state ? { cores: state.cores, memoryMb: state.memory_mb, net: state.net_json } : null, {
+      const hwFindings = detectHardwareDrift(
+        vm.id,
+        vm.name,
+        state ? { cores: state.cores, memoryMb: state.memory_mb, net: state.net_json } : null,
+        {
           cores: Number(cfg.cores ?? 0),
           memory: Number(cfg.memory ?? 0),
           net: cfg.net ?? null,
-        }),
+        },
       );
-      await upsertVmState(deps.db, vm.id, {
-        cores: Number(cfg.cores ?? 0),
-        memory_mb: Number(cfg.memory ?? 0),
-        net_json: canonNet(cfg.net ?? null),
-        snapshotted_at: now,
-      });
+      detected.push(...hwFindings);
+      // Advance the baseline ONLY when the detector stayed silent. Writing the
+      // live config unconditionally would overwrite the baseline it just
+      // compared against, so the finding would auto-resolve on the next pass
+      // without anyone adopting (or reverting) the out-of-band change — the
+      // exact false-resolution loop this snapshot exists to prevent.
+      if (hwFindings.length === 0) {
+        await upsertVmState(deps.db, vm.id, {
+          cores: Number(cfg.cores ?? 0),
+          memory_mb: Number(cfg.memory ?? 0),
+          net_json: canonNet(cfg.net ?? null),
+          snapshotted_at: now,
+        });
+      }
 
       // IP drift (agent round-trip): only comparable for running guests; a
-      // down agent unrefines instead of resolving existing findings.
+      // down agent (or an agent with no usable IPv4) unrefines instead of
+      // resolving existing findings.
       if (vm.status === "running" && lr.status === "running") {
         const agent = await (await deps.getProxmoxClient()).guestIpAddresses(lr.node, vm.vmid);
         if (agent) {
-          detected.push(
-            ...detectIpDrift(vm, selectUsableIpv4(agent.ipv4s)),
-          );
+          const liveIp = selectUsableIpv4(agent.ipv4s);
+          if (liveIp) {
+            detected.push(...detectIpDrift(vm, liveIp));
+          } else {
+            unrefined.add(vm.id);
+          }
         } else {
           unrefined.add(vm.id);
         }
@@ -625,7 +645,13 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
           unrefined.add(vm.id);
         } else if (probed.size < MAX_CREDENTIAL_PROBES_PER_PASS) {
           probed.add(vm.id);
-          detected.push(...(await probeCredential(deps, vm, now)));
+          const outcome = await probeCredential(deps, vm, now);
+          detected.push(...outcome.findings);
+          // Transport failures (and probe-cap deferrals) prove nothing about
+          // the credential: preserve an existing finding instead of resolving it.
+          if (!outcome.conclusive) unrefined.add(vm.id);
+        } else {
+          unrefined.add(vm.id);
         }
       } else {
         unrefined.add(vm.id);
@@ -674,6 +700,13 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
   };
 }
 
+interface ProbeOutcome {
+  findings: Detected[];
+  /** False when the probe could not decide (transport error/catch): callers
+   *  must preserve an existing credential finding rather than resolve it. */
+  conclusive: boolean;
+}
+
 /**
  * SSH staleness probe. Marks verified on success, returns a finding on
  * AUTH_FAILED, and never persists findings itself — the orchestrator owns
@@ -681,9 +714,9 @@ export async function runDriftPass(deps: DriftPassDeps, now = new Date()): Promi
  * output joins the pass detection set and participates in the same
  * lifecycle as every other dimension.
  */
-async function probeCredential(deps: DriftPassDeps, vm: VmRecordLite, now: Date): Promise<Detected[]> {
+async function probeCredential(deps: DriftPassDeps, vm: VmRecordLite, now: Date): Promise<ProbeOutcome> {
   const cred = await deps.creds.findByVm(vm.id);
-  if (!cred) return [];
+  if (!cred) return { findings: [], conclusive: true };
   const ip = vm.ipAddress as string;
   try {
     const probe = deps.probeSshFn ?? probeSsh;
@@ -700,32 +733,36 @@ async function probeCredential(deps: DriftPassDeps, vm: VmRecordLite, now: Date)
         last_probe_at: now,
         last_probe_ok_at: now,
       });
-      return [];
+      return { findings: [], conclusive: true };
     }
     if (result.status === "AUTH_FAILED") {
       await upsertVmState(deps.db, vm.id, { last_probe_at: now, last_probe_ok_at: null });
-      return [
-        {
-          fingerprint: `credential:${vm.id}`,
-          dimension: "credential",
-          severity: "high",
-          vmId: vm.id,
-          title: `Credential rejected on VM "${vm.name}"`,
-          summary: `SSH authentication at ${ip} was REJECTED for "${cred.username}" (not frozen/transport issue): the stored credential no longer works and remote sessions will fail. Rotate the credential, then verify.`,
-          detail: { mechanism: "ssh", host: ip, probeDetail: result.detail.slice(0, 200) },
-        },
-      ];
+      return {
+        findings: [
+          {
+            fingerprint: `credential:${vm.id}`,
+            dimension: "credential",
+            severity: "high",
+            vmId: vm.id,
+            title: `Credential rejected on VM "${vm.name}"`,
+            summary: `SSH authentication at ${ip} was REJECTED for "${cred.username}" (not frozen/transport issue): the stored credential no longer works and remote sessions will fail. Rotate the credential, then verify.`,
+            detail: { mechanism: "ssh", host: ip, probeDetail: result.detail.slice(0, 200) },
+          },
+        ],
+        conclusive: true,
+      };
     }
-    // CONNECTION_FAILED is transport, not credential drift: cooldown, no finding.
+    // CONNECTION_FAILED is transport, not credential drift: cooldown, no
+    // finding — but also no evidence the stored credential still works.
     await upsertVmState(deps.db, vm.id, { last_probe_at: now, last_probe_ok_at: null });
-    return [];
+    return { findings: [], conclusive: false };
   } catch (err) {
     deps.logger.warn(
       { vmId: vm.id, error: err instanceof Error ? err.message : String(err) },
       "credential drift probe failed; treated as transport issue",
     );
     await upsertVmState(deps.db, vm.id, { last_probe_at: now, last_probe_ok_at: null }).catch(() => undefined);
-    return [];
+    return { findings: [], conclusive: false };
   }
 }
 
@@ -920,7 +957,14 @@ export async function adoptDriftFinding(
     const field = String((finding.detail as Record<string, unknown>).field ?? "");
     if (field === "name") {
       const liveName = lr.name ?? "";
-      if (!liveName.toLowerCase().includes(vm.name.toLowerCase()) && liveName.toLowerCase() !== vm.name.toLowerCase()) {
+      if (!liveName) {
+        throw AppError.conflict("Proxmox reports no name for this guest; there is nothing to adopt");
+      }
+      // Case-only differences are not drift (Proxmox lowercases names), so
+      // resolve without degrading the recorded display name. Any other
+      // difference — including the recorded name being a substring of the
+      // live one — is adopted verbatim.
+      if (liveName.toLowerCase() !== vm.name.toLowerCase()) {
         await deps.vms.updateName(vm.id, liveName);
       }
     } else if (field === "node") {
@@ -966,7 +1010,19 @@ export async function resyncDriftIp(
   const vm = await deps.vms.requireById(finding.vmId);
   await assertNoActiveJob(deps, vm.id);
   const client = await deps.getProxmoxClient();
-  const agent = await client.guestIpAddresses(vm.node, vm.vmid);
+  // Prefer the live node: the record's node may itself be stale after an
+  // out-of-band migration, and the agent call must target where the guest
+  // actually runs. Fall back to the recorded node when the cluster view is
+  // unavailable (the agent call then fails and surfaces a clean external error).
+  let liveNode = vm.node;
+  try {
+    const resources = findableResources(await client.clusterResources());
+    liveNode = resources.find((r) => r.vmid === vm.vmid)?.node ?? vm.node;
+  } catch {
+    // Cluster view unavailable: keep the recorded node and let the agent call
+    // decide, so the caller still gets one clear external-service error.
+  }
+  const agent = await client.guestIpAddresses(liveNode, vm.vmid);
   if (!agent) {
     throw AppError.external("Guest", "Guest agent is not reachable; cannot re-sync the IP (stopping nothing, changing nothing)");
   }

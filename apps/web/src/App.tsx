@@ -113,7 +113,7 @@ export default function App() {
     if (perm === "templates.manage") return privileged;
     if (perm === "jobs.read") return privileged;
     if (perm === "audit.read") return privileged || me.roles.includes("USER");
-    if (perm === "drift.manage") return privileged;
+    if (perm === "drift.manage") return isAdmin;
     if (perm === "guac.launch") return true;
     return isAdmin;
   };
