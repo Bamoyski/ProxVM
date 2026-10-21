@@ -24,6 +24,7 @@ import { z } from "zod";
 import {
   AppError,
   closePowerPeriod,
+  DRIFT_ENABLED_KEY,
   getDriftFinding,
   getDriftLastRun,
   listDriftFindings,
@@ -144,6 +145,12 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
       const bearer = await app.requireAuth(request);
       const findings = await listDriftFindings(ctx.db, { status: query.status, limit: query.limit });
       const lastRun = await getDriftLastRun(ctx.settings);
+      // Whether the feature is switched on at all. The board must be able
+      // to say "nothing has been checked" - an empty board with no banner
+      // reads as "no drift detected", which is exactly the wrong conclusion
+      // when the pass never ran. A disabled feature is not persisted as a
+      // skipped run, so this cannot be derived from `lastRun`.
+      const enabled = (await ctx.settings.getPlain(DRIFT_ENABLED_KEY))?.trim().toLowerCase() === "true";
 
       // Per-request memo: visibleTo() is a findById plus up to two access
       // queries, and the board polls every 30s over up to 200 findings. The
@@ -182,7 +189,7 @@ export async function driftRoutes(app: FastifyInstance, opts: { ctx: CoreContext
         decorated.push(row);
       }
 
-      return { findings: decorated, lastRun, evaluatedAt: new Date().toISOString() };
+      return { findings: decorated, lastRun, enabled, evaluatedAt: new Date().toISOString() };
     },
   );
 

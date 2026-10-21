@@ -120,7 +120,7 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
     queryKey: ["drift-summary"],
     // Active findings only (no status filter = default board).
     queryFn: () =>
-      api<{ findings: Array<{ id: string; severity: "critical" | "high" | "medium" | "low"; status: string }>; lastRun: { liveChecked: boolean; skipped: string | null } | null }>(
+      api<{ findings: Array<{ id: string; severity: "critical" | "high" | "medium" | "low"; status: string }>; lastRun: { liveChecked: boolean; skipped: string | null } | null; enabled: boolean }>(
         "/drift",
       ),
     refetchInterval: 60000,
@@ -376,19 +376,30 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
         const bySeverity = (s: "critical" | "high" | "medium" | "low") =>
           active.filter((f) => f.severity === s).length;
         const skipped = driftBoard?.lastRun && !driftBoard.lastRun.liveChecked ? driftBoard.lastRun.skipped : null;
+        // The feature can be switched off entirely. An empty widget then means
+        // "nothing was checked", not "nothing is wrong" — say so, or the
+        // operator reads a clean board on a system that is not being watched.
+        const disabled = driftBoard ? driftBoard.enabled === false : false;
         return (
           <Section title="Drift (ground truth)" hint="Recorded state vs. live infrastructure — remediation is manual.">
             {active.length === 0 ? (
               <EmptyState
-                title={skipped ? "Last pass skipped" : "No drift detected"}
+                title={disabled ? "Drift detection is disabled" : skipped ? "Last pass skipped" : "No drift detected"}
                 body={
-                  skipped
-                    ? `Reason: ${skipped}. Nothing was changed — run a pass or check infrastructure access.`
-                    : "Records agree with Proxmox and Guacamole. New discrepancies surface here automatically."
+                  disabled
+                    ? "Nothing has been checked — the pass never runs while the feature is off. Enable it in Settings → Application."
+                    : skipped
+                      ? `Reason: ${skipped}. Nothing was changed — run a pass or check infrastructure access.`
+                      : "Records agree with Proxmox and Guacamole. New discrepancies surface here automatically."
                 }
               />
             ) : (
               <>
+                {disabled && (
+                  <Alert kind="warn" title="Drift detection is disabled">
+                    The pass is not running — these findings are from the last time it did.
+                  </Alert>
+                )}
                 {skipped && <Alert kind="warn" title="Last pass was skipped">Reason: {skipped}.</Alert>}
                 <div style={{ display: "flex", gap: 16, flexWrap: "wrap", padding: "8px 0" }}>
                   <Stat label="Critical" value={String(bySeverity("critical"))} tone={bySeverity("critical") > 0 ? "err" : undefined} />

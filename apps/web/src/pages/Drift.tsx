@@ -110,7 +110,7 @@ export default function Drift() {
   const board = useQuery({
     queryKey: ["drift", statusFilter],
     queryFn: () =>
-      api<{ findings: DriftFinding[]; lastRun: DriftLastRun | null; evaluatedAt: string }>(
+      api<{ findings: DriftFinding[]; lastRun: DriftLastRun | null; enabled: boolean; evaluatedAt: string }>(
         `/drift${statusFilter ? `?status=${statusFilter}` : ""}`,
       ),
     refetchInterval: 30_000,
@@ -219,6 +219,7 @@ export default function Drift() {
   };
 
   const lastRun = board.data?.lastRun ?? null;
+  const enabled = board.data?.enabled ?? true;
   const findings = board.data?.findings ?? [];
   const actionable = findings.filter((f) => f.status !== "RESOLVED");
 
@@ -251,6 +252,12 @@ export default function Drift() {
         <Alert kind="warn" title="Last pass was skipped">
           Reason: <code className="pv-mono">{lastRun.skipped}</code>. Nothing was checked and nothing changed —
           this surface never acts on unverified state.
+        </Alert>
+      )}
+      {!enabled && (
+        <Alert kind="warn" title="Drift detection is disabled">
+          Nothing has been checked — this board is empty because the pass never ran, not because everything
+          matches. Turn it on in <strong>Settings → Application → Enable drift detection</strong>.
         </Alert>
       )}
 
