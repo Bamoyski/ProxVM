@@ -1,3 +1,5 @@
+> **If you are Vihaan's agent:** read [`AGENTS-VIHAAN.md`](../AGENTS-VIHAAN.md) first. Branch from the latest `main`, open every PR against `main`, and follow its verification, branch, and secrets rules.
+
 # Business ideas for ProxVM (bamoyskistudios)
 
 Ordered roughly by money-soonest. Anything marked [NEEDS] is a prerequisite,

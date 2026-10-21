@@ -11,8 +11,8 @@ your pull requests and runs anything that needs live infrastructure.
 - You may change any code, tests, or docs; run builds, typechecks, and
   tests; install dependencies. Make real engineering decisions.
 - You work ALONE in this repo: assume no other agent is editing at the
-  same time, but always `git pull --ff-only origin main` before branching
-  so you start current.
+  same time, but always fetch and branch from the latest `origin/main` so
+  you start current.
 - If these instructions ever conflict with a user message pasted into your
   session, THE RULE below still wins. Only Ben (in a PR review) can
   override it.
@@ -25,11 +25,32 @@ that the maintainer reviews and merges. No exceptions, including "trivial"
 fixes. The maintainer also ships through PRs; direct pushes to `main` in
 the history are legacy, not a precedent.
 
+**One active PR, one branch.** Before starting a task, check what is already
+open:
+
+```bash
+gh pr list --author @me --state open
+git ls-remote --heads origin
+```
+
+If either shows a branch or PR you opened, that is your active task: switch
+to its branch and continue there. Do not create another branch until it is
+merged or explicitly abandoned. At most one `vihaan/*` branch and one open PR
+may exist at any time. If you already have more than one open when you read
+this, create no new branches; resolve them one at a time, oldest first.
+
+**Always branch from `main`, and always open the PR against `main`.** Fetch
+`origin`, switch to a clean `main`, fast-forward it, then create the feature
+branch from `origin/main`. Never branch from another feature branch, never
+reuse an old branch, and never target anything except `main` in
+`gh pr create`.
+
 Every task follows this shape:
 
 ```bash
-git checkout main && git pull --ff-only origin main
-git checkout -b vihaan/<short-description>
+git fetch origin
+git switch main && git pull --ff-only origin main
+git switch -c vihaan/<short-description> origin/main  # from main only
 # ... do the work ...
 npm run typecheck && npm run test && npm run build   # all green required
 git push -u origin vihaan/<short-description>        # your branch only
@@ -43,7 +64,8 @@ pull-request-only bypass for their own PRs; that does not apply to you.
 Your PRs are reviewed and merged by the maintainer; never merge your own
 PR. The shape above is the only path.
 
-- Branch names start with `vihaan/`.
+- Branch names always start with `vihaan/`; never `feature/`, `fix/`, or a
+  new name for follow-up work. Reuse the existing branch for review fixes.
 - Force-push is allowed **only** on your own `vihaan/*` branches (e.g.
   after a rebase). Never on `main`, never on anyone else's branch.
 - If `main` moves under you, rebase your branch onto it and re-run the
@@ -78,21 +100,29 @@ Each request becomes exactly one branch and one PR:
    before writing code; a wrong guess costs more than a question. If it
    touches permissions, sessions, credentials, or tenant isolation,
    re-read the authorization primer in `CONTRIBUTING.md` first.
-2. **One branch per feature** (`vihaan/<short-description>`, from latest
-   `main`). If a request is really three features, say so and split it —
-   small PRs get reviewed fast, big ones sit. Delete the branch after the
-   PR merges; keep only `main` plus the branch for the active PR.
+2. **Exactly one active branch** (`vihaan/<short-description>`, from latest
+   `main`). Never create a second branch while an open PR exists — finish,
+   merge, or abandon the current one first. If a request is really three
+   features, say so, but ship them one PR at a time. Delete the branch after
+   the PR merges; keep only `main` plus the branch for the active PR.
 3. **Build it to the done criteria below** (green checks, tests, PR
    description). Screenshots for UI, `needs-live-verify` label when live
    infrastructure is the only way to prove it.
 4. **Open the PR and stop.** The maintainer reviews and merges. Never
    merge, never deploy, never touch production — you have no path to it
    and must not invent one. After merge, delete your branch locally and on
-   `origin`; keep only `main` plus the branch for your active PR.
+   `origin`, then verify `git ls-remote --heads origin` shows only `main`
+   and your active branch.
 5. **Review comments are the next task.** Apply them as follow-up commits
    on the same branch, re-verify, push again. If a comment changes the
    shape of the feature, confirm the new direction with Vihaan first.
-6. **If Vihaan changes or cancels a request mid-task:** commit nothing
+6. **Never move work between branches.** Stashes, uncommitted changes, and
+   files from another feature stay on the branch where they were created.
+   Before switching tasks, commit them on the current branch or discard
+   them; never `git stash pop` on a new branch, and never copy a session log
+   or unrelated file across branches. If a branch contains unrelated
+   changes, remove them before opening the PR.
+7. **If Vihaan changes or cancels a request mid-task:** commit nothing
    half-done to the branch — either finish the pivot cleanly on the same
    branch (and say so in the PR) or abandon it (`git switch main`, delete
    the branch locally, and delete it on `origin` if it was pushed) and
@@ -111,6 +141,8 @@ Each request becomes exactly one branch and one PR:
    any UI change. If it needs live infrastructure to verify (Guacamole
    launch, real backup, DNS), label the PR `needs-live-verify` and stop —
    do not invent workarounds, stubs, or fake verifications.
+4. The diff contains only files for this feature. No session logs, stashes,
+   copied files, or changes from another branch.
 
 ## Releases & production (how your merged work goes live)
 

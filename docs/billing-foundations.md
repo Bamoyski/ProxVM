@@ -1,3 +1,5 @@
+> **If you are Vihaan's agent:** read [`AGENTS-VIHAAN.md`](../AGENTS-VIHAAN.md) first. Branch from the latest `main`, open every PR against `main`, and follow its verification, branch, and secrets rules.
+
 # Billing foundations: metering, quotas, announcements, tickets
 
 All four ship **inert by default**: no quotas set, no tickets filed, no
