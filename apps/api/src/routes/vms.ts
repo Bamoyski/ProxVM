@@ -1,4 +1,4 @@
-// ---------------------------------------------------------------------------
+﻿// ---------------------------------------------------------------------------
 // VMs routes: provisioning, listing/detail, power, clone, make-template,
 //   migration, stats, bulk actions, schedules, share links, discovery,
 //   resize, per-VM access/invite management, privacy/class/boot flags, IP.
@@ -47,8 +47,10 @@ import {
   storeVmServices,
   toPublicUser,
   type EnqueueJobData,
+  type Permission,
 } from "@proxvm/core";
 import { basicProvisionSchema } from "@proxvm/shared";
+import { guacdHostFromSettings } from "./firewall.js";
 import type { Queue } from "bullmq";
 
 const ipOverrideSchema = z.object({ ip: z.string().ip({ version: "v4" }) });
@@ -84,7 +86,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   app.post("/vms/provision", { config: { rateLimit: { max: 30, timeWindow: "1 hour" } } }, async (request, reply) => {
     const actor = await app.requirePermission("vm.create")(request);
     // Hosting quotas: unset (null) means unlimited and this check vanishes.
-    // Administrators are exempt — they manage the infrastructure itself.
+    // Administrators are exempt â€” they manage the infrastructure itself.
     // Fast-path gate (checked before body parsing so over-quota callers get
     // 403 without a valid payload). Best-effort only: the authoritative
     // check runs inside the reservation transaction below.
@@ -568,7 +570,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // -- Live/offline migration --------------------------------------------------
   // Async by design: POST only kicks the Proxmox task off and returns 202
   // immediately. Migrations routinely exceed Cloudflare's 100s proxy timeout
-  // (524) and must never hold an HTTP request open — the UI polls
+  // (524) and must never hold an HTTP request open â€” the UI polls
   // GET /vms/:id/migration below, which finalizes tracking + audit on
   // observed completion. Never await task completion here.
   app.post("/vms/:id/migrate", async (request, reply) => {
@@ -584,7 +586,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const client = await ctx.getProxmoxClient();
     const online = body.online ?? vm.status === "running";
     // Locally-mounted install media blocks migration (node-local `local:`
-    // volumes can't travel). Eject it first — hot-safe on a running guest —
+    // volumes can't travel). Eject it first â€” hot-safe on a running guest â€”
     // and record exactly what changed so it can be reattached after.
     const detachedIso: string[] = [];
     try {
@@ -610,7 +612,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // -- Migration status (async completion for POST /migrate) -------------------
   // Stateless: the Proxmox UPID + intended target ride along as query params,
   // so polling survives API restarts. Finalization (tracked-node update +
-  // audit) runs exactly once — guarded by the tracked node already matching
+  // audit) runs exactly once â€” guarded by the tracked node already matching
   // the target. Failures never move the tracked node.
   app.get("/vms/:id/migration", async (request) => {
     const { id } = request.params as { id: string };
@@ -669,46 +671,250 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     return { points };
   });
 
-  // -- Bulk power actions --------------------------------------------------------
+  // -- Bulk power / policy actions --------------------------------------------------------
   // Static segment wins over /vms/:id in Fastify routing; per-item results so
   // one failure never aborts the rest. Each item enforces the same permission
-  // and access rules as the single-VM endpoints.
+  // and access rules as the single-VM endpoints, with re-authorization-at-execution
+  // (resolveVmAccess inside the loop; shared privacy helper for privacy) so that
+  // revoked grants, quota changes, or privacy-flag shifts take effect immediately.
+  //
+  // WHY THE POLICY ACTIONS TAKE A TARGET STATE: the single-VM endpoints are
+  // already sets (PATCH /vms/:id/privacy takes `enabled`, PATCH /vms/:id/class
+  // takes `vmClass`), so the bulk path matches them. A toggle cannot be retried
+  // safely - an identical retry flips the flag back - and it cannot be applied
+  // to a mixed selection without moving the items in opposite directions. The
+  // worst case was isolation: "off" DELETES the default-deny ruleset and
+  // resets the guest to ACCEPT, so "Isolate" on a mixed selection opened up
+  // the already-isolated VMs.
   app.post("/vms/bulk-action", async (request) => {
     const body = z
-      .object({ ids: z.array(z.string().uuid()).min(1).max(50), action: z.enum(["start", "stop", "restart"]) })
+      .object({
+        ids: z.array(z.string().uuid()).min(1).max(50),
+        action: z.enum(["start", "stop", "restart", "privacy", "class", "isolation", "start-on-boot"]),
+        // The TARGET state for the policy actions. Required for them: a
+        // missing target is a 400, never an implicit flip.
+        enabled: z.boolean().optional(),
+        vmClass: z.enum(["server", "user"]).optional(),
+        // Isolation refinement, mirroring POST /vms/:id/firewall. When no
+        // allowFrom is supplied, the Guacamole host is used (same default as
+        // VmFirewallSection) so new console sessions survive policy_in DROP.
+        allowFrom: z.string().max(128).optional(),
+        allowDnsTo: z.string().max(128).optional(),
+        allowInternet: z.boolean().optional(),
+      })
       .parse(request.body);
-    const perm: ("vm.manage" | "vm.start" | "vm.stop" | "vm.restart")[] =
-      body.action === "start" ? ["vm.manage", "vm.start"] : body.action === "stop" ? ["vm.manage", "vm.stop"] : ["vm.manage", "vm.restart"];
-    const user = await app.requirePermission(perm)(request);
-    const client = await ctx.getProxmoxClient();
-    const results: Array<{ vmId: string; ok: boolean; error?: string }> = [];
-    for (const vmId of [...new Set(body.ids)]) {
-      try {
-        const access = await resolveVmAccess(request, vmId);
-        if (!access.allowed) throw AppError.forbidden("No access to this VM");
-        const vm = await ctx.vms.requireById(vmId);
-        let upid: string | null = null;
-        if (body.action === "start") {
-          upid = await client.start(vm.node, vm.vmid);
-          if (upid) await client.waitForTask(vm.node, upid, 120000);
-          await ctx.vms.updateStatus(vm.id, "running");
-          await app.audit(request, { event: "VM_STARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
-        } else if (body.action === "stop") {
-          upid = await client.shutdown(vm.node, vm.vmid);
-          if (upid) await client.waitForTask(vm.node, upid, 120000);
-          await ctx.vms.updateStatus(vm.id, "stopped");
-          await app.audit(request, { event: "VM_STOPPED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
-        } else {
-          upid = await client.reboot(vm.node, vm.vmid);
-          if (upid) await client.waitForTask(vm.node, upid, 180000);
-          await app.audit(request, { event: "VM_RESTARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+
+    const action = body.action;
+    // Reject a missing target up front, before any per-item work.
+    if ((action === "privacy" || action === "isolation" || action === "start-on-boot") && body.enabled === undefined) {
+      throw AppError.validation(`The "${action}" action requires an explicit "enabled" target`);
+    }
+    if (action === "class" && body.vmClass === undefined) {
+      throw AppError.validation('The "class" action requires an explicit "vmClass" target');
+    }
+
+    // Entry permissions mirror the single-VM endpoints exactly:
+    // - privacy needs no policy permission (PATCH /vms/:id/privacy is requireAuth;
+    //   the shared per-VM helper decides grant/ownership/ADMIN/vm.edit);
+    // - class/isolation/start-on-boot need vm.edit (matches the single PATCHes);
+    // - power actions keep their OR-lists, as before.
+    const perAction: Permission[] | null =
+      action === "privacy"
+        ? null
+        : action === "start"
+          ? ["vm.manage", "vm.start"]
+          : action === "stop"
+            ? ["vm.manage", "vm.stop"]
+            : action === "restart"
+              ? ["vm.manage", "vm.restart"]
+              : ["vm.edit"];
+    const user = perAction
+      ? await app.requirePermission(perAction)(request)
+      : await app.requireAuth(request);
+
+    const ids = [...new Set(body.ids)];
+    type BulkResult = {
+      vmId: string;
+      ok: boolean;
+      error?: string;
+      private?: boolean;
+      granted?: boolean;
+      vmClass?: string;
+      rules?: number;
+    };
+    const results: BulkResult[] = [];
+
+    // Privacy owns its own per-VM, direction-specific authorization (shared
+    // with PATCH /vms/:id/privacy), so the batch helper IS the access gate
+    // here. It answers identically for a missing VM and an ungranted one, so
+    // the per-item errors are not an existence oracle.
+    if (action === "privacy") {
+      const enabled = body.enabled as boolean;
+      const items = await ctx.vms.bulkSetPrivacy(ids, enabled, user.id, user.roles);
+      for (const item of items) {
+        if (!item.ok) {
+          results.push({ vmId: item.vmId, ok: false, error: item.error });
+          continue;
         }
-        results.push({ vmId, ok: true });
+        await app.audit(request, {
+          event: enabled ? "PRIVACY_ENABLED" : "PRIVACY_DISABLED",
+          actorUserId: user.id,
+          actorUsername: user.username,
+          vmId: item.vmId,
+          detail: { bulk: true, granted: item.granted },
+        });
+        results.push({ vmId: item.vmId, ok: true, private: item.private, granted: item.granted });
+      }
+      return { results };
+    }
+
+    // Everything else: the access gate runs FIRST for every item, so a
+    // missing VM and an ungranted one answer identically (no existence
+    // oracle), and only the authorized ids reach the action.
+    const authorized: string[] = [];
+    const denied = new Map<string, string>();
+    for (const vmId of ids) {
+      const access = await resolveVmAccess(request, vmId);
+      if (!access.allowed) {
+        denied.set(vmId, "No access to this VM");
+        continue;
+      }
+      authorized.push(vmId);
+    }
+
+    if (action === "class") {
+      const target = body.vmClass as "server" | "user";
+      const items = await ctx.vms.bulkSetVmClass(authorized, target);
+      for (const item of items) {
+        if (!item.ok) {
+          results.push({ vmId: item.vmId, ok: false, error: item.error });
+          continue;
+        }
+        // Audit only a REAL change: setVmClass skips the write when the class
+        // is already the target, and an audit row for a mutation that did
+        // not happen is a lie.
+        if (item.changed) {
+          await app.audit(request, {
+            event: "VM_EDITED",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            vmId: item.vmId,
+            detail: { vmClass: target, bulk: true },
+          });
+        }
+        results.push({ vmId: item.vmId, ok: true, vmClass: target });
+      }
+    } else if (action === "isolation") {
+      const enabled = body.enabled as boolean;
+      // Same default as the single-VM UI toggle: allow the Guacamole host
+      // (the reverse proxy guests see console traffic from) to open
+      // RDP/SSH/VNC into the guest. Explicit body values win; when
+      // Guacamole is unconfigured and nothing is passed, no inbound
+      // exception is created (matches the single endpoint).
+      const guacSettings = await ctx.settings.guacamole();
+      const isolationOpts = {
+        allowFrom: body.allowFrom?.trim() || guacdHostFromSettings(guacSettings?.url) || undefined,
+        allowDnsTo: body.allowDnsTo?.trim() || undefined,
+        allowInternet: body.allowInternet,
+      };
+      let client: Awaited<ReturnType<typeof ctx.getProxmoxClient>>;
+      try {
+        client = await ctx.getProxmoxClient();
       } catch (err) {
-        results.push({ vmId, ok: false, error: err instanceof Error ? err.message : String(err) });
+        for (const vmId of authorized) {
+          results.push({ vmId, ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+        for (const [vmId, error] of denied) results.push({ vmId, ok: false, error });
+        return { results };
+      }
+      const items = await ctx.vms.bulkSetIsolation(authorized, enabled, client, isolationOpts);
+      for (const item of items) {
+        if (!item.ok) {
+          // A failed isolation leaves the guest exactly as reachable as it
+          // was (the Proxmox write is ordered to fail OPEN), but the
+          // operator must still see it in the audit trail.
+          await app.audit(request, {
+            event: "VM_FIREWALL_CHANGED",
+            actorUserId: user.id,
+            actorUsername: user.username,
+            vmId: item.vmId,
+            detail: { isolated: enabled, bulk: true, applied: false, error: item.error },
+          });
+          results.push({ vmId: item.vmId, ok: false, error: item.error });
+          continue;
+        }
+        await app.audit(request, {
+          event: "VM_FIREWALL_CHANGED",
+          actorUserId: user.id,
+          actorUsername: user.username,
+          vmId: item.vmId,
+          detail: { isolated: enabled, bulk: true, applied: true, rules: item.rules, allowFrom: isolationOpts.allowFrom },
+        });
+        results.push({ vmId: item.vmId, ok: true, rules: item.rules });
+      }
+    } else if (action === "start-on-boot") {
+      const enabled = body.enabled as boolean;
+      let client: Awaited<ReturnType<typeof ctx.getProxmoxClient>>;
+      try {
+        client = await ctx.getProxmoxClient();
+      } catch (err) {
+        for (const vmId of authorized) {
+          results.push({ vmId, ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+        for (const [vmId, error] of denied) results.push({ vmId, ok: false, error });
+        return { results };
+      }
+      const items = await ctx.vms.bulkSetStartOnBoot(authorized, enabled, client);
+      for (const item of items) {
+        if (!item.ok) {
+          results.push({ vmId: item.vmId, ok: false, error: item.error });
+          continue;
+        }
+        await app.audit(request, {
+          event: "VM_START_ON_BOOT_CHANGED",
+          actorUserId: user.id,
+          actorUsername: user.username,
+          vmId: item.vmId,
+          detail: { enabled, bulk: true },
+        });
+        results.push({ vmId: item.vmId, ok: true });
+      }
+    } else {
+      // Power actions: Proxmox calls are per item (there is no batch
+      // primitive), still gated per item above.
+      for (const vmId of authorized) {
+        try {
+          const vm = await ctx.vms.requireById(vmId);
+          const client = await ctx.getProxmoxClient();
+          if (action === "start") {
+            const upid = await client.start(vm.node, vm.vmid);
+            if (upid) await client.waitForTask(vm.node, upid, 120000);
+            await ctx.vms.updateStatus(vm.id, "running");
+            await app.audit(request, { event: "VM_STARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+          } else if (action === "stop") {
+            const upid = await client.shutdown(vm.node, vm.vmid);
+            if (upid) await client.waitForTask(vm.node, upid, 120000);
+            await ctx.vms.updateStatus(vm.id, "stopped");
+            await app.audit(request, { event: "VM_STOPPED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+          } else {
+            const upid = await client.reboot(vm.node, vm.vmid);
+            if (upid) await client.waitForTask(vm.node, upid, 180000);
+            await app.audit(request, { event: "VM_RESTARTED", actorUserId: user.id, actorUsername: user.username, vmId: vm.id });
+          }
+          results.push({ vmId, ok: true });
+        } catch (err) {
+          results.push({ vmId, ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
       }
     }
-    return { results };
+
+    // Denied items join the result set with the same answer a missing VM
+    // gets, so the caller cannot tell "exists but not yours" from "gone".
+    for (const [vmId, error] of denied) results.push({ vmId, ok: false, error });
+
+    // Return the results in the caller's id order.
+    const byId = new Map(results.map((r) => [r.vmId, r]));
+    return { results: ids.map((id) => byId.get(id) ?? { vmId: id, ok: false, error: "not processed" }) };
   });
 
   // -- Scheduled power actions -----------------------------------------------------
@@ -737,7 +943,17 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       .parse(request.body);
     const access = await resolveVmAccess(request, body.vmId);
     if (!access.allowed) throw AppError.forbidden("No access to this VM");
-    await ctx.vms.requireById(body.vmId);
+    const vm = await ctx.vms.requireById(body.vmId);
+    // The other side of the class invariant: a user-class VM is eligible
+    // for idle auto-shutdown, and an enabled schedule would fight the
+    // ticker for the same guest's power state. setVmClass refuses to move a
+    // scheduled VM into the user class; this refuses to create the conflict
+    // in the first place. Both write paths enforce the same invariant.
+    if (vm.vmClass === "user") {
+      throw AppError.validation(
+        "A user-class VM may not have an enabled schedule: idle auto-shutdown and the schedule would fight over its power state. Move the VM to the server class first, or switch the VM class endpoint refuses the other way round.",
+      );
+    }
     const schedule = await createSchedule(ctx.db, { ...body, createdBy: user.id });
     await app.audit(request, {
       event: "SCHEDULE_CREATED",
@@ -777,6 +993,16 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     if (!schedule) return reply.status(404).send({ code: "NOT_FOUND", message: "Schedule not found" });
     const access = await resolveVmAccess(request, schedule.vmId);
     if (!access.allowed) throw AppError.forbidden("No access to this VM");
+    // Same invariant as POST /schedules: enabling a schedule on a
+    // user-class VM would fight the idle auto-shutdown ticker.
+    if (body.enabled) {
+      const vm = await ctx.vms.findById(schedule.vmId);
+      if (vm && vm.vmClass === "user") {
+        throw AppError.validation(
+          "A user-class VM may not have an enabled schedule: idle auto-shutdown and the schedule would fight over its power state.",
+        );
+      }
+    }
     await setScheduleEnabled(ctx.db, id, body.enabled);
     return { ok: true };
   });
@@ -784,7 +1010,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // -- Share links -----------------------------------------------------------------
   // Creating/revoking requires vm.edit (access management); redeeming is
   // intentionally unauthenticated (that's the point of a share link) and
-  // rate-limited against token guessing — tokens are 256-bit regardless.
+  // rate-limited against token guessing â€” tokens are 256-bit regardless.
   app.post("/vms/:id/share", async (request) => {
     const { id } = request.params as { id: string };
     const access = await resolveVmAccess(request, id);
@@ -927,7 +1153,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const out: Array<{ vmId: string; services: Array<{ port: number; service: string }> }> = [];
     for (const vm of vms) {
       // Privacy-flagged VMs stay invisible without a concrete grant, even to
-      // privileged list callers — same rule as GET /vms.
+      // privileged list callers â€” same rule as GET /vms.
       if (privileged && vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) continue;
       const services = await listVmServices(ctx.db, vm.id);
       if (services.length) out.push({ vmId: vm.id, services: services.map(({ port, service }) => ({ port, service })) });
@@ -1029,7 +1255,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   });
 
   // ---------------------------------------------------------------------------
-  // VM user-access management (admin/operator only — requires vm.edit).
+  // VM user-access management (admin/operator only â€” requires vm.edit).
   // ProxVM vm_access is the source of truth; every grant/revoke also syncs
   // the user's Guacamole permissions across ALL of the VM's connections
   // (ssh/rdp/vnc). Guacamole sync failures never leave a false success:
@@ -1237,7 +1463,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     await ctx.vms.replaceAccess(vm.id, target.id, { protocols, expiresAt, createdBy: inviter.id });
     // Best-effort Guacamole sync (group-grant philosophy, NOT the managed
     // POST /access rollback): the grant row is the invite itself and must
-    // survive Guacamole outages — launch-time sync and the periodic sweep
+    // survive Guacamole outages â€” launch-time sync and the periodic sweep
     // converge permissions later. The outcome is audited honestly either way.
     let effective: string[] | null = protocols;
     let guacSynced = true;
@@ -1286,7 +1512,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     if (!z.string().uuid().safeParse(userId).success) {
       return reply.status(400).send({ code: "VALIDATION_ERROR", message: "userId must be a valid UUID" });
     }
-    // Inviters may withdraw their own invite without vm.edit — but only while
+    // Inviters may withdraw their own invite without vm.edit â€” but only while
     // they still hold access themselves. A revoked inviter keeps no lingering
     // write primitive over the VM.
     // Everything else goes through the managed path below.
@@ -1339,7 +1565,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // -- Privacy flag ---------------------------------------------------------------
   // Toggling needs no permission beyond being able to see the VM: a concrete
   // grant, creator-ownership, or administrator. Deliberately no vm.edit
-  // requirement — regular users must be able to flag their own VMs without
+  // requirement â€” regular users must be able to flag their own VMs without
   // being handed management rights. Flipping the flag grants no data by
   // itself: viewing or managing still needs a grant or ownership.
   app.patch("/vms/:id/privacy", async (request) => {
@@ -1387,15 +1613,19 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       throw AppError.forbidden("This VM is privacy-flagged and you have no grant for it");
     }
     const body = z.object({ vmClass: z.enum(["server", "user"]) }).parse(request.body);
-    await ctx.vms.setVmClass(vm.id, body.vmClass);
-    await app.audit(request, {
-      event: "VM_EDITED",
-      actorUserId: user.id,
-      actorUsername: user.username,
-      vmId: vm.id,
-      detail: { vmClass: body.vmClass },
-    });
-    return { ok: true, vmClass: body.vmClass };
+    // setVmClass skips the write when the class is already the target:
+    // audit a REAL change only, not a no-op dressed up as an edit.
+    const changed = await ctx.vms.setVmClass(vm.id, body.vmClass);
+    if (changed) {
+      await app.audit(request, {
+        event: "VM_EDITED",
+        actorUserId: user.id,
+        actorUsername: user.username,
+        vmId: vm.id,
+        detail: { vmClass: body.vmClass },
+      });
+    }
+    return { ok: true, vmClass: body.vmClass, changed };
   });
 
   // -- Start on host boot ------------------------------------------------------

@@ -28,7 +28,8 @@ import type { ProxmoxClient } from "../proxmox/client.js";
  * LAN), and the final ACCEPT-all sits last. With allowInternet off the
  * guest gets DNS only (legacy behavior).
  *
- * Known limits: IPv4 only (the builder validates IPv4/CIDR); DHCP client
+ * Known limits: IPv4 for addresses (the builder validates IPv4/CIDR plus
+ * RFC-1123 hostnames, which Proxmox resolves itself); DHCP client
  * traffic is narrowly allowed (UDP 67 out / 68 in) so DHCP guests keep
  * their leases; ARP is L2 and untouched by these L3 rules.
  *
@@ -176,13 +177,49 @@ function assertPortSpec(spec: string, field: string): void {
   }
 }
 
+/**
+ * Proxmox firewall keywords that are NOT addresses.
+ *
+ * WHY this list exists: the Proxmox rule API accepts a `source`/`dest` of
+ * "IP address, subnet or special keyword like 'any' or '$ALLOWLIST'" — and
+ * `any` means 0.0.0.0/0. Widening the address validator to accept DNS names
+ * also made it accept the bare label `any`, so a caller could build the
+ * "default-deny" ruleset with `source=any` — inbound SSH/RDP/VNC from the
+ * whole internet — while the API, the database and the audit log all
+ * reported the VM as isolated. `0.0.0.0/0` is still rejected by the address
+ * regex (the "/" is not allowed), so the keyword was the only way in.
+ *
+ * A widened validator must enumerate what the DOWNSTREAM system treats
+ * specially, then refuse it by name.
+ */
+const PROXMOX_FIREWALL_KEYWORDS = new Set(["any", "all", "$allowlist", "$allow_list"]);
+
 function assertAddress(value: string, field: string): void {
   const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/([0-9]|[12][0-9]|3[0-2]))?$/.exec(value);
-  if (!match) {
-    throw AppError.validation(`${field} must be an IPv4 address or CIDR (e.g. 192.168.1.22 or 10.0.0.0/24)`);
+  if (match) {
+    for (const octet of match.slice(1, 5)) {
+      if (Number(octet) > 255) throw AppError.validation(`${field} has an octet above 255`);
+    }
+    // A /0 prefix is "every source" in CIDR form - the same hole as the
+    // "any" keyword, and just as wrong inside a default-deny ruleset.
+    if (match[6] !== undefined && Number(match[6]) === 0) {
+      throw AppError.validation(`${field} must not be a 0.0.0.0/0 network (it would allow every source)`);
+    }
+    return;
   }
-  for (const octet of match.slice(1, 5)) {
-    if (Number(octet) > 255) throw AppError.validation(`${field} has an octet above 255`);
+  // Proxmox itself accepts resolvable hostnames as rule sources — and the
+  // Guacamole-backed default inbound exception is a DNS name (the guac URL
+  // hostname), not always an address. Accept strict RFC-1123 hostnames;
+  // everything else (spaces, quotes, wildcards, bare port specs) is rejected.
+  if (!/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.?$/i.test(value)) {
+    throw AppError.validation(`${field} must be an IPv4 address, CIDR, or hostname (e.g. 192.168.1.22, 10.0.0.0/24, or guac.example.com)`);
+  }
+  // The hostname branch also matches Proxmox's special keywords — refuse
+  // them by name, before they can become a rule source.
+  if (PROXMOX_FIREWALL_KEYWORDS.has(value.trim().toLowerCase())) {
+    throw AppError.validation(
+      `${field} must not be the Proxmox keyword "${value}" (it would allow every source)`,
+    );
   }
 }
 
@@ -302,7 +339,15 @@ export async function applyIsolation(
     );
   }
   const rules = buildIsolationRules(opts);
-  await proxmox.setGuestFirewallOptions(node, vmid, { enable: true, policy_in: "DROP", policy_out: "DROP" });
+  // WHY THIS ORDER: enable the guest firewall WITHOUT touching its policies
+  // first, create the exception rules, and only then flip the policy to
+  // deny-by-default. The previous order set policy_in/policy_out=DROP
+  // FIRST, so a rule that Proxmox refused to create (an unresolvable DNS
+  // source, a Proxmox-side error) left the guest with a DROP policy and no
+  // inbound exception — locked out, unreachable, while the database still
+  // said "not isolated". Failing OPEN keeps the guest exactly as reachable
+  // as it was before the call.
+  await proxmox.setGuestFirewallOptions(node, vmid, { enable: true });
   // Remove our own stale rules first so re-applying stays idempotent.
   const existing = await proxmox.guestFirewallRules(node, vmid);
   const stale = existing
@@ -334,6 +379,8 @@ export async function applyIsolation(
       pos: 0,
     });
   }
+  // The exception rules exist; now make them the policy.
+  await proxmox.setGuestFirewallOptions(node, vmid, { enable: true, policy_in: "DROP", policy_out: "DROP" });
   await db.query("UPDATE vms SET firewall_isolated = TRUE, updated_at = NOW() WHERE id = $1", [vmId]);
   return { rulesCreated: rules.length };
 }
@@ -345,6 +392,11 @@ export async function removeIsolation(
   node: string,
   vmid: number,
 ): Promise<{ rulesRemoved: number }> {
+  // WHY THIS ORDER: open the policies BEFORE deleting the rules. The
+  // previous order deleted first, so a failed delete left the guest with a
+  // DROP policy and a partial rule set — locked out. Removing isolation
+  // means "wide open", so failing open here is also the goal state.
+  await proxmox.setGuestFirewallOptions(node, vmid, { policy_in: "ACCEPT", policy_out: "ACCEPT" });
   const existing = await proxmox.guestFirewallRules(node, vmid);
   const ours = existing
     .filter((r) => isProxvmRule(r as Record<string, unknown>))
@@ -355,7 +407,7 @@ export async function removeIsolation(
     await proxmox.deleteGuestFirewallRule(node, vmid, pos);
   }
   // Back to wide open; only our rules were touched, hand-made ones survive.
-  await proxmox.setGuestFirewallOptions(node, vmid, { policy_in: "ACCEPT", policy_out: "ACCEPT" });
+  // (The policy was already opened above, before the deletes.)
   await db.query("UPDATE vms SET firewall_isolated = FALSE, updated_at = NOW() WHERE id = $1", [vmId]);
   return { rulesRemoved: ours.length };
 }

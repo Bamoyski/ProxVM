@@ -24,7 +24,11 @@ import {
 // Opt-in per VM; never touches datacenter/node/host config. The backend is
 // authoritative — the UI only renders what these endpoints return.
 
-function guacdHostFromSettings(url: string | undefined): string | null {
+/** Hostname of the Guacamole web endpoint from stored settings, lowercased
+ * for firewall sources; null when Guacamole is not configured. Shared with
+ * the bulk route so bulk isolation defaults to the same host the single-VM
+ * UI toggle uses. */
+export function guacdHostFromSettings(url: string | undefined): string | null {
   if (!url) return null;
   try {
     const host = new URL(url).hostname.trim().toLowerCase();

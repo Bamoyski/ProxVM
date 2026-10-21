@@ -52,10 +52,21 @@ and the guest's replies to Guacamole-initiated sessions ride conntrack.
   remove rules. Removing isolation deletes only `proxvm-isolation` rules and
   restores ACCEPT policies; hand-made rules are listed, never touched, and
   cannot be deleted from ProxVM (edit those in Proxmox directly).
+- **VM list**: the bulk toolbar applies a policy to the selected VMs. It is a
+  SET, not a toggle: the operator picks the target state ("Make private",
+  "Enable isolation", "Set class: server", …) and every selected VM ends up
+  in that state. A flip could not be retried safely (an identical retry
+  would flip the successful items back) and could not be applied to a mixed
+  selection without moving the items in opposite directions — the isolation
+  case being the sharpest, because "off" deletes the default-deny ruleset and
+  reopens the guest. A policy action without an explicit target is refused
+  with 400.
 - **VM list** tags isolated machines (`isolated`) and privacy-flagged ones
   (`private`); the detail section shows the live rule table with positions.
 - Everything is audited as `VM_FIREWALL_CHANGED` (toggle with rule counts,
-  single-rule add with the rule, removal with the position).
+  single-rule add with the rule, removal with the position). A bulk
+  isolation item that failed is audited too, with `applied: false` — a
+  half-applied firewall must not be invisible in the audit trail.
 
 ## Limits and honest notes
 
@@ -70,5 +81,18 @@ and the guest's replies to Guacamole-initiated sessions ride conntrack.
   (DHCP and general internet are covered; NTP port 123 to a chosen server
   is not). There is no auto-discovery of "what this guest needs" — that
   stays an operator call.
-- IPv4 only. The rule builder validates IPv4/CIDR destinations; IPv6
-  ranges are not covered by the generated ruleset.
+- IPv4 only. The rule builder validates IPv4/CIDR addresses and strict
+  RFC-1123 hostnames (Proxmox resolves a hostname rule source itself, which
+  is what the Guacamole host default needs); IPv6 ranges are not covered by
+  the generated ruleset.
+- A rule source may never mean "every source". The Proxmox keyword `any`
+  (and `all`, `$ALLOWLIST`) and a `0.0.0.0/0` prefix are rejected by the
+  validator — otherwise a caller could build the "default-deny" ruleset with
+  an allow-all inbound rule while the app reported the VM as isolated.
+- Isolation applies fail-OPEN. The guest firewall is enabled first *without*
+  changing the policies, the exception rules are created, and only then does
+  the policy flip to DROP. A rule Proxmox refuses to create (an unresolvable
+  DNS source, a Proxmox-side error) therefore leaves the guest exactly as
+  reachable as it was, instead of locked out behind a DROP policy with no
+  inbound exception. Removing isolation opens the policies before deleting
+  the rules, for the same reason.
