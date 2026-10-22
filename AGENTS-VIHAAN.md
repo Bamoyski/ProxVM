@@ -25,19 +25,19 @@ that the maintainer reviews and merges. No exceptions, including "trivial"
 fixes. The maintainer also ships through PRs; direct pushes to `main` in
 the history are legacy, not a precedent.
 
-**One active PR, one branch.** Before starting a task, check what is already
-open:
+**Branch for every change; one task per branch.** Before starting a task,
+check what is already open:
 
 ```bash
 gh pr list --author @me --state open
 git ls-remote --heads origin
 ```
 
-If either shows a branch or PR you opened, that is your active task: switch
-to its branch and continue there. Do not create another branch until it is
-merged or explicitly abandoned. At most one `vihaan/*` branch and one open PR
-may exist at any time. If you already have more than one open when you read
-this, create no new branches; resolve them one at a time, oldest first.
+Multiple open `vihaan/*` branches and pull requests are allowed — as many
+as desired. Keep each PR focused on a single task: one branch per task,
+one task per branch, never mixing unrelated work into an open PR. If a
+task spans what is already open, reuse that PR's branch for its review
+fixes instead of stacking a new branch on top.
 
 **Always branch from `main`, and always open the PR against `main`.** Fetch
 `origin`, switch to a clean `main`, fast-forward it, then create the feature
@@ -100,11 +100,12 @@ Each request becomes exactly one branch and one PR:
    before writing code; a wrong guess costs more than a question. If it
    touches permissions, sessions, credentials, or tenant isolation,
    re-read the authorization primer in `CONTRIBUTING.md` first.
-2. **Exactly one active branch** (`vihaan/<short-description>`, from latest
-   `main`). Never create a second branch while an open PR exists — finish,
-   merge, or abandon the current one first. If a request is really three
-   features, say so, but ship them one PR at a time. Delete the branch after
-   the PR merges; keep only `main` plus the branch for the active PR.
+2. **One branch per request** (`vihaan/<short-description>`, from latest
+   `main`). Requests may overlap in flight — multiple open branches/PRs are
+   fine as long as each branch carries exactly one focused task. If a
+   request is really three features, say so, but ship them as separate PRs.
+   Delete a branch after its PR merges; keep only `main` plus branches with
+   open PRs.
 3. **Build it to the done criteria below** (green checks, tests, PR
    description). Screenshots for UI, `needs-live-verify` label when live
    infrastructure is the only way to prove it.
@@ -112,7 +113,7 @@ Each request becomes exactly one branch and one PR:
    merge, never deploy, never touch production — you have no path to it
    and must not invent one. After merge, delete your branch locally and on
    `origin`, then verify `git ls-remote --heads origin` shows only `main`
-   and your active branch.
+   plus your branches with open PRs.
 5. **Review comments are the next task.** Apply them as follow-up commits
    on the same branch, re-verify, push again. If a comment changes the
    shape of the feature, confirm the new direction with Vihaan first.

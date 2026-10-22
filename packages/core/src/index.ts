@@ -23,6 +23,7 @@ export * from "./guacamole/test-connection.js";
 export * from "./cloudflare/client.js";
 export * from "./pbs/client.js";
 export * from "./services/domains.js";
+export * from "./services/domainrotate.js";
 export * from "./ssh/client.js";
 export * from "./ssh/host-keys.js";
 export * from "./services/audit.js";

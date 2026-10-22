@@ -6,6 +6,7 @@ import { PageHeader, Section, EmptyState, Btn, Alert, Field, errText } from "../
 interface DomainConfig {
   canonical: string | null;
   aliases: string[];
+  autoRotate?: boolean;
   cloudflare: { configured: boolean; zoneId: string | null; accountId: string | null; tunnelId: string | null };
 }
 
@@ -80,6 +81,23 @@ export default function Domains() {
       await api("/domains/securly", { method: "PUT", body: { useremail: securlyEmail } });
       setSecurlyEmail("");
       setStatus("School-filter watch saved. Status re-checks automatically.");
+      reload();
+    } catch (err) {
+      fail(err);
+    }
+  };
+
+  const toggleAutoRotate = async () => {
+    setError(null);
+    setStatus(null);
+    const enabled = !(config?.autoRotate ?? false);
+    try {
+      await api("/domains/auto-rotate", { method: "PUT", body: { enabled } });
+      setStatus(
+        enabled
+          ? "Auto-rotate on. When the school filter blocks the current domain, the next numbered domain is switched to automatically (proxvm6 → proxvm7, max 5/day, you get an alert each move)."
+          : "Auto-rotate off. Blocked domains now need a manual Switch.",
+      );
       reload();
     } catch (err) {
       fail(err);
@@ -225,6 +243,26 @@ export default function Domains() {
               <span className="pv-status pv-status-ok">reachable — {filter.hostname}: {filter.detail}</span>
             ) : (
               <span style={{ color: "var(--pv-text-3)" }}>{filter.detail}</span>
+            )}
+          </dd>
+          <dt>Auto-rotate on block</dt>
+          <dd>
+            {config ? (
+              <span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <Btn size="sm" kind={config.autoRotate ? "danger-ghost" : "primary"} onClick={toggleAutoRotate}>
+                  {config.autoRotate ? "Turn off" : "Turn on"}
+                </Btn>
+                <span
+                  className={config.autoRotate ? "pv-status pv-status-ok" : ""}
+                  style={{ color: config.autoRotate ? undefined : "var(--pv-text-3)" }}
+                >
+                  {config.autoRotate
+                    ? "on — a blocked domain auto-bumps to the next number (proxvm6 → proxvm7), verified, then flipped; max 5/day"
+                    : "off — a blocked domain needs a manual Switch"}
+                </span>
+              </span>
+            ) : (
+              <span style={{ color: "var(--pv-text-3)" }}>checking…</span>
             )}
           </dd>
           <dt>Redirecting</dt>
