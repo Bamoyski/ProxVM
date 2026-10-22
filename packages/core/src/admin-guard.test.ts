@@ -35,7 +35,7 @@ describe("initial-admin protection (pg-mem)", () => {
     ctx = await createCore(localConfig, {
       db: pool,
       redis: new RedisMock() as never,
-      logger: { info: () => undefined, warn: () => undefined, error: () => undefined } as never,
+      logger: { info: () => undefined, debug: () => undefined, warn: () => undefined, error: () => undefined } as never,
     });
 
     const first = await ctx.users.create({

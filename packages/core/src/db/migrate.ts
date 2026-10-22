@@ -5,6 +5,21 @@
  * transaction and records into schema_migrations. NEVER edit an applied
  * migration's SQL (fresh installs would diverge from upgraded ones) — add a
  * new numbered migration instead. Runs automatically on API boot.
+ *
+ * Concurrency: api and worker both boot at the same time and both call this,
+ * so the whole run is serialized with a Postgres advisory lock. Without it
+ * both processes read the same pending list and race: the loser fails on
+ * schema_migrations_pkey, or on pg_type_typname_nsp_index when two CREATE
+ * TABLEs for the same new table collide ("IF NOT EXISTS" is not atomic —
+ * the existence check and the catalog insert are separate steps). That crash
+ * was self-healing only because compose restarts the container; a slow boot
+ * would instead fail the deploy's readiness check.
+ *
+ * The lock is session-scoped, so it is taken on a dedicated pooled client and
+ * every migration statement runs on that same client. That also makes
+ * BEGIN/COMMIT meaningful: through a Pool, sequential pool.query() calls can
+ * land on different connections, so the per-migration transaction was never
+ * guaranteed before.
  * ------------------------------------------------------------------------- */
 import type { Queryable } from "./pool.js";
 import type { Logger } from "../util/logger.js";
@@ -14,6 +29,16 @@ export interface Migration {
   name: string;
   sql: string;
 }
+
+// Arbitrary but stable app-wide key; must never change or two versions of the
+// app could migrate concurrently while upgrading past each other.
+const MIGRATION_LOCK_KEY = 7423001;
+
+/** A client that may be released back to a pool (pg.PoolClient shape). */
+type MigrationClient = Queryable & { release?: () => void };
+
+/** Queryable that can hand out a dedicated connection (pg.Pool shape). */
+type MigrationSource = Queryable & { connect?: () => Promise<MigrationClient> };
 
 // --- Migration catalog (order matters: applied strictly top to bottom) -----
 import { initialMigration } from "./migrations/001_initial.js";
@@ -71,11 +96,72 @@ export const MIGRATIONS: Migration[] = [
 // --- Runner ----------------------------------------------------------------
 /**
  * Apply every pending migration in order, returning the ids applied now.
+ *
  * WHY one transaction per migration (not one for all): a failure rolls back
  * only the bad migration, leaving earlier ones recorded so the next boot
  * retries exactly where it stopped instead of replaying everything.
  */
 export async function runMigrations(db: Queryable, logger: Logger): Promise<string[]> {
+  const source = db as MigrationSource;
+  // Test doubles (pg-mem adapters, fakes) may have no pool to check out from;
+  // a single-process run needs no cross-process lock, so migrate directly.
+  if (typeof source.connect !== "function") return applyMigrations(source, logger);
+
+  const client = await source.connect();
+  let locked = false;
+  try {
+    locked = await acquireLock(client, logger);
+    return await applyMigrations(client, logger);
+  } finally {
+    // Unlock before release: a session-scoped lock outlives the statement, so
+    // handing the connection back while still holding it would block the rest
+    // of the fleet until that pooled connection is closed.
+    if (locked) {
+      try {
+        await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]);
+      } catch (err) {
+        logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          "failed to release migration advisory lock; connection will be dropped",
+        );
+      }
+    }
+    client.release?.();
+  }
+}
+
+/** Take the cross-process migration lock; false when the backend lacks it. */
+async function acquireLock(client: MigrationClient, logger: Logger): Promise<boolean> {
+  try {
+    await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
+    return true;
+  } catch (err) {
+    // pg-mem (unit tests) and other query doublings do not implement advisory
+    // locks. That is safe: those runs are single-process. Any other failure is
+    // real and must abort the boot instead of migrating unlocked.
+    if (!isUnsupportedLock(err)) throw err;
+    logger.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      "advisory locks unavailable; running migrations without a cross-process lock",
+    );
+    return false;
+  }
+}
+
+/** True for "backend has no advisory locks", false for a real lock failure. */
+function isUnsupportedLock(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === "42883" || code === "0A000") return true; // undefined_function, feature_not_supported
+  const message = err instanceof Error ? err.message : String(err);
+  // pg-mem reports a missing function without an error code, with a HINT
+  // paragraph after the message, so match on the shape rather than the code.
+  return (
+    /advisory_? ?lock/i.test(message) &&
+    /does not exist|not supported|not implemented|unknown/i.test(message)
+  );
+}
+
+async function applyMigrations(db: Queryable, logger: Logger): Promise<string[]> {
   await db.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,
