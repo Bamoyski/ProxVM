@@ -66,6 +66,46 @@ describe("verifyTurnstileToken", () => {
     expect(await verifyTurnstileToken("s", "tok")).toBe(false);
   });
 
+  it("rejects empty or oversized tokens before calling siteverify", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await verifyTurnstileToken("s", "")).toBe(false);
+    expect(await verifyTurnstileToken("s", "x".repeat(4097))).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("binds the token to the expected action and frontend hostname", async () => {
+    const siteverify = (body: Record<string, unknown>) =>
+      new Response(JSON.stringify({ success: true, ...body }), { status: 200 });
+
+    vi.stubGlobal("fetch", vi.fn(async () => siteverify({ action: "signup", hostname: "proxvm.example.org" })));
+    expect(
+      await verifyTurnstileToken("s", "tok", null, { action: "signup", hostname: "proxvm.example.org" }),
+    ).toBe(true);
+
+    // Case-insensitive hostname comparison: siteverify echoes the browser's
+    // hostname, which DNS is not required to case-match.
+    expect(
+      await verifyTurnstileToken("s", "tok", null, { action: "signup", hostname: "PROXVM.example.org" }),
+    ).toBe(true);
+
+    vi.stubGlobal("fetch", vi.fn(async () => siteverify({ action: "login", hostname: "proxvm.example.org" })));
+    expect(
+      await verifyTurnstileToken("s", "tok", null, { action: "signup", hostname: "proxvm.example.org" }),
+    ).toBe(false);
+
+    vi.stubGlobal("fetch", vi.fn(async () => siteverify({ action: "signup", hostname: "evil.example.net" })));
+    expect(
+      await verifyTurnstileToken("s", "tok", null, { action: "signup", hostname: "proxvm.example.org" }),
+    ).toBe(false);
+
+    // A legacy token without the fields cannot satisfy an expectation.
+    vi.stubGlobal("fetch", vi.fn(async () => siteverify({})));
+    expect(
+      await verifyTurnstileToken("s", "tok", null, { action: "signup", hostname: "proxvm.example.org" }),
+    ).toBe(false);
+  });
+
   it("sends secret, response token, and remoteip as the form body; never the secret anywhere else", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

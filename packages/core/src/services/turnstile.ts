@@ -66,6 +66,17 @@ export async function getSelfServeConfig(settings: SettingsService): Promise<Sel
 interface TurnstileVerifyResponse {
   success: boolean;
   "error-codes"?: string[];
+  /** Action the widget was rendered with (data-action). */
+  action?: string;
+  /** Hostname the challenge was solved on, no port. */
+  hostname?: string;
+}
+
+export interface TurnstileExpectations {
+  /** Reject tokens minted for a different surface (e.g. login vs signup). */
+  action?: string;
+  /** Reject tokens solved on a different frontend hostname. */
+  hostname?: string | null;
 }
 
 /**
@@ -73,8 +84,23 @@ interface TurnstileVerifyResponse {
  * Returns false on ANY failure (bad token, expired, network error) —
  * registration must fail closed. Fixed endpoint: whatever the caller passes
  * as secret goes only here, and it is never logged.
+ *
+ * When `expect` is supplied, siteverify's echoed action/hostname must match.
+ * Cloudflare binds both to the solved token, so this stops a token solved on
+ * another site (or another widget surface on the same site) from being
+ * replayed against the signup endpoint.
  */
-export async function verifyTurnstileToken(secret: string, token: string, remoteIp?: string | null): Promise<boolean> {
+export async function verifyTurnstileToken(
+  secret: string,
+  token: string,
+  remoteIp?: string | null,
+  expect: TurnstileExpectations = {},
+): Promise<boolean> {
+  // Empty or oversized input cannot be a real token; refuse before the
+  // outbound call so junk bodies stay cheap.
+  if (!secret || typeof token !== "string" || token.length === 0 || token.length > 4096) {
+    return false;
+  }
   try {
     const body = new URLSearchParams({ secret, response: token });
     if (remoteIp) body.set("remoteip", remoteIp);
@@ -85,7 +111,13 @@ export async function verifyTurnstileToken(secret: string, token: string, remote
     });
     if (!response.ok) return false;
     const parsed = (await response.json()) as TurnstileVerifyResponse;
-    return parsed.success === true;
+    if (parsed.success !== true) return false;
+    if (expect.action !== undefined && parsed.action !== expect.action) return false;
+    const expectedHostname = (expect.hostname ?? "").trim().toLowerCase();
+    if (expectedHostname && (parsed.hostname ?? "").trim().toLowerCase() !== expectedHostname) {
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }

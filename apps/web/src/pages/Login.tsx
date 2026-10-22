@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, setCsrfToken } from "../api.js";
-import { PASSWORD_RULES } from "@proxvm/shared";
+import { PASSWORD_RULES, TURNSTILE_SIGNUP_ACTION } from "@proxvm/shared";
 
 // The public signup shape: mode + the Turnstile SITE key (public by design;
 // the server's secret never reaches the browser).
@@ -186,7 +186,11 @@ export default function Login() {
             </div>
             {cfg?.turnstileSiteKey && (
               <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}>
-                <div className="cf-turnstile" data-sitekey={cfg.turnstileSiteKey} />
+                <div
+                  className="cf-turnstile"
+                  data-sitekey={cfg.turnstileSiteKey}
+                  data-action={TURNSTILE_SIGNUP_ACTION}
+                />
               </div>
             )}
           </>
