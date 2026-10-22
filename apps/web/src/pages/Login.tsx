@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Check, Circle } from "lucide-react";
 import { api, setCsrfToken } from "../api.js";
 import { PASSWORD_RULES } from "@proxvm/shared";
 
@@ -170,18 +171,41 @@ export default function Login() {
                 autoComplete="new-password"
               />
             </div>
-            <div className="pv-panel" style={{ padding: "10px 12px", marginBottom: 12, background: "var(--pv-inset)" }}>
-              <div className="pv-label" style={{ marginBottom: 6 }}>Password must have</div>
+            <div className="pv-panel" style={{ padding: "12px 14px", marginBottom: 14, background: "var(--pv-inset)" }}>
+              <div className="pv-label" style={{ marginBottom: 8 }}>Password must have</div>
               {PASSWORD_RULES.map((rule) => {
                 const ok = ruleMet(rule, password);
                 return (
-                  <div key={rule.id} style={{ fontSize: "0.8rem", color: ok ? "var(--pv-ok)" : "var(--pv-text-3)" }}>
-                    {ok ? "✓" : "○"} {rule.label}
+                  <div
+                    key={rule.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "0.8rem",
+                      color: ok ? "var(--pv-ok)" : "var(--pv-text-3)",
+                    }}
+                  >
+                    {ok ? <Check size={12} strokeWidth={3} aria-hidden="true" /> : <Circle size={12} aria-hidden="true" />}
+                    {rule.label}
                   </div>
                 );
               })}
-              <div style={{ fontSize: "0.8rem", color: password && password === confirm ? "var(--pv-ok)" : "var(--pv-text-3)" }}>
-                {password && password === confirm ? "✓" : "○"} Passwords match
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: "0.8rem",
+                  color: password && password === confirm ? "var(--pv-ok)" : "var(--pv-text-3)",
+                }}
+              >
+                {password && password === confirm ? (
+                  <Check size={12} strokeWidth={3} aria-hidden="true" />
+                ) : (
+                  <Circle size={12} aria-hidden="true" />
+                )}
+                Passwords match
               </div>
             </div>
             {cfg?.turnstileSiteKey && (

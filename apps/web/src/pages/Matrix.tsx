@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Check, Minus } from "lucide-react";
 import { api } from "../api.js";
 import { PageHeader, EmptyState, Btn, Input, Select, Checkbox, SearchInput, TableSkeleton } from "../ui/index.js";
 
@@ -167,7 +168,11 @@ export default function Matrix() {
                         }}
                         title={sources ? sources.join("; ") : "not granted"}
                       >
-                        {sources ? "✓" : "—"}
+                        {sources ? (
+                          <Check size={14} strokeWidth={2.6} aria-hidden="true" />
+                        ) : (
+                          <Minus size={14} aria-hidden="true" />
+                        )}
                       </td>
                     );
                   })}

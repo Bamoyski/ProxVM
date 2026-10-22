@@ -78,7 +78,7 @@
 }
 
 .pv-nav-group {
-  margin-top: var(--sp-6);
+  margin-top: var(--sp-7);
   padding: 0 var(--sp-3) var(--sp-2);
   font-size: 0.66rem;
   font-weight: 700;
@@ -92,12 +92,20 @@
   margin-top: 0;
 }
 
+/* Collapsed rail: group headings collapse into a hairline instead of a
+   stray dot floating between icon stacks. */
+.pv-nav-divider {
+  height: 1px;
+  margin: var(--sp-3) var(--sp-4);
+  background: var(--pv-border-soft);
+}
+
 .pv-nav-link {
   position: relative;
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  padding: 7px 10px;
+  padding: 8px 10px;
   border-radius: var(--r-md);
   font-size: 0.85rem;
   font-weight: 500;
@@ -159,7 +167,7 @@
   align-items: center;
   gap: var(--sp-4);
   width: 100%;
-  padding: 7px 8px;
+  padding: 8px;
   border: none;
   border-radius: var(--r-md);
   background: transparent;
@@ -232,7 +240,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-5);
-  padding: 0 var(--sp-8);
+  padding: 0 var(--sp-9);
   background: color-mix(in srgb, var(--pv-bg) 88%, transparent);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--pv-border-soft);
@@ -315,7 +323,7 @@
 .pv-main {
   flex: 1;
   min-width: 0;
-  padding: var(--sp-8) var(--sp-8) var(--sp-11);
+  padding: var(--sp-8) var(--sp-9) var(--sp-11);
 }
 
 .pv-page {
@@ -355,7 +363,7 @@
   align-items: flex-start;
   gap: var(--sp-5);
   flex-wrap: wrap;
-  margin-bottom: var(--sp-7);
+  margin-bottom: var(--sp-8);
 }
 
 .pv-page-head-main {
@@ -364,7 +372,7 @@
 }
 
 .pv-page-title {
-  font-size: 1.18rem;
+  font-size: 1.22rem;
   font-weight: 680;
   display: flex;
   align-items: center;
@@ -373,7 +381,7 @@
 }
 
 .pv-page-desc {
-  margin-top: 3px;
+  margin-top: var(--sp-2);
   font-size: 0.85rem;
   color: var(--pv-text-2);
   max-width: 72ch;
@@ -403,7 +411,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  margin-bottom: var(--sp-5);
+  margin-bottom: var(--sp-6);
   min-height: 28px;
 }
 
@@ -429,7 +437,7 @@
   background: var(--pv-surface);
   border: 1px solid var(--pv-border);
   border-radius: var(--r-lg);
-  padding: var(--sp-6);
+  padding: var(--sp-7);
 }
 
 .pv-panel-flush {
@@ -442,9 +450,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--sp-3);
-  height: 32px;
-  padding: 0 13px;
+  gap: var(--sp-4);
+  height: 34px;
+  padding: 0 14px;
   border-radius: var(--r-md);
   border: 1px solid var(--pv-border);
   background: var(--pv-surface-2);
@@ -526,20 +534,20 @@
 }
 
 .pv-btn-sm {
-  height: 27px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 11px;
   font-size: 0.78rem;
 }
 
 .pv-btn-icon {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   padding: 0;
 }
 
 .pv-btn-icon.pv-btn-sm {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
 }
 
 /* Nav affordances follow the sidebar, not the table-column breakpoints:
@@ -645,7 +653,7 @@
 
 /* ============================ forms ================================ */
 .pv-field {
-  margin-bottom: var(--sp-5);
+  margin-bottom: var(--sp-6);
 }
 
 .pv-label {
@@ -666,8 +674,8 @@
 .pv-select,
 .pv-textarea {
   width: 100%;
-  height: 34px;
-  padding: 0 10px;
+  height: 36px;
+  padding: 0 12px;
   border: 1px solid var(--pv-border);
   border-radius: var(--r-md);
   background: var(--pv-inset);
@@ -679,7 +687,7 @@
 .pv-textarea {
   height: auto;
   min-height: 72px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   resize: vertical;
   line-height: 1.5;
 }
@@ -716,10 +724,12 @@
 
 .pv-select {
   appearance: none;
-  padding-right: 28px;
+  padding-right: 30px;
   background-image: linear-gradient(45deg, transparent 50%, var(--pv-text-3) 50%),
     linear-gradient(135deg, var(--pv-text-3) 50%, transparent 50%);
-  background-position: calc(100% - 15px) 15px, calc(100% - 11px) 15px;
+  /* Vertically centred chevron: the old fixed 15px offset drifted once the
+     control height changed with density. */
+  background-position: right 16px center, right 12px center;
   background-size: 4px 4px, 4px 4px;
   background-repeat: no-repeat;
   cursor: pointer;
@@ -1044,14 +1054,14 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--pv-text-3);
-  padding: 9px 12px;
+  padding: 10px 14px;
   background: var(--pv-surface);
   border-bottom: 1px solid var(--pv-border);
   white-space: nowrap;
 }
 
 .pv-table td {
-  padding: 9px 12px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--pv-border-soft);
   vertical-align: middle;
 }
@@ -1122,7 +1132,7 @@
   align-items: center;
   gap: var(--sp-4);
   flex-wrap: wrap;
-  margin-bottom: var(--sp-5);
+  margin-bottom: var(--sp-6);
 }
 
 .pv-search {
@@ -1134,7 +1144,7 @@
 
 .pv-search .pv-search-ico {
   position: absolute;
-  left: 10px;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--pv-text-3);
@@ -1142,7 +1152,7 @@
 }
 
 .pv-search .pv-input {
-  padding-left: 32px;
+  padding-left: 34px;
 }
 
 /* selection action bar (sticky while rows are selected) */
@@ -1154,7 +1164,7 @@
   align-items: center;
   gap: var(--sp-4);
   flex-wrap: wrap;
-  padding: 9px 12px;
+  padding: 10px 14px;
   margin-bottom: var(--sp-5);
   border: 1px solid var(--pv-accent-border);
   border-radius: var(--r-lg);
@@ -1179,7 +1189,7 @@
 .pv-kv {
   display: grid;
   grid-template-columns: 148px 1fr;
-  gap: 7px 16px;
+  gap: var(--sp-4) var(--sp-6);
   font-size: 0.85rem;
   margin: 0;
 }
@@ -1222,7 +1232,7 @@
 }
 
 .pv-stat-value {
-  margin-top: 2px;
+  margin-top: var(--sp-2);
   font-size: 1.45rem;
   font-weight: 650;
   letter-spacing: -0.02em;
@@ -1271,7 +1281,7 @@
   display: flex;
   gap: var(--sp-5);
   border-bottom: 1px solid var(--pv-border-soft);
-  margin-bottom: var(--sp-7);
+  margin-bottom: var(--sp-8);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -1282,7 +1292,7 @@
 
 .pv-tab {
   position: relative;
-  padding: 0 2px 10px;
+  padding: 0 2px 12px;
   border: none;
   background: none;
   color: var(--pv-text-2);

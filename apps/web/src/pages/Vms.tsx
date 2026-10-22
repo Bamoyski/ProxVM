@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   ArrowUpDown,
   MonitorUp,
@@ -379,7 +380,9 @@ export default function Vms({ me }: { me: Me }) {
           title="Templates"
           description="Base VM images registered with ProxVM. Provisioning clones from these."
           actions={
-            <Btn size="sm" onClick={() => setParams({})}>← Back to VMs</Btn>
+            <Btn size="sm" onClick={() => setParams({})}>
+              <ArrowLeft size={14} aria-hidden="true" /> Back to VMs
+            </Btn>
           }
         />
         <Templates />

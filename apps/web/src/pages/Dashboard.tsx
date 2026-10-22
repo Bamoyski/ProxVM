@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "../api.js";
 import Jobs from "./Jobs.js";
 import { isPrivileged, type Me } from "../lib/permissions.js";
@@ -460,14 +461,18 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
                 aria-label={`Toggle ${ALL_WIDGETS.find((w) => w.id === id)?.title}`}
                 aria-pressed={!layout.hidden.includes(id)}
               >
-                ✓
+                <Check size={11} strokeWidth={3} aria-hidden="true" />
               </button>
               <span style={{ color: layout.hidden.includes(id) ? "var(--pv-text-3)" : "var(--pv-text)" }}>
                 {ALL_WIDGETS.find((w) => w.id === id)?.title}
               </span>
               <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-                <Btn size="sm" kind="link" onClick={() => moveWidget(id, -1)}>↑</Btn>
-                <Btn size="sm" kind="link" onClick={() => moveWidget(id, 1)}>↓</Btn>
+                <Btn size="sm" kind="link" onClick={() => moveWidget(id, -1)} aria-label="Move widget up">
+                  <ChevronUp size={14} aria-hidden="true" />
+                </Btn>
+                <Btn size="sm" kind="link" onClick={() => moveWidget(id, 1)} aria-label="Move widget down">
+                  <ChevronDown size={14} aria-hidden="true" />
+                </Btn>
               </span>
             </div>
           ))}
