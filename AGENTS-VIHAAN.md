@@ -57,7 +57,7 @@ git switch main && git pull --ff-only origin main   # keep the base current
 git switch <your-one-branch>                        # your ONLY branch, always
 git rebase origin/main                              # when main moved
 # ... do the work ...
-npm run typecheck && npm run test && npm run build  # all green required
+npm run typecheck && npm run test && npm run build && npm run audit:ci  # all green required
 git push --force-with-lease origin <your-one-branch>
 gh pr edit                                          # widen title/body if the scope grew
 # gh pr create --base main ...                      # ONLY once, if no PR exists yet
@@ -99,7 +99,8 @@ PR. The shape above is the only path.
 ## Working from Vihaan's feature requests (steady state)
 
 After onboarding, Vihaan will hand you features in chat ("add X", "fix Y").
-Each request becomes exactly one branch and one PR:
+Each request lands as one more commit on your one branch and widens its
+open PR (never a new branch — see THE RULE above):
 
 1. **Understand first.** Restate the request in your own words and check
    the repo for existing code that already does it (or something close —
@@ -139,7 +140,8 @@ Each request becomes exactly one branch and one PR:
 
 ## What "done" means for a PR
 
-1. `npm run typecheck`, `npm run test`, `npm run build` all green.
+1. `npm run typecheck`, `npm run test`, `npm run build`, and
+   `npm run audit:ci` all green (same gate as CONTRIBUTING.md).
 2. Tests added for the change (positive, negative, boundary, malformed
    input; authorization tests for anything permission-shaped). Never mock
    the security check itself — mocks live only at external boundaries
