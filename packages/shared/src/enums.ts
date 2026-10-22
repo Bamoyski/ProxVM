@@ -12,6 +12,12 @@
 export const ROLES = ["ADMIN", "OPERATOR", "USER", "GUEST"] as const;
 export type Role = (typeof ROLES)[number];
 
+// Turnstile action for the self-serve signup surface. The widget renders it
+// as data-action and siteverify echoes it back; the register route rejects
+// tokens minted for any other action, so one surface's token cannot be
+// replayed on another.
+export const TURNSTILE_SIGNUP_ACTION = "signup";
+
 export const OS_TYPES = ["linux", "windows"] as const;
 export type OsType = (typeof OS_TYPES)[number];
 

@@ -36,7 +36,7 @@ const registration = (
   payload: { username, password: "Self-Serve-1!", ...extra },
   // Distinct source IP per call: the register route rate-limits 5/min/IP,
   // and these tests make several sequential registrations deliberately.
-  injectOptions: { remoteAddress: ip },
+  injectOptions: { remoteAddress: ip, headers: { host: "proxvm.test" } },
 });
 
 describe("self-serve registration modes", () => {
@@ -95,7 +95,7 @@ describe("self-serve registration modes", () => {
     await ctx.settings.set("selfserve.turnstile_secret", "test-secret", { encrypted: true, category: "system" });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 })),
+      vi.fn(async () => new Response(JSON.stringify({ success: true, action: "signup", hostname: "proxvm.test" }), { status: 200 })),
     );
     const { payload, injectOptions } = registration("instant-user", "203.0.113.3", { turnstileToken: "tok-1" });
     const res = await app.inject({ method: "POST", url: "/api/auth/register", payload, ...injectOptions });
@@ -125,6 +125,28 @@ describe("self-serve registration modes", () => {
 
     expect(await ctx.users.findByUsername("no-token-user")).toBeNull();
     expect(await ctx.users.findByUsername("bad-token-user")).toBeNull();
+  });
+
+  it("rejects a token solved for another action or on another hostname", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ success: true, action: "login", hostname: "proxvm.test" }), { status: 200 })),
+    );
+    const wrongAction = registration("wrong-action-user", "203.0.113.7", { turnstileToken: "tok-3" });
+    const actionRes = await app.inject({ method: "POST", url: "/api/auth/register", payload: wrongAction.payload, ...wrongAction.injectOptions });
+    expect(actionRes.statusCode).toBe(400);
+    expect(actionRes.json()).toMatchObject({ code: "TURNSTILE_FAILED" });
+    expect(await ctx.users.findByUsername("wrong-action-user")).toBeNull();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ success: true, action: "signup", hostname: "evil.example.net" }), { status: 200 })),
+    );
+    const wrongHost = registration("wrong-host-user", "203.0.113.8", { turnstileToken: "tok-4" });
+    const hostRes = await app.inject({ method: "POST", url: "/api/auth/register", payload: wrongHost.payload, ...wrongHost.injectOptions });
+    expect(hostRes.statusCode).toBe(400);
+    expect(hostRes.json()).toMatchObject({ code: "TURNSTILE_FAILED" });
+    expect(await ctx.users.findByUsername("wrong-host-user")).toBeNull();
   });
 
   it("GUEST grants nothing: the created account has zero effective permissions", async () => {

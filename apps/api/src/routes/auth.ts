@@ -17,7 +17,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import { alertAdmins, getSelfServeConfig, hashPassword, verifyPassword, verifyTurnstileToken, toPublicUser } from "@proxvm/core";
-import { loginSchema, passwordComplexity, registrationSchema } from "@proxvm/shared";
+import { loginSchema, passwordComplexity, registrationSchema, TURNSTILE_SIGNUP_ACTION } from "@proxvm/shared";
 import { SESSION_COOKIE } from "../plugins/auth.js";
 
 // Fixed Argon2id hash (m=19456,t=2,p=1, same cost as real verifies) used only
@@ -185,7 +185,16 @@ export async function authRoutes(app: FastifyInstance, opts: { ctx: CoreContext 
             message: "Please complete the verification challenge.",
           });
         }
-        const human = await verifyTurnstileToken(selfServe.turnstileSecret, body.turnstileToken, request.ip);
+        const human = await verifyTurnstileToken(
+          selfServe.turnstileSecret,
+          body.turnstileToken,
+          request.ip,
+          // Bind the token to this surface and this frontend host: siteverify
+          // echoes both back, so a token solved for another action or on
+          // another site cannot be replayed here. request.hostname is the Host
+          // header nginx forwards (the public tunnel hostname), no port.
+          { action: TURNSTILE_SIGNUP_ACTION, hostname: request.hostname },
+        );
         if (!human) {
           return reply.status(400).send({
             code: "TURNSTILE_FAILED",
