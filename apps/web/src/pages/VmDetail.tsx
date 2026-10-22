@@ -280,7 +280,9 @@ export default function VmDetail({ me }: { me: Me }) {
         <Alert kind="err" title="Failed to load this VM">
           {explainDenial(error) ?? errText(error)}
           <div style={{ marginTop: 8 }}>
-            <Link to="/vms">← Back to virtual machines</Link>
+            <Link to="/vms" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <ArrowLeft size={14} aria-hidden="true" /> Back to virtual machines
+            </Link>
           </div>
         </Alert>
       </div>

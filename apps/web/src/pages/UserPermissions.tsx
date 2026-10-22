@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Check, Minus } from "lucide-react";
 import { api } from "../api.js";
 import { PageHeader, Section, EmptyState, Btn, Alert, errText } from "../ui/index.js";
 
@@ -80,7 +81,9 @@ export default function UserPermissions() {
   return (
     <div className="pv-page">
       <div style={{ marginBottom: 4 }}>
-        <Link to="/users" style={{ fontSize: "0.8rem" }}>← Users</Link>
+        <Link to="/users" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.8rem" }}>
+          <ArrowLeft size={14} aria-hidden="true" /> Users
+        </Link>
       </div>
       <PageHeader title={`Permissions — ${data?.user.username ?? "…"}`} description="Direct assignments plus everything inherited from groups. The right column is the computed result." />
       {error && <Alert kind="err" title="Action failed">{error}</Alert>}
@@ -206,7 +209,7 @@ export default function UserPermissions() {
               {!data.groups.length && <EmptyState title="No group memberships" body="Manage them on the Groups page." />}
             </Section>
           </div>
-          <Section title="Effective permissions" hint="✓ granted (hover for source) · — denied. Inherited grants look the same as explicit ones by design; the tooltip names the source.">
+          <Section title="Effective permissions" hint="A check means granted (hover for the source); a dash means denied. Inherited grants look the same as explicit ones by design — the tooltip names the source.">
             <div style={{ maxHeight: "32rem", overflowY: "auto" }}>
               {[...byCategory.entries()].map(([category, entries]) => (
                 <div key={category} style={{ marginBottom: 12 }}>
@@ -216,7 +219,7 @@ export default function UserPermissions() {
                     return (
                       <div key={p.code} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: "0.85rem" }} title={hit ? hit.sources.join("; ") : p.description}>
                         <span className="pv-mono">{p.code}</span>
-                        {hit ? <span style={{ color: "var(--pv-ok)" }}>✓</span> : <span style={{ color: "var(--pv-text-3)" }}>—</span>}
+                        {hit ? <Check size={14} strokeWidth={2.6} style={{ color: "var(--pv-ok)" }} aria-hidden="true" /> : <Minus size={14} style={{ color: "var(--pv-text-3)" }} aria-hidden="true" />}
                       </div>
                     );
                   })}

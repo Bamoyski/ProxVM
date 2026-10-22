@@ -249,7 +249,7 @@ export default function AppShell({
           {groups.map((g, gi) => (
             <div key={g.label ?? `g${gi}`}>
               {g.label && !collapsed && <div className="pv-nav-group">{g.label}</div>}
-              {g.label && collapsed && <div className="pv-nav-group" style={{ padding: 0, textAlign: "center", letterSpacing: 0 }}>·</div>}
+              {g.label && collapsed && <div className="pv-nav-divider" aria-hidden="true" />}
               {g.items.map((item) => (
                 <NavItemLink key={item.to} item={item} collapsed={collapsed} />
               ))}
