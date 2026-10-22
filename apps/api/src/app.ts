@@ -15,7 +15,7 @@ import cors, { type OriginFunction } from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import type { CoreContext } from "@proxvm/core";
-import { AppError, ProxmoxApiError, alertAdmins, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, listConnectionHealth, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDueSchedules, sweepExpiredVmAccess } from "@proxvm/core";
+import { AppError, ProxmoxApiError, alertAdmins, checkVmHealth, evaluateThreatAlerts, getAllowedWebOrigins, getDomainConfig, getIdlePolicy, listConnectionHealth, reconcileIdleShutdown, reconcileVmPower, resolveDomainRedirect, runBackupPass, runDueSchedules, runFilterRotatePass, sweepExpiredVmAccess } from "@proxvm/core";
 import { ZodError } from "zod";
 import { buildAuthPlugin, SESSION_COOKIE } from "./plugins/auth.js";
 import { setupRoutes } from "./routes/setup.js";
@@ -283,6 +283,10 @@ const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
  */
 const SCHEDULE_TICK_MS = 60 * 1000;
 const HEALTH_TICK_MS = 5 * 60 * 1000;
+// School-filter auto-rotation poll: every 5 min while enabled. The pass is a
+// cheap Securly broker lookup until the current domain is actually DENYed, so
+// the frequent tick costs nothing in the steady state.
+const FILTER_TICK_MS = 5 * 60 * 1000;
 
 /**
  * Reconnaissance detection: counts denied/error responses per client IP in
@@ -334,9 +338,9 @@ export function startScanDetection(
  * Background homelab tickers: scheduled power actions every minute,
  * connection-health snapshots every 5 minutes (first health pass starts on
  * the first tick to avoid hammering Guacamole at boot), threat webhook
- * alerts, and infrastructure health probes. `sharedEgressIps` is the
- * trusted-proxy list (see buildApp) so threat alerts skip hop addresses.
- * Exported for testing.
+ * alerts, infrastructure health probes, and the Securly filter auto-rotate
+ * poll every 5 minutes. `sharedEgressIps` is the trusted-proxy list (see
+ * buildApp) so threat alerts skip hop addresses. Exported for testing.
  */
 export function startHomelabTickers(
   app: FastifyInstance,
@@ -631,12 +635,42 @@ export function startHomelabTickers(
       });
     }
   };
+  // School-filter auto-rotation: while enabled, polls Securly for the current
+  // canonical domain and — on an explicit DENY — switches to the next numbered
+  // hostname using the same flow the manual Switch button runs (DNS copy,
+  // tunnel route, DNS verify gate, flip). Capped, cooldown-gated, audited and
+  // alerted inside the pass; every failure is contained here.
+  const runFilterRotate = async (): Promise<void> => {
+    try {
+      const result = await runFilterRotatePass({
+        settings: ctx.settings,
+        redis: ctx.redis,
+        getCloudflareClient: ctx.getCloudflareClient,
+        verifyDomain: ctx.verifyDomain,
+        audit: ctx.audit,
+        db: ctx.db,
+        logger: ctx.logger,
+      });
+      if (result.outcome === "rotated" || result.outcome === "aborted" || result.outcome === "failed") {
+        ctx.logger.info(
+          { outcome: result.outcome, from: result.from, to: result.to, ruleId: result.ruleId ?? null, detail: result.detail ?? null },
+          "filter rotate pass finished with an action",
+        );
+      }
+    } catch (err) {
+      ctx.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "filter rotate pass crashed",
+      );
+    }
+  };
   void runSchedules();
   void runMetering();
   void runPower();
   void runThreats();
   void runInfra();
   void runDrift();
+  void runFilterRotate();
   const scheduleTimer = setInterval(() => {
     void runSchedules();
   }, scheduleIntervalMs);
@@ -658,7 +692,10 @@ export function startHomelabTickers(
   const driftTimer = setInterval(() => {
     void runDrift();
   }, DRIFT_TICK_MS);
-  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer, infraTimer, driftTimer]) {
+  const filterRotateTimer = setInterval(() => {
+    void runFilterRotate();
+  }, FILTER_TICK_MS);
+  for (const timer of [scheduleTimer, healthTimer, meteringTimer, powerTimer, threatTimer, infraTimer, driftTimer, filterRotateTimer]) {
     (timer as unknown as { unref?: () => void }).unref?.();
   }
   app.addHook("onClose", async () => {
@@ -669,6 +706,7 @@ export function startHomelabTickers(
     clearInterval(threatTimer);
     clearInterval(infraTimer);
     clearInterval(driftTimer);
+    clearInterval(filterRotateTimer);
   });
 }
 

@@ -132,6 +132,13 @@ from admins too. The repository admin has a pull-request-only bypass for
 their own PRs, so the maintainer can self-merge; that bypass never allows
 direct pushes.
 
+> **Standing exception — Vihaan's agent.** Per
+> [`AGENTS-VIHAAN.md`](AGENTS-VIHAAN.md), that agent works on one
+> long-lived `vihaan/` branch: every request ships as a new commit that
+> widens its single open PR, branches are not deleted after merge, and the
+> branch name is `vihaan/...` for life. The one-branch-per-PR and
+> branch-naming rules below apply to everyone else.
+
 1. Start from current `main`:
    `git fetch origin && git switch -c feature/<short-description> origin/main`.
    Use `fix/` or `docs/` when that is clearer. One branch per PR; if a

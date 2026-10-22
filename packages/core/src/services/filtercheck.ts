@@ -21,9 +21,11 @@ import type { SettingsService } from "./settings.js";
  * host=proxvm2 returned `DENY:999:67109120:...` and host=www.google.com
  * returned `SS:999:CC:...`.
  *
- * Scope discipline: this is an admin alert only, always evaluated for the
- * current canonical domain. Unknown/timeout responses never report "clean"
- * and never trigger anything — they report unknown.
+ * Scope discipline: the verdict feeds the on-demand Domains-page readout
+ * and — while auto-rotate is enabled — the pull in
+ * `domainrotate.ts` (sibling in this directory). Unknown/timeout responses never report
+ * "clean" and never trigger anything on their own; only an explicit DENY
+ * can start an auto-rotation.
  */
 
 export type FilterStatus = "blocked" | "clean" | "unknown" | "unconfigured";

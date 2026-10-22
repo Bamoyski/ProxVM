@@ -7,14 +7,16 @@ without Cloudflare in front) is a short checklist rather than a migration.
 Do the steps in order; nothing below requires database surgery.
 
 > **Shortcut:** the **Domains** page (Settings → Domains, administrators
-> only) automates all of this when Cloudflare manages your DNS: connect an
-> API token + Zone ID, then use **Switch domain** to point a name at the
-> current target, route it through your tunnel, verify it resolves (and probe
-> HTTPS), flip canonical, and keep the old domain redirecting — in one
-> audited step, no SSH, no config files, no restarts. The switch refuses to
-> flip while the new name does not resolve, so a typo can't strand you.
-> The manual checklist below remains the fallback (and the only path without
-> Cloudflare).
+> only) automates all of this when Cloudflare manages your DNS: connect an API token + Zone ID, then use
+> **Switch domain** to point a name at the current target, route it through
+> your tunnel, verify it resolves (and probe HTTPS), flip canonical, and
+> keep the old domain redirecting — in one audited step, no SSH, no config
+> files, no restarts. The switch refuses to flip while the new name does not
+> resolve, so a typo can't strand you. With **auto-rotate** enabled (a
+> Domains-page toggle), the same flow also runs itself when the school
+> filter blocks the current domain — capped, cooldown-gated, and alerted;
+> see the Securly section below. The manual checklist below remains the
+> fallback (and the only path without Cloudflare).
 
 ## Full-auto tunnel ingress (no manual cloudflared step)
 
@@ -91,11 +93,43 @@ the fallback for setups with no canonical domain set (LAN/IP access, dev).
 
 The Domains page shows whether the current canonical domain is blocked by
 Securly for your school, using Securly's own broker endpoint as an oracle
-(same verdict the extension enforces, checked from anywhere). Configure one
-school user email (Domains page, or `PROXVM_SECURILY_USEREMAIL` env) to scope
-the check to that school's policy. This is an admin alert only — it never
-rotates, never redirects, and unknown/timeout answers stay unknown rather
-than claiming clean.
+(same verdict the extension enforces, checked by an administrator on demand).
+Configure one school user email (Domains page, or `PROXVM_SECURILY_USEREMAIL`
+env) to scope the check to that school's policy. Unknown/timeout answers
+stay unknown rather than claiming clean.
+
+### Auto-rotate on block (opt-in, OFF by default)
+
+With auto-rotate OFF, the watch is read-only: it reports the verdict and
+changes nothing.
+
+With auto-rotate ON (Domains-page toggle → `PUT /domains/auto-rotate`,
+stored as the `domains.auto_rotate` setting), the API polls Securly every
+5 minutes and, on an **explicit `DENY` verdict for the current canonical
+domain**, runs the exact same flow as the **Switch domain** button to the
+next numbered hostname (`proxvm6` → `proxvm7`, `proxvm9` → `proxvm10`; a
+first label without trailing digits gets `2` appended): clone the current
+canonical record's target/type/proxy state, ensure the tunnel route, verify
+the new name resolves, flip canonical, and keep the old host redirecting.
+Sharp edges:
+
+- Only an explicit `DENY` rotates. Unknown/timeout verdicts never rotate and
+  never alert — a broker blip cannot cause a blind switch.
+- Every candidate name is pre-checked against Securly before the switch, so
+  a rotation never lands on another blocked hostname. If the next 10 names
+  are all blocked, or the broker starts answering `unknown` mid-search,
+  nothing is switched and admins are alerted.
+- The DNS verify gate still applies: if the new name does not resolve yet,
+  the record is saved but nothing flips; the next pass retries after the
+  cooldown.
+- Cooldowns gate re-attempts (15 min after a success, 30 min after a failed
+  candidate search, 60 min after an infrastructure error) and a daily cap of
+  5 successful rotations (UTC day) stops runaway loops; at the cap the pass
+  stops and sends exactly one admin alert for that day.
+- Every outcome is audit-logged (actor `auto-rotate`, `SETTINGS_CHANGED`)
+  and admins get an in-app bell + Gotify alert, including on failure.
+- Redis state lives under `proxvm:auto-rotate:*` and is safe to delete for a
+  fresh start (cooldown/counter/cap flags only).
 
 ## Removing Cloudflare Access (or any access proxy)
 

@@ -25,36 +25,42 @@ that the maintainer reviews and merges. No exceptions, including "trivial"
 fixes. The maintainer also ships through PRs; direct pushes to `main` in
 the history are legacy, not a precedent.
 
-**One active PR, one branch.** Before starting a task, check what is already
-open:
+**One branch for ALL work.** You work on exactly ONE branch with exactly
+one open PR, no matter how many separate requests you receive. Never
+create a second branch — not for a new task, not for a fix, not for
+convenience. Every piece of work (feature, fix, docs, review comments)
+ships as new commits on your existing branch and rides the same PR;
+update the PR title/body so it reflects the accumulated scope.
+
+Check what is already open before starting:
 
 ```bash
 gh pr list --author @me --state open
 git ls-remote --heads origin
 ```
 
-If either shows a branch or PR you opened, that is your active task: switch
-to its branch and continue there. Do not create another branch until it is
-merged or explicitly abandoned. At most one `vihaan/*` branch and one open PR
-may exist at any time. If you already have more than one open when you read
-this, create no new branches; resolve them one at a time, oldest first.
+If your PR is already open, that is your active task queue: switch to
+its branch and continue there. If you somehow hold more than one open
+branch/PR, create nothing new; consolidate onto the oldest one
+(close the extras with a note on each) and continue from it.
 
-**Always branch from `main`, and always open the PR against `main`.** Fetch
-`origin`, switch to a clean `main`, fast-forward it, then create the feature
-branch from `origin/main`. Never branch from another feature branch, never
-reuse an old branch, and never target anything except `main` in
-`gh pr create`.
+**Always rebase onto `main` and keep the PR against `main`.** Fetch
+`origin`, switch to a clean `main`, fast-forward it, then rebase your
+single branch onto `origin/main`. Never stack work on another agent's
+branch, and never target anything except `main` in `gh pr create`.
 
-Every task follows this shape:
+Every change follows this shape:
 
 ```bash
 git fetch origin
-git switch main && git pull --ff-only origin main
-git switch -c vihaan/<short-description> origin/main  # from main only
+git switch main && git pull --ff-only origin main   # keep the base current
+git switch <your-one-branch>                        # your ONLY branch, always
+git rebase origin/main                              # when main moved
 # ... do the work ...
-npm run typecheck && npm run test && npm run build   # all green required
-git push -u origin vihaan/<short-description>        # your branch only
-gh pr create --base main --title "..." --body "..."  # then STOP and wait
+npm run typecheck && npm run test && npm run build && npm run audit:ci  # all green required
+git push --force-with-lease origin <your-one-branch>
+gh pr edit                                          # widen title/body if the scope grew
+# gh pr create --base main ...                      # ONLY once, if no PR exists yet
 ```
 
 `main` is branch-protected: a pull request and one approving review are
@@ -64,9 +70,10 @@ pull-request-only bypass for their own PRs; that does not apply to you.
 Your PRs are reviewed and merged by the maintainer; never merge your own
 PR. The shape above is the only path.
 
-- Branch names always start with `vihaan/`; never `feature/`, `fix/`, or a
-  new name for follow-up work. Reuse the existing branch for review fixes.
-- Force-push is allowed **only** on your own `vihaan/*` branches (e.g.
+- The branch name always starts with `vihaan/`; never `feature/` or `fix/`.
+  That name is for life: it never changes for new work, and follow-up
+  work rides the same branch even when the name stops matching the scope.
+- Force-push is allowed **only** on your own `vihaan/*` branch (e.g.
   after a rebase). Never on `main`, never on anyone else's branch.
 - If `main` moves under you, rebase your branch onto it and re-run the
   full verification before pushing again.
@@ -92,7 +99,8 @@ PR. The shape above is the only path.
 ## Working from Vihaan's feature requests (steady state)
 
 After onboarding, Vihaan will hand you features in chat ("add X", "fix Y").
-Each request becomes exactly one branch and one PR:
+Each request lands as one more commit on your one branch and widens its
+open PR (never a new branch — see THE RULE above):
 
 1. **Understand first.** Restate the request in your own words and check
    the repo for existing code that already does it (or something close —
@@ -100,19 +108,20 @@ Each request becomes exactly one branch and one PR:
    before writing code; a wrong guess costs more than a question. If it
    touches permissions, sessions, credentials, or tenant isolation,
    re-read the authorization primer in `CONTRIBUTING.md` first.
-2. **Exactly one active branch** (`vihaan/<short-description>`, from latest
-   `main`). Never create a second branch while an open PR exists — finish,
-   merge, or abandon the current one first. If a request is really three
-   features, say so, but ship them one PR at a time. Delete the branch after
-   the PR merges; keep only `main` plus the branch for the active PR.
+2. **Your one branch, always** (`vihaan/...`, rebased onto latest
+   `main`). New requests do NOT get new branches: land them as new commits
+   on the existing branch and widen the open PR (title/body/scope).
+   Rebase before pushing when `main` has moved. If the branch is deleted
+   after a merge, recreate a single `vihaan/` branch from `origin/main`
+   for the next batch of work.
 3. **Build it to the done criteria below** (green checks, tests, PR
    description). Screenshots for UI, `needs-live-verify` label when live
    infrastructure is the only way to prove it.
-4. **Open the PR and stop.** The maintainer reviews and merges. Never
+4. **Keep the PR open and stop.** The maintainer reviews and merges. Never
    merge, never deploy, never touch production — you have no path to it
-   and must not invent one. After merge, delete your branch locally and on
-   `origin`, then verify `git ls-remote --heads origin` shows only `main`
-   and your active branch.
+   and must not invent one. After a merge, delete nothing: the branch is
+   your one-and-only work branch. Verify `git ls-remote --heads origin`
+   shows only `main` plus your single `vihaan/` branch.
 5. **Review comments are the next task.** Apply them as follow-up commits
    on the same branch, re-verify, push again. If a comment changes the
    shape of the feature, confirm the new direction with Vihaan first.
@@ -131,7 +140,8 @@ Each request becomes exactly one branch and one PR:
 
 ## What "done" means for a PR
 
-1. `npm run typecheck`, `npm run test`, `npm run build` all green.
+1. `npm run typecheck`, `npm run test`, `npm run build`, and
+   `npm run audit:ci` all green (same gate as CONTRIBUTING.md).
 2. Tests added for the change (positive, negative, boundary, malformed
    input; authorization tests for anything permission-shaped). Never mock
    the security check itself — mocks live only at external boundaries
