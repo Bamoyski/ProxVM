@@ -917,51 +917,51 @@ function ManageSection({
       </div>
 
       {cloneOpen && (
-        <div aria-hidden="true" />
+        <Dialog
+          title={`Clone ${vm.name}`}
+          onClose={() => setCloneOpen(false)}
+          footer={
+            <>
+              <Btn onClick={() => setCloneOpen(false)}>Cancel</Btn>
+              <Btn kind="primary" onClick={() => void doClone()} disabled={!cloneName.trim()}>Clone</Btn>
+            </>
+          }
+        >
+          <Field label="Clone name" required>
+            {({ id }) => <Input id={id} value={cloneName} onChange={(e) => setCloneName(e.target.value)} />}
+          </Field>
+          {otherNodes.length > 0 && (
+            <Field label="Target node" hint="Leave on same node for the fastest clone.">
+              {({ id }) => (
+                <Select id={id} value={cloneTarget} onChange={(e) => setCloneTarget(e.target.value)}>
+                  <option value="">Same node ({vm.node})</option>
+                  {otherNodes.map((n) => (
+                    <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          )}
+        </Dialog>
       )}
 
-      <Dialog
-        title={`Clone ${vm.name}`}
-        onClose={() => setCloneOpen(false)}
-        footer={
-          <>
-            <Btn onClick={() => setCloneOpen(false)}>Cancel</Btn>
-            <Btn kind="primary" onClick={() => void doClone()} disabled={!cloneName.trim()}>Clone</Btn>
-          </>
-        }
-      >
-        <Field label="Clone name" required>
-          {({ id }) => <Input id={id} value={cloneName} onChange={(e) => setCloneName(e.target.value)} />}
-        </Field>
-        {otherNodes.length > 0 && (
-          <Field label="Target node" hint="Leave on same node for the fastest clone.">
-            {({ id }) => (
-              <Select id={id} value={cloneTarget} onChange={(e) => setCloneTarget(e.target.value)}>
-                <option value="">Same node ({vm.node})</option>
-                {otherNodes.map((n) => (
-                  <option key={n.node} value={n.node}>{n.node} ({n.status})</option>
-                ))}
-              </Select>
-            )}
+      {templateOpen && (
+        <Dialog
+          title={`Convert ${vm.name} to template`}
+          onClose={() => setTemplateOpen(false)}
+          footer={
+            <>
+              <Btn onClick={() => setTemplateOpen(false)}>Cancel</Btn>
+              <Btn kind="primary" onClick={() => void doMakeTemplate()} disabled={!templateName.trim()}>Convert</Btn>
+            </>
+          }
+        >
+          <Field label="Template name" required>
+            {({ id }) => <Input id={id} value={templateName} onChange={(e) => setTemplateName(e.target.value)} />}
           </Field>
-        )}
-      </Dialog>
-
-      <Dialog
-        title={`Convert ${vm.name} to template`}
-        onClose={() => setTemplateOpen(false)}
-        footer={
-          <>
-            <Btn onClick={() => setTemplateOpen(false)}>Cancel</Btn>
-            <Btn kind="primary" onClick={() => void doMakeTemplate()} disabled={!templateName.trim()}>Convert</Btn>
-          </>
-        }
-      >
-        <Field label="Template name" required>
-          {({ id }) => <Input id={id} value={templateName} onChange={(e) => setTemplateName(e.target.value)} />}
-        </Field>
-        <div className="pv-hint">The VM must be stopped; Proxmox converts it in place.</div>
-      </Dialog>
+          <div className="pv-hint">The VM must be stopped; Proxmox converts it in place.</div>
+        </Dialog>
+      )}
     </Section>
   );
 }
