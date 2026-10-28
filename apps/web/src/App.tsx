@@ -10,6 +10,8 @@ import { Spinner, RouteErrorBoundary } from "./ui/index.js";
 import Login from "./pages/Login.js";
 import SetupWizard from "./pages/SetupWizard.js";
 import Dashboard from "./pages/Dashboard.js";
+import Welcome from "./pages/Welcome.js";
+import { shouldShowWelcome, WELCOME_DURATION_MS } from "./lib/welcome.js";
 
 /* Route-level code splitting: everything else loads on navigation. */
 const Vms = lazy(() => import("./pages/Vms.js"));
@@ -38,6 +40,7 @@ export default function App() {
   const { data: me, isLoading } = useMe();
   const [setupMode, setSetupMode] = useState<boolean | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(false);
 
   useEffect(() => {
     api<{ mode: string; restartRequired?: boolean }>("/setup/status")
@@ -47,6 +50,22 @@ export default function App() {
       })
       .catch(() => setSetupMode(null));
   }, []);
+
+  // Brief educational intro, once per app start. Never over first-run
+  // setup or the restart-required screen; hiding simply hands control back
+  // to the normal flow below (login or the app shell) — no full-page
+  // navigation, so the timer cannot loop.
+  useEffect(() => {
+    if (!showWelcome && shouldShowWelcome({ isLoading, setupMode, restartRequired })) {
+      setShowWelcome(true);
+    }
+  }, [isLoading, setupMode, restartRequired, showWelcome]);
+
+  useEffect(() => {
+    if (!showWelcome) return;
+    const timer = setTimeout(() => setShowWelcome(false), WELCOME_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [showWelcome]);
 
   // Effective permissions (custom roles, group roles, direct grants) drive
   // nav visibility; the legacy role map is the fallback while this loads.
@@ -80,6 +99,10 @@ export default function App() {
         <Spinner size={18} /> Loading ProxVM…
       </div>
     );
+  }
+
+  if (showWelcome && !setupMode && !restartRequired) {
+    return <Welcome onDone={() => setShowWelcome(false)} />;
   }
 
   if (setupMode) {
