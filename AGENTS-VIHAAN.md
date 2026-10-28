@@ -197,8 +197,10 @@ open PR (never a new branch — see THE RULE above):
   secrets required. If the suite is green, the backend change is verified
   as far as automation can tell.
 - The web SPA's compile proof is `typecheck` + `vite build`; `npm run
-  test` also runs web tests when the workspace has them. Behavior
-  verification happens on the maintainer's side.
+  test` also runs web tests when the workspace has them. User-visible
+  changes additionally require the dev-server render check and screenshot
+  described under "Verification for UI changes" below; live homelab
+  behaviour verification stays on the maintainer's side.
 - `npm run test:integration` is maintainer-only (needs real Proxmox env) —
   never run it, never gate on it.
 - Windows note: if `npm.ps1` is blocked by execution policy, invoke
