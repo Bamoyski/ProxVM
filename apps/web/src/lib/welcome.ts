@@ -23,3 +23,18 @@ export function shouldShowWelcome(gate: WelcomeGateInput): boolean {
 
 /** How long the intro page stays up before the app continues. */
 export const WELCOME_DURATION_MS = 2500;
+
+/**
+ * One-pass intro phase. `pending` waits for the settled-normal gate, then
+ * becomes `shown` exactly once — `done` is terminal, so hiding the intro can
+ * never re-trigger it (verified in the browser: a boolean flag re-showed the
+ * intro forever because the settled gate stays true after hide).
+ */
+export type IntroPhase = "pending" | "shown" | "done";
+
+/** Pure transition for the intro state machine. */
+export function nextIntroPhase(phase: IntroPhase, gate: WelcomeGateInput): IntroPhase {
+  if (phase === "done") return "done";
+  if (phase === "pending") return shouldShowWelcome(gate) ? "shown" : "pending";
+  return "shown";
+}

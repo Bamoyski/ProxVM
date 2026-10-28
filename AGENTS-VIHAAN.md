@@ -677,59 +677,62 @@ Run through this before you open a PR:
 
 ## Running the development web server
 
-The ProxVM web application can be started for local development. Choose
-the method that works best for your environment (note: PowerShell execution
-policy blocks `npm.ps1`, so always use `npm.cmd`/`npx.cmd`):
+The web app is a Vite SPA that proxies `/api` to `http://localhost:4000`.
 
-### Method 1: Using the npm script (recommended)
-```bash
-npm run dev:web
-```
-This starts the Vite development server for the web app at
-`http://localhost:5173` (or another port if 5173 is in use).
+- From the repo ROOT: `npm run dev:web` (the script lives only at the
+  root — `npm run dev:web` inside `apps/web` fails with "Missing script").
+- From `apps/web`: run `npx vite` directly (same server, faster in some
+  setups).
+- Windows: PowerShell execution policy blocks `npm.ps1`/`npx.ps1` — always
+  invoke `npm.cmd`/`npx.cmd` (use the full path when PATH resolution picks
+  the wrong package).
+- Vite serves `http://localhost:5173`. If 5173 is taken, pass
+  `vite --port 3000` (the `PORT` env var only works via the dev script).
+- Stop it with `Ctrl+C` in the terminal running it.
 
-### Method 2: Direct vite command
-```bash
-npx vite
-# Or, if npx is blocked by execution policy:
-npx.cmd vite
-```
+### What you should see (with a ready backend)
 
-### Method 3: Using the bin directly (when scripts are blocked)
-```bash
-./node_modules/.bin/vite
-# If even that is blocked:
-./node_modules/.bin/vite.cmd
-```
+1. "Loading ProxVM…" while `/api/setup/status` and `/api/me` resolve.
+2. A brief generic scholarly "Introduction" page (~2.5 s, once per app
+   start, with a Continue button and an auto-advance timer).
+3. The dashboard (authenticated) or the login page.
 
-### Method 4: Alternative port if 5173 is occupied
-```bash
-PORT=3000 npm run dev:web
-# Or:
-vite --port 3000
-```
+First-run setup and the restart-required screen always take precedence
+over the intro.
 
-### What you will see
-After starting the dev server, open `http://localhost:5173` in a browser.
-You should see:
-1. The initial "Loading ProxVM…" spinner
-2. The Welcome/educational page appearing briefly for ~2.5 seconds
-   — this contains a generic scholarly introduction about virtual
-   infrastructure management, remote access, and system administration
-3. Automatic transition to dashboard (if authenticated) or login page
+## Verification for UI changes (ALWAYS REQUIRED)
 
-### Stopping the server
-Press `Ctrl+C` in the terminal where the dev server is running.
+Not optional, not a style preference. Every new feature and every
+user-visible change (pages, layout, controls, interactions, shell and
+error-boundary changes) must be verified against the running dev server
+before the work is called done:
 
-### Verification for UI changes
-When implementing new features, create a screenshot of the exact change
-using the development server (`npm run dev:web`), and include it in the
-PR description or task report. Verification ensures the welcome page
-transition, spinner display, and content rendering all appear as intended
-before the change is considered complete.
+1. **Start the dev web server** (see above).
+2. **Satisfy the app's boot calls.** The SPA only leaves its Loading/Setup
+   gates when `/api/domains/public`, `/api/setup/status`, `/api/me` and
+   `/api/iam/effective` answer, plus shell calls (`/api/announcement`,
+   `/api/notifications*`, `/api/threats`, `/api/vms`, `/api/users`). Use an
+   existing configured dev instance, or a THROWAWAY fixture API on :4000
+   that mirrors only the shapes the frontend declares (precedent:
+   `docs/UI_REWRITE_ARCHITECTURE.md`). Never point verification at real
+   homelab infrastructure.
+3. **Screenshot the exact change** from the running app in a real browser,
+   during the relevant state, and check it visually (layout, theme
+   classes, dark/light where theme-dependent).
+4. **Attach the screenshot** to the PR description or task report and say
+   what it shows. Label fixture-based results "visually verified only,
+   fixture data".
+5. **Clean up**: stop the fixture API and delete the temporary script;
+   keep the dev server only while verification continues.
 
-For full development workflow, also run typecheck and tests:
+Hard limits: never fabricate, retouch, or substitute a mock image for the
+running app; a fixture asserts nothing about real backend behaviour. Live
+homelab verification (Guacamole launch, real backups, DNS) stays with the
+maintainer via the `needs-live-verify` label.
+
+For the full gate, also run typecheck and tests:
 ```bash
 npm run typecheck
 npm run test
+npm run build
 ```

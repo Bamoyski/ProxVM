@@ -11,7 +11,7 @@ import Login from "./pages/Login.js";
 import SetupWizard from "./pages/SetupWizard.js";
 import Dashboard from "./pages/Dashboard.js";
 import Welcome from "./pages/Welcome.js";
-import { shouldShowWelcome, WELCOME_DURATION_MS } from "./lib/welcome.js";
+import { nextIntroPhase, WELCOME_DURATION_MS, type IntroPhase } from "./lib/welcome.js";
 
 /* Route-level code splitting: everything else loads on navigation. */
 const Vms = lazy(() => import("./pages/Vms.js"));
@@ -40,7 +40,7 @@ export default function App() {
   const { data: me, isLoading } = useMe();
   const [setupMode, setSetupMode] = useState<boolean | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
-  const [showWelcome, setShowWelcome] = useState(false);
+  const [intro, setIntro] = useState<IntroPhase>("pending");
 
   useEffect(() => {
     api<{ mode: string; restartRequired?: boolean }>("/setup/status")
@@ -51,21 +51,21 @@ export default function App() {
       .catch(() => setSetupMode(null));
   }, []);
 
-  // Brief educational intro, once per app start. Never over first-run
-  // setup or the restart-required screen; hiding simply hands control back
-  // to the normal flow below (login or the app shell) — no full-page
-  // navigation, so the timer cannot loop.
+  // Brief educational intro, once per app start, via a small state machine:
+  // pending → shown (exactly once) → done (terminal). A plain boolean
+  // re-triggered here forever, because the settled gate stays true after the
+  // intro hides (caught by live browser verification).
   useEffect(() => {
-    if (!showWelcome && shouldShowWelcome({ isLoading, setupMode, restartRequired })) {
-      setShowWelcome(true);
+    if (intro === "pending") {
+      setIntro(nextIntroPhase(intro, { isLoading, setupMode, restartRequired }));
     }
-  }, [isLoading, setupMode, restartRequired, showWelcome]);
+  }, [isLoading, setupMode, restartRequired, intro]);
 
   useEffect(() => {
-    if (!showWelcome) return;
-    const timer = setTimeout(() => setShowWelcome(false), WELCOME_DURATION_MS);
+    if (intro !== "shown") return;
+    const timer = setTimeout(() => setIntro("done"), WELCOME_DURATION_MS);
     return () => clearTimeout(timer);
-  }, [showWelcome]);
+  }, [intro]);
 
   // Effective permissions (custom roles, group roles, direct grants) drive
   // nav visibility; the legacy role map is the fallback while this loads.
@@ -101,8 +101,8 @@ export default function App() {
     );
   }
 
-  if (showWelcome && !setupMode && !restartRequired) {
-    return <Welcome onDone={() => setShowWelcome(false)} />;
+  if (intro === "shown" && !setupMode && !restartRequired) {
+    return <Welcome onDone={() => setIntro("done")} />;
   }
 
   if (setupMode) {
