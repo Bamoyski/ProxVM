@@ -11,7 +11,13 @@ import Login from "./pages/Login.js";
 import SetupWizard from "./pages/SetupWizard.js";
 import Dashboard from "./pages/Dashboard.js";
 import Welcome from "./pages/Welcome.js";
-import { nextIntroPhase, WELCOME_DURATION_MS, type IntroPhase } from "./lib/welcome.js";
+import {
+  nextIntroPhase,
+  resolveIntroVariant,
+  WELCOME_DURATION_MS,
+  type IntroPhase,
+  type IntroVariant,
+} from "./lib/welcome.js";
 
 /* Route-level code splitting: everything else loads on navigation. */
 const Vms = lazy(() => import("./pages/Vms.js"));
@@ -40,13 +46,15 @@ export default function App() {
   const { data: me, isLoading } = useMe();
   const [setupMode, setSetupMode] = useState<boolean | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
+  const [introVariant, setIntroVariant] = useState<IntroVariant>("none");
   const [intro, setIntro] = useState<IntroPhase>("pending");
 
   useEffect(() => {
-    api<{ mode: string; restartRequired?: boolean }>("/setup/status")
+    api<{ mode: string; restartRequired?: boolean; introVariant?: string }>("/setup/status")
       .then((r) => {
         setSetupMode(r.mode === "setup");
         setRestartRequired(!!r.restartRequired);
+        setIntroVariant(resolveIntroVariant(r.introVariant));
       })
       .catch(() => setSetupMode(null));
   }, []);
@@ -54,12 +62,13 @@ export default function App() {
   // Brief educational intro, once per app start, via a small state machine:
   // pending → shown (exactly once) → done (terminal). A plain boolean
   // re-triggered here forever, because the settled gate stays true after the
-  // intro hides (caught by live browser verification).
+  // intro hides (caught by live browser verification). The gate also requires
+  // the admin-selected variant to be "school"; "none" (default) skips it.
   useEffect(() => {
     if (intro === "pending") {
-      setIntro(nextIntroPhase(intro, { isLoading, setupMode, restartRequired }));
+      setIntro(nextIntroPhase(intro, { isLoading, setupMode, restartRequired, introVariant }));
     }
-  }, [isLoading, setupMode, restartRequired, intro]);
+  }, [isLoading, setupMode, restartRequired, introVariant, intro]);
 
   useEffect(() => {
     if (intro !== "shown") return;

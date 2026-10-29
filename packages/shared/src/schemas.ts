@@ -36,6 +36,23 @@ export const redact = (value: string): string =>
 export const userId = z.guid();
 export const vmId = z.guid();
 
+// Intro splash variant (Settings → Appearance). Presentation only: the value
+// selects which intro surface the web app renders before login. It must never
+// gate permissions, routes, or logging.
+//   "none"   → no intro at all (default)
+//   "school" → the Wrenfield Academy landing page
+export const introVariantSchema = z.enum(["none", "school"]);
+export type IntroVariant = z.infer<typeof introVariantSchema>;
+
+/**
+ * Normalise a stored/unknown intro variant. Exact-match allowlist: anything
+ * that is not exactly "school" means no intro, so a corrupt or absent setting
+ * can never block boot or show the wrong surface.
+ */
+export function parseIntroVariant(raw: unknown): IntroVariant {
+  return raw === "school" ? "school" : "none";
+}
+
 // Single authority for every password-SETTING path (registration, admin
 // creation, admin resets, self-service changes, guest passwords). The 128
 // cap bounds Argon2 work before hashing; login stays wider (512) so

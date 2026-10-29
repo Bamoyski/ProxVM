@@ -11,6 +11,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { CoreContext } from "@proxvm/core";
 import { AppError, assertSafeServerUrl, assertSafeWebhookUrl, getAnnouncement, getGotifyConfig, parseCidrList, parseDbHost, normalizeHttpBaseUrl, sendGotifyMessage, setAnnouncement } from "@proxvm/core";
+import { introVariantSchema, parseIntroVariant } from "@proxvm/shared";
 
 const proxmoxSchema = z.object({
   url: z.string().url(),
@@ -67,6 +68,8 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         maxRamMb: z.number().int().min(256).max(8388608).nullable().optional(),
         maxDiskGb: z.number().min(1).max(131072).nullable().optional(),
         staticAllowedCidrs: z.string().max(1024).nullable().optional(),
+        // Presentation-only intro splash selector (Settings → Appearance).
+        introVariant: introVariantSchema.optional(),
       })
       .parse(request.body);
     if (body.retentionDays !== undefined) {
@@ -174,6 +177,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         await ctx.settings.set("network.static_allowed_cidrs", body.staticAllowedCidrs.trim(), { category: "system" });
       }
     }
+    if (body.introVariant !== undefined) {
+      // Presentation only: read back by the public /setup/status boot call.
+      await ctx.settings.set("ui.intro_variant", body.introVariant, { category: "app" });
+    }
     await app.audit(request, {
       event: "SETTINGS_CHANGED",
       actorUserId: actor.id,
@@ -197,6 +204,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
         maxRamMb: body.maxRamMb,
         maxDiskGb: body.maxDiskGb,
         staticAllowedCidrsChanged: body.staticAllowedCidrs !== undefined,
+        introVariant: body.introVariant,
       },
     });
     return { ok: true };
@@ -316,10 +324,11 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
     const maxRamMb = await ctx.settings.get("provision.max_ram_mb");
     const maxDiskGb = await ctx.settings.get("provision.max_disk_gb");
     const staticAllowedCidrs = await ctx.settings.get("network.static_allowed_cidrs");
-    const [selfServeMode, turnstileSiteKey, turnstileSecret] = await Promise.all([
+    const [selfServeMode, turnstileSiteKey, turnstileSecret, introVariant] = await Promise.all([
       ctx.settings.getPlain("selfserve.mode"),
       ctx.settings.get("selfserve.turnstile_site_key"),
       ctx.settings.get("selfserve.turnstile_secret"),
+      ctx.settings.get("ui.intro_variant"),
     ]);
     return {
       app: {
@@ -349,6 +358,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: { ctx: CoreCont
           : "approval",
         turnstileSiteKey: turnstileSiteKey?.value ?? null,
         turnstileSecretConfigured: !!turnstileSecret?.value,
+        introVariant: parseIntroVariant(introVariant?.value),
       },
     };
   });
