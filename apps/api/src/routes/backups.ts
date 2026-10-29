@@ -94,7 +94,7 @@ export async function backupRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     const user = await manageGuard(request);
     const body = z
       .object({
-        vmId: z.string().uuid(),
+        vmId: z.guid(),
         mode: z.enum(BACKUP_MODES).optional(),
         storage: z.string().min(1).max(128),
         datastore: z.string().min(1).max(128).optional(),
@@ -171,7 +171,7 @@ export async function backupRoutes(app: FastifyInstance, opts: { ctx: CoreContex
     const user = await manageGuard(request);
     const body = z
       .object({
-        vmIds: z.array(z.string().uuid()).min(1).max(50),
+        vmIds: z.array(z.guid()).min(1).max(50),
         mode: z.enum(BACKUP_MODES).optional(),
         storage: z.string().min(1).max(128),
         datastore: z.string().min(1).max(128).optional(),
@@ -231,7 +231,7 @@ export async function backupRoutes(app: FastifyInstance, opts: { ctx: CoreContex
       const user = await manageGuard(request);
       const body = z
         .object({
-          vmIds: z.array(z.string().uuid()).min(1).max(50),
+          vmIds: z.array(z.guid()).min(1).max(50),
           mode: z.enum(BACKUP_MODES).optional(),
           storage: z.string().min(1).max(128),
           datastore: z.string().min(1).max(128).optional(),

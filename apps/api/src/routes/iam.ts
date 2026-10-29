@@ -127,7 +127,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const query = z
       .object({
         permission: permissionSchema.optional(),
-        vmId: z.string().uuid().optional(),
+        vmId: z.guid().optional(),
         protocol: z.enum(["ssh", "rdp", "vnc"]).optional(),
       })
       .parse(request.query);
@@ -230,7 +230,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const { id } = request.params as { id: string };
     const target = await ctx.users.findById(id);
     if (!target) return reply.status(404).send({ code: "NOT_FOUND", message: "User not found" });
-    const body = z.object({ roleId: z.string().uuid(), expiresAt: expiresAtSchema }).parse(request.body);
+    const body = z.object({ roleId: z.guid(), expiresAt: expiresAtSchema }).parse(request.body);
     const role = await getRole(ctx.db, body.roleId);
     if (!role) return reply.status(404).send({ code: "NOT_FOUND", message: "Role not found" });
     await assertCanAdministerTarget(ctx.db, actor, id);
@@ -453,7 +453,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const group = await getGroup(ctx.db, id);
     if (!group) return reply.status(404).send({ code: "NOT_FOUND", message: "Group not found" });
     const body = z
-      .object({ userId: z.string().uuid().optional(), username: z.string().min(1).max(128).optional(), expiresAt: expiresAtSchema })
+      .object({ userId: z.guid().optional(), username: z.string().min(1).max(128).optional(), expiresAt: expiresAtSchema })
       .refine((b) => b.userId !== undefined || b.username !== undefined, {
         message: "Either userId or username is required",
       })
@@ -529,7 +529,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const { id } = request.params as { id: string };
     const group = await getGroup(ctx.db, id);
     if (!group) return reply.status(404).send({ code: "NOT_FOUND", message: "Group not found" });
-    const body = z.object({ roleId: z.string().uuid(), expiresAt: expiresAtSchema }).parse(request.body);
+    const body = z.object({ roleId: z.guid(), expiresAt: expiresAtSchema }).parse(request.body);
     const role = await getRole(ctx.db, body.roleId);
     if (!role) return reply.status(404).send({ code: "NOT_FOUND", message: "Role not found" });
     // Conferring a role to a group confers it to every member: the actor
@@ -586,7 +586,7 @@ export async function iamRoutes(app: FastifyInstance, opts: { ctx: CoreContext }
     const group = await getGroup(ctx.db, id);
     if (!group) return reply.status(404).send({ code: "NOT_FOUND", message: "Group not found" });
     const body = z
-      .object({ vmId: z.string().uuid(), protocols: protocolsSchema, expiresAt: expiresAtSchema })
+      .object({ vmId: z.guid(), protocols: protocolsSchema, expiresAt: expiresAtSchema })
       .parse(request.body);
     const vm = await ctx.vms.requireById(body.vmId);
     if (vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, actor.id))) {

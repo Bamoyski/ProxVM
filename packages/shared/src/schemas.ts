@@ -28,8 +28,13 @@ import {
 export const redact = (value: string): string =>
   value ? `[REDACTED:${value.length}]` : "[REDACTED]";
 
-export const userId = z.string().uuid();
-export const vmId = z.string().uuid();
+// UUID *shape* validation (`z.guid`), deliberately not zod 4's stricter
+// `z.uuid()`: the seeded system role ids are all-zero UUIDs
+// (00000000-0000-0000-0000-000000000001..4), which `z.uuid()` rejects because
+// its version nibble must be 1-8. These ids are opaque database keys, so the
+// shape check is the correct contract and keeps existing rows valid.
+export const userId = z.guid();
+export const vmId = z.guid();
 
 // Single authority for every password-SETTING path (registration, admin
 // creation, admin resets, self-service changes, guest passwords). The 128
@@ -197,7 +202,7 @@ export const provisionVmSchema = z.object({
     .min(1)
     .max(63)
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, "Invalid VM name"),
-  templateId: z.string().uuid().optional(),
+  templateId: z.guid().optional(),
   proxmoxTemplateVmid: z.number().int().optional(),
   node: z.string().max(128).optional(),
   vmid: z.number().int().min(100).max(999999999).optional(),
@@ -209,10 +214,10 @@ export const provisionVmSchema = z.object({
     bridge: z.string().min(1).max(128),
     vlan: z.number().int().min(0).max(4094).optional(),
     mode: z.enum(NETWORK_MODE),
-    ip: z.string().ip({ version: "v4" }).optional(),
+    ip: z.ipv4().optional(),
     cidr: z.number().int().min(0).max(32).optional(),
-    gateway: z.string().ip({ version: "v4" }).optional(),
-    dns: z.array(z.string().ip({ version: "v4" })).max(4).optional(),
+    gateway: z.ipv4().optional(),
+    dns: z.array(z.ipv4()).max(4).optional(),
   }),
   osType: z.enum(OS_TYPES),
   // Access protocols to expose via Guacamole. When omitted, the template's
@@ -227,7 +232,7 @@ export const provisionVmSchema = z.object({
   sshKey: z.string().max(16384).optional(),
   startAfterProvision: z.boolean().default(true),
   linkedClone: z.boolean().default(true),
-  assignToUserIds: z.array(z.string().uuid()).default([]),
+  assignToUserIds: z.array(z.guid()).default([]),
 });
 
 export type ProvisionVmRequest = z.infer<typeof provisionVmSchema>;
@@ -244,7 +249,7 @@ export const basicProvisionSchema = z.object({
     .min(1)
     .max(63)
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, "Invalid VM name"),
-  templateId: z.string().uuid(),
+  templateId: z.guid(),
   proxmoxTemplateVmid: z.number().int().optional(),
   node: z.string().max(128).optional(),
   vmid: z.number().int().min(100).max(999999999).optional(),
@@ -257,10 +262,10 @@ export const basicProvisionSchema = z.object({
       bridge: z.string().min(1).max(128).optional(),
       vlan: z.number().int().min(0).max(4094).optional(),
       mode: z.enum(NETWORK_MODE).default("dhcp"),
-      ip: z.string().ip({ version: "v4" }).optional(),
+      ip: z.ipv4().optional(),
       cidr: z.number().int().min(0).max(32).optional(),
-      gateway: z.string().ip({ version: "v4" }).optional(),
-      dns: z.array(z.string().ip({ version: "v4" })).max(4).optional(),
+      gateway: z.ipv4().optional(),
+      dns: z.array(z.ipv4()).max(4).optional(),
     })
     .optional(),
   osType: z.enum(OS_TYPES).optional(),
@@ -275,7 +280,7 @@ export const basicProvisionSchema = z.object({
   sshKey: z.string().max(16384).optional(),
   startAfterProvision: z.boolean().default(true),
   linkedClone: z.boolean().default(true),
-  assignToUserIds: z.array(z.string().uuid()).default([]),
+  assignToUserIds: z.array(z.guid()).default([]),
 });
 
 export type BasicProvisionRequest = z.infer<typeof basicProvisionSchema>;
@@ -283,7 +288,7 @@ export type BasicProvisionRequest = z.infer<typeof basicProvisionSchema>;
 export const vmEditSchema = z.object({
   cpu: z.number().int().min(1).max(512).optional(),
   ramMb: z.number().int().min(256).max(1048576).optional(),
-  assignToUserIds: z.array(z.string().uuid()).optional(),
+  assignToUserIds: z.array(z.guid()).optional(),
 });
 
 export const credentialRotateSchema = z.object({
@@ -302,7 +307,7 @@ export const auditQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
   event: z.string().optional(),
-  vmId: z.string().uuid().optional(),
+  vmId: z.guid().optional(),
 });
 
 export const jobsQuerySchema = z.object({
