@@ -23,6 +23,7 @@ import { createGuacamoleDbClient } from "@proxvm/core";
 import { hashPassword } from "@proxvm/core";
 import { AppError } from "@proxvm/core";
 import { parseDbHost, normalizeHttpBaseUrl, assertSafeServerUrl, fetchWithSsrfGuard } from "@proxvm/core";
+import { parseIntroVariant, type IntroVariant } from "@proxvm/shared";
 
 interface SetupOpts {
   ctx?: import("@proxvm/core").CoreContext;
@@ -78,7 +79,17 @@ export async function setupRoutes(app: FastifyInstance, opts: SetupOpts): Promis
 
   app.get("/setup/status", { config: { csrf: "skip" } }, async () => {
     if (configured) {
-      return { mode: "ready", configured: true, restartRequired: false };
+      // The intro splash renders before login, so its variant has to come from
+      // this already-public boot call. Presentation only, and never allowed to
+      // block boot: any settings hiccup degrades to "no intro".
+      let introVariant: IntroVariant = "none";
+      try {
+        const stored = await opts.ctx?.settings.get("ui.intro_variant");
+        introVariant = parseIntroVariant(stored?.value);
+      } catch {
+        introVariant = "none";
+      }
+      return { mode: "ready", configured: true, restartRequired: false, introVariant };
     }
     const configFileNow = await configExists();
     if (configFileNow) {

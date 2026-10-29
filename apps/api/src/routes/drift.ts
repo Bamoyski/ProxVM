@@ -41,7 +41,7 @@ import {
 } from "@proxvm/core";
 import type { FastifyAuthRequest } from "../plugins/auth.js";
 
-const FINDING_ID = z.string().uuid();
+const FINDING_ID = z.guid();
 
 const REMEDIATE_ACTIONS = ["adopt", "resync_ip", "decommission", "delete_orphan_connection"] as const;
 

@@ -42,7 +42,7 @@ export async function notificationRoutes(app: FastifyInstance, opts: { ctx: Core
   app.post("/notifications/read", async (request) => {
     const viewer = await viewerOf(request);
     const body = z
-      .object({ ids: z.array(z.string().uuid()).max(100).optional(), all: z.boolean().optional() })
+      .object({ ids: z.array(z.guid()).max(100).optional(), all: z.boolean().optional() })
       .parse(request.body ?? {});
     return { marked: await markNotificationsRead(ctx.db, viewer, body) };
   });

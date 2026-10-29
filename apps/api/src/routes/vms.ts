@@ -1,4 +1,4 @@
-﻿// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // VMs routes: provisioning, listing/detail, power, clone, make-template,
 //   migration, stats, bulk actions, schedules, share links, discovery,
 //   resize, per-VM access/invite management, privacy/class/boot flags, IP.
@@ -54,7 +54,7 @@ import { basicProvisionSchema } from "@proxvm/shared";
 import { guacdHostFromSettings } from "./firewall.js";
 import type { Queue } from "bullmq";
 
-const ipOverrideSchema = z.object({ ip: z.string().ip({ version: "v4" }) });
+const ipOverrideSchema = z.object({ ip: z.ipv4() });
 const actionBody = z.object({ force: z.boolean().optional() });
 const deleteBody = z.object({ confirmText: z.string().min(1) });
 
@@ -87,7 +87,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   app.post("/vms/provision", { config: { rateLimit: { max: 30, timeWindow: "1 hour" } } }, async (request, reply) => {
     const actor = await app.requirePermission("vm.create")(request);
     // Hosting quotas: unset (null) means unlimited and this check vanishes.
-    // Administrators are exempt â€” they manage the infrastructure itself.
+    // Administrators are exempt — they manage the infrastructure itself.
     // Fast-path gate (checked before body parsing so over-quota callers get
     // 403 without a valid payload). Best-effort only: the authoritative
     // check runs inside the reservation transaction below.
@@ -215,7 +215,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   app.get("/provisioning/defaults", async (request) => {
     await app.requirePermission("vm.create")(request);
     const query = z
-      .object({ templateId: z.string().uuid().optional(), node: z.string().max(128).optional() })
+      .object({ templateId: z.guid().optional(), node: z.string().max(128).optional() })
       .parse(request.query);
     return resolveProvisionDefaults(
       {
@@ -571,7 +571,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // -- Live/offline migration --------------------------------------------------
   // Async by design: POST only kicks the Proxmox task off and returns 202
   // immediately. Migrations routinely exceed Cloudflare's 100s proxy timeout
-  // (524) and must never hold an HTTP request open â€” the UI polls
+  // (524) and must never hold an HTTP request open — the UI polls
   // GET /vms/:id/migration below, which finalizes tracking + audit on
   // observed completion. Never await task completion here.
   app.post("/vms/:id/migrate", async (request, reply) => {
@@ -587,7 +587,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const client = await ctx.getProxmoxClient();
     const online = body.online ?? vm.status === "running";
     // Locally-mounted install media blocks migration (node-local `local:`
-    // volumes can't travel). Eject it first â€” hot-safe on a running guest â€”
+    // volumes can't travel). Eject it first — hot-safe on a running guest —
     // and record exactly what changed so it can be reattached after.
     const detachedIso: string[] = [];
     try {
@@ -613,7 +613,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // -- Migration status (async completion for POST /migrate) -------------------
   // Stateless: the Proxmox UPID + intended target ride along as query params,
   // so polling survives API restarts. Finalization (tracked-node update +
-  // audit) runs exactly once â€” guarded by the tracked node already matching
+  // audit) runs exactly once — guarded by the tracked node already matching
   // the target. Failures never move the tracked node.
   app.get("/vms/:id/migration", async (request) => {
     const { id } = request.params as { id: string };
@@ -690,7 +690,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   app.post("/vms/bulk-action", async (request) => {
     const body = z
       .object({
-        ids: z.array(z.string().uuid()).min(1).max(50),
+        ids: z.array(z.guid()).min(1).max(50),
         action: z.enum(["start", "stop", "restart", "privacy", "class", "isolation", "start-on-boot"]),
         // The TARGET state for the policy actions. Required for them: a
         // missing target is a 400, never an implicit flip.
@@ -935,7 +935,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const user = await app.requirePermission("vm.manage")(request);
     const body = z
       .object({
-        vmId: z.string().uuid(),
+        vmId: z.guid(),
         action: z.enum(["start", "stop", "restart"]),
         hour: z.number().int().min(0).max(23),
         minute: z.number().int().min(0).max(59),
@@ -1011,7 +1011,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // -- Share links -----------------------------------------------------------------
   // Creating/revoking requires vm.edit (access management); redeeming is
   // intentionally unauthenticated (that's the point of a share link) and
-  // rate-limited against token guessing â€” tokens are 256-bit regardless.
+  // rate-limited against token guessing — tokens are 256-bit regardless.
   app.post("/vms/:id/share", async (request) => {
     const { id } = request.params as { id: string };
     const access = await resolveVmAccess(request, id);
@@ -1128,7 +1128,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // Synchronous full-subnet scan: expensive by design, tightly throttled.
   app.post("/discovery/run", { config: { rateLimit: { max: 10, timeWindow: "1 hour" } } }, async (request) => {
     const user = await app.requirePermission("proxmox.read")(request);
-    const body = z.object({ vmId: z.string().uuid().optional() }).parse(request.body ?? {});
+    const body = z.object({ vmId: z.guid().optional() }).parse(request.body ?? {});
     const privileged = user.roles.includes("ADMIN") || user.roles.includes("OPERATOR");
     const targets = body.vmId
       ? [await ctx.vms.requireById(body.vmId)]
@@ -1154,7 +1154,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const out: Array<{ vmId: string; services: Array<{ port: number; service: string }> }> = [];
     for (const vm of vms) {
       // Privacy-flagged VMs stay invisible without a concrete grant, even to
-      // privileged list callers â€” same rule as GET /vms.
+      // privileged list callers — same rule as GET /vms.
       if (privileged && vm.privacyFlag && !(await ctx.vms.hasAccessOrOwns(vm.id, user.id))) continue;
       const services = await listVmServices(ctx.db, vm.id);
       if (services.length) out.push({ vmId: vm.id, services: services.map(({ port, service }) => ({ port, service })) });
@@ -1172,7 +1172,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       .object({
         cpu: z.number().int().min(1).max(512).optional(),
         ramMb: z.number().int().min(256).max(1048576).optional(),
-        assignToUserIds: z.array(z.string().uuid()).optional(),
+        assignToUserIds: z.array(z.guid()).optional(),
       })
       .parse(request.body);
 
@@ -1197,7 +1197,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
       if (upid) await client.waitForTask(vm.node, upid, 120000);
       // Bump the drift hardware baseline AFTER Proxmox accepts, from the live
       // resulting config: ProxVM's own in-band edits must never read as
-      // out-of-band hardware drift on the next pass. Advisory only — if the
+      // out-of-band hardware drift on the next pass. Advisory only � if the
       // read-back fails (or comes back incomplete), the next drift pass
       // surfaces a finding the admin can adopt, which re-baselines cleanly.
       // An incomplete config is refused rather than stored: a baseline of
@@ -1284,7 +1284,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   });
 
   // ---------------------------------------------------------------------------
-  // VM user-access management (admin/operator only â€” requires vm.edit).
+  // VM user-access management (admin/operator only — requires vm.edit).
   // ProxVM vm_access is the source of truth; every grant/revoke also syncs
   // the user's Guacamole permissions across ALL of the VM's connections
   // (ssh/rdp/vnc). Guacamole sync failures never leave a false success:
@@ -1336,7 +1336,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     }
     const body = z
       .object({
-        userId: z.string().uuid().optional(),
+        userId: z.guid().optional(),
         username: z.string().min(1).max(128).optional(),
         protocols: z.array(z.enum(["ssh", "rdp", "vnc"])).max(3).optional(),
         expiresAt: z.string().datetime({ offset: true }).optional(),
@@ -1431,7 +1431,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     }
     const body = z
       .object({
-        userId: z.string().uuid().optional(),
+        userId: z.guid().optional(),
         username: z.string().min(1).max(128).optional(),
         protocols: z.array(z.enum(["ssh", "rdp", "vnc"])).max(3).optional(),
         expiresAt: z.string().datetime({ offset: true }).optional(),
@@ -1492,7 +1492,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     await ctx.vms.replaceAccess(vm.id, target.id, { protocols, expiresAt, createdBy: inviter.id });
     // Best-effort Guacamole sync (group-grant philosophy, NOT the managed
     // POST /access rollback): the grant row is the invite itself and must
-    // survive Guacamole outages â€” launch-time sync and the periodic sweep
+    // survive Guacamole outages — launch-time sync and the periodic sweep
     // converge permissions later. The outcome is audited honestly either way.
     let effective: string[] | null = protocols;
     let guacSynced = true;
@@ -1538,10 +1538,10 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
     const { id, userId } = request.params as { id: string; userId: string };
     const actor = await app.requireAuth(request);
     const vm = await ctx.vms.requireById(id);
-    if (!z.string().uuid().safeParse(userId).success) {
+    if (!z.guid().safeParse(userId).success) {
       return reply.status(400).send({ code: "VALIDATION_ERROR", message: "userId must be a valid UUID" });
     }
-    // Inviters may withdraw their own invite without vm.edit â€” but only while
+    // Inviters may withdraw their own invite without vm.edit — but only while
     // they still hold access themselves. A revoked inviter keeps no lingering
     // write primitive over the VM.
     // Everything else goes through the managed path below.
@@ -1594,7 +1594,7 @@ export async function vmRoutes(app: FastifyInstance, opts: { ctx: CoreContext })
   // -- Privacy flag ---------------------------------------------------------------
   // Toggling needs no permission beyond being able to see the VM: a concrete
   // grant, creator-ownership, or administrator. Deliberately no vm.edit
-  // requirement â€” regular users must be able to flag their own VMs without
+  // requirement — regular users must be able to flag their own VMs without
   // being handed management rights. Flipping the flag grants no data by
   // itself: viewing or managing still needs a grant or ownership.
   app.patch("/vms/:id/privacy", async (request) => {

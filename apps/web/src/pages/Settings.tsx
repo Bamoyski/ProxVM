@@ -6,6 +6,36 @@ import { PageHeader, Section, Btn, Alert, Field, errText } from "../ui/index.js"
 const input = "pv-input";
 const label = "pv-label";
 
+/** /settings/app payload — shared by the Application and Appearance panels. */
+type AppSettingsPayload = {
+  app: Record<string, unknown>;
+  settings: {
+    retentionDays: number | null;
+    announcementText: string | null;
+    announcementLevel: "info" | "warn";
+    idleShutdownEnabled: boolean;
+    driftEnabled: boolean;
+    idleMinutes: number;
+    threatWebhookUrl: string | null;
+    threatMinSeverity: string;
+    gotifyUrl: string | null;
+    gotifyPriority: number;
+    gotifyEnabled: boolean;
+    gotifyConfigured: boolean;
+    maxCpu: number | null;
+    maxRamMb: number | null;
+    maxDiskGb: number | null;
+    staticAllowedCidrs: string | null;
+    selfServeMode: "closed" | "approval" | "auto";
+    turnstileSiteKey: string | null;
+    turnstileSecretConfigured: boolean;
+    /** Presentation-only intro splash variant. */
+    introVariant: "none" | "school";
+  };
+};
+
+const fetchAppSettings = () => api<AppSettingsPayload>("/settings/app");
+
 export default function Settings() {
   const qc = useQueryClient();
   const { data: proxmox } = useQuery({
@@ -130,6 +160,9 @@ export default function Settings() {
         <Section title="Application" hint="Retention, announcements, idle policy">
           <AppSettings />
         </Section>
+        <Section title="Appearance" hint="Intro splash shown once per app start">
+          <AppearanceSettings />
+        </Section>
       </div>
     </div>
   );
@@ -141,31 +174,7 @@ function AppSettings() {
   const [saved, setSaved] = useState<string | null>(null);
   const { data } = useQuery({
     queryKey: ["settings-app"],
-    queryFn: () =>
-      api<{
-        app: Record<string, unknown>;
-        settings: {
-          retentionDays: number | null;
-          announcementText: string | null;
-          announcementLevel: "info" | "warn";
-          idleShutdownEnabled: boolean;
-          driftEnabled: boolean;
-          idleMinutes: number;
-          threatWebhookUrl: string | null;
-          threatMinSeverity: string;
-          gotifyUrl: string | null;
-          gotifyPriority: number;
-          gotifyEnabled: boolean;
-          gotifyConfigured: boolean;
-          maxCpu: number | null;
-          maxRamMb: number | null;
-          maxDiskGb: number | null;
-          staticAllowedCidrs: string | null;
-          selfServeMode: "closed" | "approval" | "auto";
-          turnstileSiteKey: string | null;
-          turnstileSecretConfigured: boolean;
-        };
-      }>("/settings/app"),
+    queryFn: fetchAppSettings,
   });
   const [retention, setRetention] = useState("");
   const [touched, setTouched] = useState(false);
@@ -597,6 +606,55 @@ function AppSettings() {
             }}
           />
         </div>
+      </Field>
+      <Btn kind="primary" onClick={save}>Save</Btn>
+    </div>
+  );
+}
+
+/**
+ * Appearance panel: runtime intro splash selection.
+ * WHY its own save: the field has nothing in common with the operational
+ * tunables above, and a one-field PUT keeps the audit entry unambiguous.
+ * Presentation only — the value is read by the public /setup/status boot call.
+ */
+function AppearanceSettings() {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const { data } = useQuery({ queryKey: ["settings-app"], queryFn: fetchAppSettings });
+  const [variant, setVariant] = useState<"none" | "school" | null>(null);
+  const shown = variant ?? data?.settings?.introVariant ?? "none";
+
+  const save = async () => {
+    setError(null);
+    setSaved(null);
+    try {
+      await api("/settings/app", { method: "PUT", body: { introVariant: shown } });
+      setSaved("Appearance saved — takes effect on the next page load");
+      setVariant(null);
+      void qc.invalidateQueries({ queryKey: ["settings-app"] });
+    } catch (err) {
+      setError(errText(err));
+    }
+  };
+
+  return (
+    <div>
+      {error && <Alert kind="err" title="Action failed">{error}</Alert>}
+      {saved && <Alert kind="ok" title="Saved">{saved}</Alert>}
+      <Field
+        label="Intro splash"
+        hint="Presentation only: no permission, route or logging change. 'None' goes straight to sign-in; 'School website' shows the academy landing page once per app start. Takes effect on the next page load."
+      >
+        <select
+          className="pv-select"
+          value={shown}
+          onChange={(e) => setVariant(e.target.value === "school" ? "school" : "none")}
+        >
+          <option value="none">None (default)</option>
+          <option value="school">School website (Wrenfield Academy)</option>
+        </select>
       </Field>
       <Btn kind="primary" onClick={save}>Save</Btn>
     </div>

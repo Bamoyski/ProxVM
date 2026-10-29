@@ -17,7 +17,7 @@ const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
   event: z.string().max(64).optional(),
-  vmId: z.string().uuid().optional(),
+  vmId: z.guid().optional(),
   ip: z.string().max(64).optional(),
   actor: z.string().max(64).optional(),
 });

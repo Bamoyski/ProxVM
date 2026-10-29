@@ -197,8 +197,10 @@ open PR (never a new branch — see THE RULE above):
   secrets required. If the suite is green, the backend change is verified
   as far as automation can tell.
 - The web SPA's compile proof is `typecheck` + `vite build`; `npm run
-  test` also runs web tests when the workspace has them. Behavior
-  verification happens on the maintainer's side.
+  test` also runs web tests when the workspace has them. User-visible
+  changes additionally require the dev-server render check and screenshot
+  described under "Verification for UI changes" below; live homelab
+  behaviour verification stays on the maintainer's side.
 - `npm run test:integration` is maintainer-only (needs real Proxmox env) —
   never run it, never gate on it.
 - Windows note: if `npm.ps1` is blocked by execution policy, invoke
@@ -674,3 +676,68 @@ Run through this before you open a PR:
     verifiable from the branch? Does it match what the code does?
 12. **Diff hygiene** — `git diff main...HEAD --stat` read; no stray session
     log, no other branch's file.
+
+## Running the development web server
+
+The web app is a Vite SPA that proxies `/api` to `http://localhost:4000`.
+
+- From the repo ROOT: `npm run dev:web` (the script lives only at the
+  root — `npm run dev:web` inside `apps/web` fails with "Missing script").
+- From `apps/web`: run `npx vite` directly (same server, faster in some
+  setups).
+- Windows: PowerShell execution policy blocks `npm.ps1`/`npx.ps1` — always
+  invoke `npm.cmd`/`npx.cmd` (use the full path when PATH resolution picks
+  the wrong package).
+- Vite serves `http://localhost:5173`. If 5173 is taken, pass
+  `vite --port 3000` (the `PORT` env var only works via the dev script).
+- Stop it with `Ctrl+C` in the terminal running it.
+
+### What you should see (with a ready backend)
+
+1. "Loading ProxVM…" while `/api/setup/status` and `/api/me` resolve.
+2. A school-website style landing page (fictional "Wrenfield Academy")
+   shown once per app start for ~2.5 s: utility bar, crest and nav, hero,
+   term dates, and further sections below the fold. It is deliberately
+   product-neutral — no application branding or feature copy. A Continue
+   control in the utility bar skips it.
+3. The dashboard (authenticated) or the login page.
+
+First-run setup and the restart-required screen always take precedence
+over the intro.
+
+## Verification for UI changes (ALWAYS REQUIRED)
+
+Not optional, not a style preference. Every new feature and every
+user-visible change (pages, layout, controls, interactions, shell and
+error-boundary changes) must be verified against the running dev server
+before the work is called done:
+
+1. **Start the dev web server** (see above).
+2. **Satisfy the app's boot calls.** The SPA only leaves its Loading/Setup
+   gates when `/api/domains/public`, `/api/setup/status`, `/api/me` and
+   `/api/iam/effective` answer, plus shell calls (`/api/announcement`,
+   `/api/notifications*`, `/api/threats`, `/api/vms`, `/api/users`). Use an
+   existing configured dev instance, or a THROWAWAY fixture API on :4000
+   that mirrors only the shapes the frontend declares (precedent:
+   `docs/UI_REWRITE_ARCHITECTURE.md`). Never point verification at real
+   homelab infrastructure.
+3. **Screenshot the exact change** from the running app in a real browser,
+   during the relevant state, and check it visually (layout, theme
+   classes, dark/light where theme-dependent).
+4. **Attach the screenshot** to the PR description or task report and say
+   what it shows. Label fixture-based results "visually verified only,
+   fixture data".
+5. **Clean up**: stop the fixture API and delete the temporary script;
+   keep the dev server only while verification continues.
+
+Hard limits: never fabricate, retouch, or substitute a mock image for the
+running app; a fixture asserts nothing about real backend behaviour. Live
+homelab verification (Guacamole launch, real backups, DNS) stays with the
+maintainer via the `needs-live-verify` label.
+
+For the full gate, also run typecheck and tests:
+```bash
+npm run typecheck
+npm run test
+npm run build
+```
