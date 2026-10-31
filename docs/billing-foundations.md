@@ -49,7 +49,10 @@ installs see zero behavior change (full suites green, no migration surprises).
   `PATCH /tickets/:id` (admins: open/answered/closed). Audited
   (`TICKET_CREATED`, `TICKET_STATUS_CHANGED`).
 - UI: **Support** page (nav, everyone) with file form, status filters, and
-  admin actions inline.
+  admin actions inline. Admins land on the **open** queue ordered by oldest
+  wait, with per-status counts, an "oldest open" age (amber at 2 days, red
+  at 7), a queue-pressure banner, and search over reporter/title/body.
+  Users keep the simple newest-first list of their own tickets.
 - Money mapping: today's queue is tomorrow's "priority support" SLA —
   response-time tracking per tier is the natural paid upgrade.
 
