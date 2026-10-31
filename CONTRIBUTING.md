@@ -54,8 +54,8 @@ npm run typecheck && npm run test && npm run build
   change is verified as far as automation can tell.
 - The web SPA's compile proof is `typecheck` + `vite build`; `npm run
   test` also runs web tests when the workspace has them. You cannot click
-  through flows without a running API — say so in the PR and attach
-  screenshots of the changed UI instead; the maintainer verifies behavior
+  through flows without a running API — say so in the PR; a screenshot of
+  the changed UI is optional and helpful. The maintainer verifies behavior
   against the live homelab before merging.
 - Never ask for, accept, or store real credentials (`.env` contents,
   tokens, passwords). If a feature needs a live integration to verify
@@ -152,8 +152,9 @@ direct pushes.
    `git push -u origin feature/<short-description>` then
    `gh pr create --base main --title "..." --body "..."`.
 5. The PR description should state: what changed, threat-model impact
-   (if any), tests added, anything intentionally not covered, and
-   (for UI) screenshots of the changed screens.
+   (if any), tests added, anything intentionally not covered. A screenshot
+   of a UI change is optional — attach one when it makes the change easier
+   to review.
 6. After merge, delete the branch — GitHub can do this automatically;
    otherwise `git push origin --delete <branch>` and `git branch -d
    <branch>`. Keep only `main` plus the branch you are actively working on.

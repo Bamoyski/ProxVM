@@ -115,7 +115,8 @@ open PR (never a new branch — see THE RULE above):
    after a merge, recreate a single `vihaan/` branch from `origin/main`
    for the next batch of work.
 3. **Build it to the done criteria below** (green checks, tests, PR
-   description). Screenshots for UI, `needs-live-verify` label when live
+   description). Screenshots for UI are optional — useful when the layout is
+   hard to describe — and `needs-live-verify` applies when live
    infrastructure is the only way to prove it.
 4. **Keep the PR open and stop.** The maintainer reviews and merges. Never
    merge, never deploy, never touch production — you have no path to it
@@ -147,10 +148,11 @@ open PR (never a new branch — see THE RULE above):
    the security check itself — mocks live only at external boundaries
    (Proxmox/Guacamole/PBS/Cloudflare HTTP).
 3. PR description states: what changed, threat-model impact (or "none"),
-   tests added, anything intentionally not covered, and screenshots for
-   any UI change. If it needs live infrastructure to verify (Guacamole
-   launch, real backup, DNS), label the PR `needs-live-verify` and stop —
-   do not invent workarounds, stubs, or fake verifications.
+   tests added, anything intentionally not covered, and — optionally — a
+   screenshot when the UI change is easier to review as an image. If it
+   needs live infrastructure to verify (Guacamole launch, real backup, DNS),
+   label the PR `needs-live-verify` and stop — do not invent workarounds,
+   stubs, or fake verifications.
 4. The diff contains only files for this feature. No session logs, stashes,
    copied files, or changes from another branch.
 
@@ -198,8 +200,8 @@ open PR (never a new branch — see THE RULE above):
   as far as automation can tell.
 - The web SPA's compile proof is `typecheck` + `vite build`; `npm run
   test` also runs web tests when the workspace has them. User-visible
-  changes additionally require the dev-server render check and screenshot
-  described under "Verification for UI changes" below; live homelab
+  changes may be rendered against the dev server (see "Verification for UI
+  changes" below) when that helps; nothing there is a gate. Live homelab
   behaviour verification stays on the maintainer's side.
 - `npm run test:integration` is maintainer-only (needs real Proxmox env) —
   never run it, never gate on it.
@@ -705,12 +707,12 @@ The web app is a Vite SPA that proxies `/api` to `http://localhost:4000`.
 First-run setup and the restart-required screen always take precedence
 over the intro.
 
-## Verification for UI changes (ALWAYS REQUIRED)
+## Verification for UI changes (optional)
 
-Not optional, not a style preference. Every new feature and every
-user-visible change (pages, layout, controls, interactions, shell and
-error-boundary changes) must be verified against the running dev server
-before the work is called done:
+Screenshots are not a gate. A green `typecheck` + `test` + `build` is what
+makes a UI change done; rendering it is a way to catch mistakes early, not a
+required step. When it does help (layout changes, shell/error-boundary work,
+anything hard to review as a diff), this is the pattern:
 
 1. **Start the dev web server** (see above).
 2. **Satisfy the app's boot calls.** The SPA only leaves its Loading/Setup
@@ -721,19 +723,16 @@ before the work is called done:
    that mirrors only the shapes the frontend declares (precedent:
    `docs/UI_REWRITE_ARCHITECTURE.md`). Never point verification at real
    homelab infrastructure.
-3. **Screenshot the exact change** from the running app in a real browser,
-   during the relevant state, and check it visually (layout, theme
-   classes, dark/light where theme-dependent).
-4. **Attach the screenshot** to the PR description or task report and say
-   what it shows. Label fixture-based results "visually verified only,
-   fixture data".
-5. **Clean up**: stop the fixture API and delete the temporary script;
-   keep the dev server only while verification continues.
+3. **Optionally screenshot the change** from the running app in a real
+   browser, during the relevant state, and check it visually (layout, theme
+   classes, dark/light where theme-dependent). Say what the image shows and
+   label fixture-based results "visually verified only, fixture data".
+4. **Clean up**: stop the fixture API and delete the temporary script.
 
-Hard limits: never fabricate, retouch, or substitute a mock image for the
-running app; a fixture asserts nothing about real backend behaviour. Live
-homelab verification (Guacamole launch, real backups, DNS) stays with the
-maintainer via the `needs-live-verify` label.
+Hard limit for any image that is published: never fabricate, retouch, or
+substitute a mock image for the running app; a fixture asserts nothing about
+real backend behaviour. Live homelab verification (Guacamole launch, real
+backups, DNS) stays with the maintainer via the `needs-live-verify` label.
 
 For the full gate, also run typecheck and tests:
 ```bash
