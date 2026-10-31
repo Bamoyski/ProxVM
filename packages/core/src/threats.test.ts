@@ -218,7 +218,7 @@ describe("detectThreats", () => {
     expect(posted).toHaveLength(1);
   });
 
-  it("stays silent with no webhook configured", async () => {
+  it("stays silent with no webhook configured and nothing to report", async () => {
     const deps = {
       settings: { getPlain: async () => null, set: async () => undefined },
       audit: { list: async () => [] },
@@ -226,7 +226,55 @@ describe("detectThreats", () => {
     await expect(evaluateThreatAlerts(deps as never, async () => undefined, NOW)).resolves.toEqual({
       evaluated: 0,
       fired: 0,
+      fresh: [],
+      webhookSkipped: false,
     });
+  });
+
+  it("still surfaces fresh findings in-app when no webhook is configured", async () => {
+    // The bell must not depend on a webhook: detection reaching an admin is
+    // the point, delivery channel is a detail.
+    const posted: unknown[] = [];
+    const store = new Map<string, string>();
+    const deps = {
+      settings: {
+        getPlain: async (k: string) => store.get(k) ?? null,
+        set: async (k: string, v: string) => {
+          store.set(k, v);
+        },
+      },
+      audit: {
+        list: async () => [1, 2, 3, 4, 5].map((m) => row("LOGIN_FAILED", { actor: "bob", minutesAgo: m * 2 })),
+      },
+    };
+    const first = await evaluateThreatAlerts(deps as never, async (url: string) => { posted.push(url); }, NOW);
+    expect(first.fired).toBe(1);
+    expect(first.fresh).toHaveLength(1);
+    expect(first.fresh[0]!.severity === "critical" || first.fresh[0]!.severity === "high").toBe(true);
+    expect(posted).toHaveLength(0);
+    expect(store.has("threats.alerted_ids")).toBe(true);
+
+    // Same finding on the next tick is not re-announced.
+    const second = await evaluateThreatAlerts(deps as never, async (url: string) => { posted.push(url); }, NOW);
+    expect(second).toMatchObject({ fired: 0, fresh: [] });
+  });
+
+  it("skips an unsafe webhook URL but keeps evaluating findings", async () => {
+    const store = new Map<string, string>([["threats.webhook_url", "http://169.254.169.254/latest"]]);
+    const deps = {
+      settings: {
+        getPlain: async (k: string) => store.get(k) ?? null,
+        set: async (k: string, v: string) => {
+          store.set(k, v);
+        },
+      },
+      audit: {
+        list: async () => [1, 2, 3, 4, 5].map((m) => row("LOGIN_FAILED", { actor: "bob", minutesAgo: m * 2 })),
+      },
+    };
+    const result = await evaluateThreatAlerts(deps as never, async () => undefined, NOW);
+    expect(result.webhookSkipped).toBe(true);
+    expect(result.fired).toBe(1);
   });
 });
 
@@ -310,7 +358,7 @@ describe("shared egress addresses", () => {
     // Spray/critical would fire on these rows without the egress list; with
     // it, no per-account rule reaches 5 failures, so nothing is posted.
     const result = await evaluateThreatAlerts(deps as never, async (_u, b) => void posted.push(b), NOW);
-    expect(result).toEqual({ evaluated: 0, fired: 0 });
+    expect(result).toEqual({ evaluated: 0, fired: 0, fresh: [], webhookSkipped: false });
     expect(posted).toHaveLength(0);
   });
 });

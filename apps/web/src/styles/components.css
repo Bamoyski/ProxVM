@@ -153,6 +153,49 @@
   background: var(--pv-accent);
 }
 
+/* Admin attention counters. The number is the primary signal, colour only
+   reinforces it; the collapsed rail falls back to a dot because a 3-digit
+   count does not fit next to an icon. */
+.pv-nav-badge {
+  margin-left: auto;
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.66rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.pv-nav-badge-warn {
+  background: var(--pv-warn-soft);
+  color: var(--pv-warn);
+  box-shadow: inset 0 0 0 1px var(--pv-warn-border);
+}
+
+.pv-nav-badge-err {
+  background: var(--pv-err-soft);
+  color: var(--pv-err);
+  box-shadow: inset 0 0 0 1px var(--pv-err-border);
+}
+
+.pv-nav-dot {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.pv-nav-dot-warn { background: var(--pv-warn); }
+.pv-nav-dot-err { background: var(--pv-err); }
+
 .pv-side-foot {
   flex: none;
   border-top: 1px solid var(--pv-border-soft);
@@ -617,6 +660,12 @@
   line-height: 1;
 }
 
+/* Count present but nothing urgent: informational, not alarming. */
+.pv-btn-badge-info {
+  background: var(--pv-accent);
+  color: var(--pv-accent-ink);
+}
+
 /* segmented control */
 .pv-seg {
   display: inline-flex;
@@ -972,6 +1021,132 @@
 .pv-alert-ok { border-left-color: var(--pv-ok); }
 .pv-alert-ok > .pv-alert-ico { color: var(--pv-ok); }
 
+/* ======================= notification popover ====================== */
+.pv-notify-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--pv-border-soft);
+}
+
+.pv-notify-title {
+  font-weight: 650;
+  font-size: 0.85rem;
+}
+
+.pv-notify-action {
+  font-size: 0.76rem;
+  gap: var(--sp-3);
+}
+
+.pv-notify-action:first-of-type {
+  margin-left: auto;
+}
+
+.pv-notify-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.pv-notify-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--pv-border-soft);
+}
+
+.pv-notify-row-unread {
+  background: var(--pv-accent-soft);
+}
+
+.pv-notify-link {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.pv-notify-link:hover {
+  text-decoration: none;
+}
+
+.pv-notify-link:hover .pv-notify-row-title {
+  color: var(--pv-accent-text);
+}
+
+.pv-notify-ico {
+  flex: none;
+  margin-top: 1px;
+}
+
+.pv-notify-ico-err { color: var(--pv-err); }
+.pv-notify-ico-warn { color: var(--pv-warn); }
+.pv-notify-ico-info { color: var(--pv-accent); }
+.pv-notify-ico-neutral { color: var(--pv-text-3); }
+
+.pv-notify-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.pv-notify-row-title {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--pv-text);
+  overflow-wrap: anywhere;
+}
+
+.pv-notify-unread {
+  font-weight: 650;
+}
+
+.pv-notify-row-body {
+  margin-top: 1px;
+  font-size: 0.76rem;
+  color: var(--pv-text-2);
+  /* Two lines is enough to recognise the event; the detail lives one click
+     away and a tall popover hides the rest of the inbox. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pv-notify-meta {
+  display: flex;
+  gap: var(--sp-4);
+  align-items: center;
+  margin-top: 3px;
+  font-size: 0.7rem;
+  color: var(--pv-text-3);
+}
+
+.pv-notify-kind {
+  font-weight: 600;
+}
+
+.pv-notify-kind-err { color: var(--pv-err); }
+.pv-notify-kind-warn { color: var(--pv-warn); }
+.pv-notify-kind-info { color: var(--pv-accent-text); }
+.pv-notify-kind-neutral { color: var(--pv-text-3); }
+
+.pv-notify-check {
+  flex: none;
+}
+
+.pv-notify-empty {
+  padding: 18px 12px;
+  font-size: 0.82rem;
+  color: var(--pv-text-3);
+  text-align: center;
+}
+
 /* ===================== centered auth-style shell ==================== */
 /* Full-viewport column used by Login and the first-run setup wizard. */
 .pv-shell {
@@ -1028,6 +1203,78 @@
   .pv-grid-side {
     grid-template-columns: 1fr;
   }
+}
+
+/* Admin "needs attention" strip: not an alert (nothing failed) and not a
+   section (no title) — a row of clickable summaries above the dashboard.
+   Border-left colour carries urgency; the text still states it, so the strip
+   survives a colour-blind reader and a grayscale screenshot. */
+.pv-attention {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-5);
+  margin-bottom: var(--sp-8);
+}
+
+.pv-attention-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  padding: 11px 13px;
+  border: 1px solid var(--pv-border);
+  border-left-width: 3px;
+  border-radius: 0 var(--r-lg) var(--r-lg) 0;
+  background: var(--pv-surface);
+  color: var(--pv-text);
+  transition: border-color var(--pv-t-fast), background var(--pv-t-fast);
+}
+
+.pv-attention-card:hover {
+  background: var(--pv-surface-2);
+  text-decoration: none;
+}
+
+.pv-attention-card:focus-visible {
+  outline: none;
+  box-shadow: var(--pv-focus-ring);
+}
+
+.pv-attention-warn { border-left-color: var(--pv-warn); }
+.pv-attention-err { border-left-color: var(--pv-err); }
+
+.pv-attention-ico {
+  flex: none;
+  margin-top: 1px;
+}
+
+.pv-attention-warn .pv-attention-ico { color: var(--pv-warn); }
+.pv-attention-err .pv-attention-ico { color: var(--pv-err); }
+
+.pv-attention-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.pv-attention-title {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 620;
+}
+
+.pv-attention-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.76rem;
+  color: var(--pv-text-2);
+}
+
+.pv-attention-cta {
+  flex: none;
+  align-self: center;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--pv-accent-text);
+  white-space: nowrap;
 }
 
 /* ============================ tables =============================== */

@@ -18,6 +18,8 @@ import {
 import { api, logout } from "../api.js";
 import type { MeUser } from "../hooks/me.js";
 import { NAV_GROUPS, accessControlVisible, type NavItem } from "./nav.js";
+import { useAttention } from "../hooks/attention.js";
+import { attentionBadges, type AttentionBadge } from "../lib/attention.js";
 import { Popover, useConfirm } from "../ui/index.js";
 import CommandPalette from "../components/CommandPalette.js";
 import NotificationBell from "../components/NotificationBell.js";
@@ -138,17 +140,36 @@ function useCrumbs(): Array<{ label: string; to?: string }> {
 
 /* ============================== sidebar ============================= */
 
-function NavItemLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
+function NavItemLink({
+  item,
+  collapsed,
+  badge,
+}: {
+  item: NavItem;
+  collapsed: boolean;
+  badge?: AttentionBadge;
+}) {
   const Icon = item.icon;
   const link = (
     <NavLink
       to={item.to}
       end={item.end}
       className={({ isActive }) => `pv-nav-link${isActive ? " pv-nav-link-active" : ""}`}
-      title={collapsed ? item.label : undefined}
+      title={collapsed ? (badge?.title ?? item.label) : undefined}
+      aria-label={badge ? `${item.label} — ${badge.title}` : undefined}
     >
       <Icon size={16} className="pv-nav-ico" aria-hidden="true" />
       {!collapsed && <span className="pv-truncate">{item.label}</span>}
+      {/* Collapsed rail has no room for a number: a corner dot carries the
+          same warning instead of hiding the queue entirely. */}
+      {badge &&
+        (collapsed ? (
+          <span className={`pv-nav-dot pv-nav-dot-${badge.tone}`} title={badge.title} aria-hidden="true" />
+        ) : (
+          <span className={`pv-nav-badge pv-nav-badge-${badge.tone}`} title={badge.title}>
+            {badge.count > 99 ? "99+" : badge.count}
+          </span>
+        ))}
     </NavLink>
   );
   if (!collapsed) return link;
@@ -214,6 +235,13 @@ export default function AppShell({
     }),
   })).filter((g) => g.items.length > 0);
 
+  // One polled payload drives the sidebar badges. Only fetch when the viewer
+  // can actually act on something, so ordinary users issue no extra request.
+  const canAudit = can("audit.read");
+  const canManageUsers = can("users.manage");
+  const { data: attention } = useAttention(canAudit || canManageUsers);
+  const badges = attentionBadges(attention);
+
   const visibleNav: Array<{ to: string; label: string }> = groups.flatMap((g) =>
     g.items.map((i) => ({ to: i.to, label: i.label })),
   );
@@ -251,7 +279,7 @@ export default function AppShell({
               {g.label && !collapsed && <div className="pv-nav-group">{g.label}</div>}
               {g.label && collapsed && <div className="pv-nav-divider" aria-hidden="true" />}
               {g.items.map((item) => (
-                <NavItemLink key={item.to} item={item} collapsed={collapsed} />
+                <NavItemLink key={item.to} item={item} collapsed={collapsed} badge={badges[item.to]} />
               ))}
             </div>
           ))}
@@ -361,7 +389,8 @@ export default function AppShell({
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         nav={visibleNav}
-        canViewUsers={can("users.manage")}
+        canViewUsers={canManageUsers}
+        canAudit={canAudit}
         go={(to) => {
           setPaletteOpen(false);
           navigate(to);

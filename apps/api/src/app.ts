@@ -42,6 +42,7 @@ import { settingsRoutes } from "./routes/settings.js";
 import { healthRoutes } from "./routes/health.js";
 import { iamRoutes } from "./routes/iam.js";
 import { notificationRoutes } from "./routes/notifications.js";
+import { attentionRoutes } from "./routes/attention.js";
 
 /**
  * Parses PROXVM_TRUST_PROXY into a Fastify trustProxy value. Empty/unset â€”
@@ -254,6 +255,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     await app.register(healthRoutes, { prefix: "/api", ctx });
     await app.register(iamRoutes, { prefix: "/api", ctx });
     await app.register(notificationRoutes, { prefix: "/api", ctx });
+    await app.register(attentionRoutes, { prefix: "/api", ctx, sharedEgressIps });
     await app.register(domainRoutes, { prefix: "/api", ctx });
     await app.register(billingRoutes, { prefix: "/api", ctx });
     await app.register(firewallRoutes, { prefix: "/api", ctx });
@@ -529,22 +531,39 @@ export function startHomelabTickers(
       );
     }
   };
-  // Threat webhook alerts: evaluates recent audit events every tick and
-  // POSTs fresh findings at/above the configured severity. No URL
-  // configured means this is a cheap no-op.
+  // Threat alerting: evaluates recent audit events every tick and fans fresh
+  // findings out to the in-app bell + Gotify, regardless of whether a webhook
+  // is configured (the webhook is an extra channel, not the trigger). One
+  // notification per finding says what fired; the remainder collapses into a
+  // single "N more" row so a burst cannot flood the bell.
   const runThreats = async (): Promise<void> => {
     try {
       const result = await evaluateThreatAlerts({ settings: ctx.settings, audit: ctx.audit, sharedEgressIps });
-      if (result.fired > 0) {
-        ctx.logger.info(result, "threat webhook alerts fired");
-        // Admin delivery for the same findings (best-effort; the webhook
-        // post already happened â€” this feeds the in-app bell + Gotify).
+      if (result.webhookSkipped) {
+        ctx.logger.warn({}, "threat webhook URL rejected by the safety check; in-app alerts continue");
+      }
+      if (result.fired === 0) return;
+      ctx.logger.info({ evaluated: result.evaluated, fired: result.fired }, "threat alerts fired");
+      const top = result.fresh.slice(0, 3);
+      for (const f of top) {
+        const where = [f.actorUsername ? `actor ${f.actorUsername}` : null, f.ip ? `ip ${f.ip}` : null]
+          .filter(Boolean)
+          .join(", ");
         await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
           kind: "threat",
-          title: `${result.fired} threat finding${result.fired === 1 ? "" : "s"} need review`,
-          body: `${result.evaluated} finding(s) evaluated this tick.`,
-          link: "/threats",
-          priority: 8,
+          title: `${f.severity.toUpperCase()} · ${f.title}`,
+          body: `${f.summary}${where ? ` (${where})` : ""}`.slice(0, 500),
+          link: "/system?tab=threats",
+          priority: f.severity === "critical" ? 10 : f.severity === "high" ? 8 : 6,
+        });
+      }
+      if (result.fresh.length > top.length) {
+        await alertAdmins(ctx.db, ctx.settings, ctx.logger, {
+          kind: "threat",
+          title: `+${result.fresh.length - top.length} more threat findings`,
+          body: "Open the threat board to review the rest of this tick's findings.",
+          link: "/system?tab=threats",
+          priority: 7,
         });
       }
     } catch (err) {

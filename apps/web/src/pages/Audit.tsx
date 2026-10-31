@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api.js";
 import { AUDIT_EVENTS } from "@proxvm/shared";
@@ -12,9 +13,13 @@ const EVENT_TYPES = ["", ...AUDIT_EVENTS];
 
 /** Immutable audit trail viewer with server-side filtering + CSV export. */
 export default function Audit() {
-  const [event, setEvent] = useState("");
-  const [ip, setIp] = useState("");
-  const [actor, setActor] = useState("");
+  // Threat findings deep-link here with ?actor= / ?ip= so triage ends at the
+  // exact events instead of a copy-pasted username. Read once on mount: the
+  // filters are then local (the tab unmounts when you switch away).
+  const [params] = useSearchParams();
+  const [event, setEvent] = useState(() => params.get("event") ?? "");
+  const [ip, setIp] = useState(() => params.get("ip") ?? "");
+  const [actor, setActor] = useState(() => params.get("actor") ?? "");
   const [limit, setLimit] = useState(100);
   const extra = `${ip ? `&ip=${encodeURIComponent(ip.trim())}` : ""}${actor ? `&actor=${encodeURIComponent(actor.trim())}` : ""}`;
   const { data, isFetching, isLoading } = useQuery({

@@ -740,21 +740,44 @@ async function defaultPost(url: string, body: unknown): Promise<void> {
  * hops are supplied via deps and never count as attacker identities.
  * Fail-open: throws on transport errors (the ticker logs and continues).
  */
+export interface ThreatAlertResult {
+  evaluated: number;
+  fired: number;
+  /**
+   * Findings that had not been alerted before this tick. The ticker fans
+   * them out to the in-app bell even when no webhook is configured, so
+   * detection reaching a human is never conditional on a URL being set.
+   */
+  fresh: ThreatFinding[];
+  /** True when a webhook is configured but its URL failed validation. */
+  webhookSkipped: boolean;
+}
+
 export async function evaluateThreatAlerts(
   deps: ThreatAlertDeps,
   post: (url: string, body: unknown) => Promise<void> = defaultPost,
   nowMs = Date.now(),
-): Promise<{ evaluated: number; fired: number }> {
+): Promise<ThreatAlertResult> {
+  // The webhook is optional: findings are computed either way so the admin
+  // bell still fires on a stock install. A malformed URL skips only the
+  // POST (reported as webhookSkipped) instead of killing the whole tick.
   const rawUrl = await deps.settings.getPlain(THREAT_WEBHOOK_URL_KEY);
-  if (!rawUrl?.trim()) return { evaluated: 0, fired: 0 };
-  const url = assertSafeWebhookUrl(rawUrl);
+  let url: string | null = null;
+  let webhookSkipped = false;
+  if (rawUrl?.trim()) {
+    try {
+      url = assertSafeWebhookUrl(rawUrl);
+    } catch {
+      webhookSkipped = true;
+    }
+  }
   const minSev = ((await deps.settings.getPlain(THREAT_MIN_SEVERITY_KEY)) ?? "high").trim().toLowerCase();
   const minRank = SEVERITY_RANK[minSev as ThreatSeverity] ?? SEVERITY_RANK.high;
   const rows = await deps.audit.list({ limit: 5000, since: new Date(nowMs - DAY_MS) });
   const findings = detectThreats(rows, nowMs, { windowDays: 1, sharedEgressIps: deps.sharedEgressIps }).filter(
     (f) => SEVERITY_RANK[f.severity] <= minRank,
   );
-  if (!findings.length) return { evaluated: 0, fired: 0 };
+  if (!findings.length) return { evaluated: 0, fired: 0, fresh: [], webhookSkipped };
   let alerted: string[] = [];
   try {
     const parsed: unknown = JSON.parse((await deps.settings.getPlain(THREAT_ALERTED_IDS_KEY)) ?? "[]");
@@ -763,29 +786,33 @@ export async function evaluateThreatAlerts(
     alerted = [];
   }
   const fresh = findings.filter((f) => !alerted.includes(f.id));
-  if (!fresh.length) return { evaluated: findings.length, fired: 0 };
-  await post(url, {
-    source: "proxvm",
-    kind: "threats",
-    evaluatedAt: new Date(nowMs).toISOString(),
-    findings: fresh.map((f) => ({
-      id: f.id,
-      severity: f.severity,
-      category: f.category,
-      title: f.title,
-      summary: f.summary,
-      actor: f.actorUsername,
-      ip: f.ip,
-      count: f.count,
-      firstSeen: f.firstSeen.toISOString(),
-      lastSeen: f.lastSeen.toISOString(),
-      events: f.events,
-    })),
-  });
+  if (!fresh.length) return { evaluated: findings.length, fired: 0, fresh: [], webhookSkipped };
+  if (url) {
+    await post(url, {
+      source: "proxvm",
+      kind: "threats",
+      evaluatedAt: new Date(nowMs).toISOString(),
+      findings: fresh.map((f) => ({
+        id: f.id,
+        severity: f.severity,
+        category: f.category,
+        title: f.title,
+        summary: f.summary,
+        actor: f.actorUsername,
+        ip: f.ip,
+        count: f.count,
+        firstSeen: f.firstSeen.toISOString(),
+        lastSeen: f.lastSeen.toISOString(),
+        events: f.events,
+      })),
+    });
+  }
+  // Dedupe is persisted whether or not a webhook is set: "already told a
+  // human" is a property of the finding, not of the delivery channel.
   await deps.settings.set(THREAT_ALERTED_IDS_KEY, JSON.stringify([...alerted, ...fresh.map((f) => f.id)].slice(-200)), {
     category: "system",
   });
-  return { evaluated: findings.length, fired: fresh.length };
+  return { evaluated: findings.length, fired: fresh.length, fresh, webhookSkipped };
 }
 
 /**

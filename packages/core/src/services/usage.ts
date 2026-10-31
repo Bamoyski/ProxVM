@@ -288,6 +288,41 @@ export async function listTickets(
   return result.rows.map(toTicket);
 }
 
+export interface TicketQueueStats {
+  open: number;
+  answered: number;
+  closed: number;
+  total: number;
+  /** Oldest still-open ticket, or null when nothing is waiting. */
+  oldestOpenAt: Date | null;
+}
+
+/**
+ * Queue pressure in one round trip: per-status counts plus the age of the
+ * oldest open ticket. The attention badge polls this, so it must not fetch
+ * rows the way listTickets does.
+ */
+export async function ticketQueueStats(db: Queryable): Promise<TicketQueueStats> {
+  const result = await db.query<{ status: TicketStatus; count: string; oldest: Date | string | null }>(
+    `SELECT status, COUNT(*) AS count, MIN(created_at) AS oldest
+       FROM support_tickets GROUP BY status`,
+  );
+  const stats: TicketQueueStats = { open: 0, answered: 0, closed: 0, total: 0, oldestOpenAt: null };
+  for (const row of result.rows) {
+    const n = Number(row.count ?? 0);
+    stats.total += n;
+    if (row.status === "open") {
+      stats.open = n;
+      stats.oldestOpenAt = row.oldest ? new Date(row.oldest) : null;
+    } else if (row.status === "answered") {
+      stats.answered = n;
+    } else if (row.status === "closed") {
+      stats.closed = n;
+    }
+  }
+  return stats;
+}
+
 export async function setTicketStatus(
   db: Pool,
   ticketId: string,

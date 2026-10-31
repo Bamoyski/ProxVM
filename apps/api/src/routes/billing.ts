@@ -128,6 +128,7 @@ export async function billingRoutes(app: FastifyInstance, opts: { ctx: CoreConte
         title: `New support ticket from ${user.username}`,
         body: body.title.slice(0, 160),
         link: "/tickets",
+        priority: 6,
       });
       return reply.status(201).send({ ticket });
     },
