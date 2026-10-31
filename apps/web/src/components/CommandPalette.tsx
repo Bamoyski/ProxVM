@@ -19,12 +19,14 @@ export default function CommandPalette({
   onClose,
   nav,
   canViewUsers,
+  canAudit,
   go,
 }: {
   open: boolean;
   onClose: () => void;
   nav: Array<{ to: string; label: string }>;
   canViewUsers: boolean;
+  canAudit: boolean;
   go: (to: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -57,6 +59,15 @@ export default function CommandPalette({
     const q = query.trim().toLowerCase();
     const all: Entry[] = [
       ...nav.map((n) => ({ kind: "Page" as const, label: n.label, hint: n.to, to: n.to })),
+      // Direct admin destinations. The sidebar nests these behind a tab
+      // ("System & security") or a generic label ("Support"), which is exactly
+      // the step an admin in a hurry should not have to remember.
+      ...(canAudit
+        ? [{ kind: "Page" as const, label: "Threat analysis", hint: "triage board", to: "/system?tab=threats" }]
+        : []),
+      ...(canViewUsers
+        ? [{ kind: "Page" as const, label: "Support queue", hint: "open tickets", to: "/tickets" }]
+        : []),
       ...(vmsData?.vms ?? [])
         .filter((v) => v.id)
         .map((v) => ({ kind: "VM" as const, label: v.name, hint: v.status, to: `/vms/${v.id}` })),
@@ -78,7 +89,7 @@ export default function CommandPalette({
           e.kind.toLowerCase().includes(q),
       )
       .slice(0, 12);
-  }, [nav, vmsData, usersData, canViewUsers, query]);
+  }, [nav, vmsData, usersData, canViewUsers, canAudit, query]);
 
   useEffect(() => {
     setIndex(0);
@@ -139,7 +150,7 @@ export default function CommandPalette({
             const showGroup = e.kind !== lastKind;
             lastKind = e.kind;
             return (
-              <div key={`${e.kind}-${e.to}`}>
+              <div key={`${e.kind}-${e.to}-${i}`}>
                 {showGroup && <div className="pv-palette-group">{e.kind}s</div>}
                 <button
                   role="option"

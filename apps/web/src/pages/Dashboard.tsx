@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Check, ChevronDown, ChevronUp } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, LifeBuoy, ShieldAlert } from "lucide-react";
 import { api } from "../api.js";
+import { useAttention } from "../hooks/attention.js";
+import { attentionItems } from "../lib/attention.js";
 import Jobs from "./Jobs.js";
 import { isPrivileged, type Me } from "../lib/permissions.js";
 import { fmtBytes, fmtDateTime, pct } from "../lib/format.js";
@@ -197,6 +199,13 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
     const hidden = layout.hidden.includes(id) ? layout.hidden.filter((h) => h !== id) : [...layout.hidden, id];
     saveLayout({ ...layout, hidden });
   };
+
+  const canAuditAttention = can ? can("audit.read") : privileged;
+  const canManageUsersAttention = can ? can("users.manage") : privileged;
+  // Shares the ["attention"] query key with the sidebar badges: an admin who
+  // loads the dashboard pays for exactly one request.
+  const { data: attention } = useAttention(canAuditAttention || canManageUsersAttention);
+  const needsAttention = attentionItems(attention);
 
   const statItems: Array<{ label: string; value: string; tone?: string }> = [
     { label: "Total VMs", value: String(vmList.length) },
@@ -440,6 +449,22 @@ export default function Dashboard({ me, can }: { me: Me; can?: (perm: string) =>
         description={privileged ? "Fleet state at a glance. Rearrange or hide sections with Customize." : "Your virtual machines and recent activity."}
         actions={<Btn size="sm" onClick={() => setCustomizing((v) => !v)}>{customizing ? "Done" : "Customize"}</Btn>}
       />
+      {needsAttention.length > 0 && (
+        <div className="pv-attention" role="region" aria-label="Needs attention">
+          {needsAttention.map((item) => (
+            <Link key={item.key} to={item.to} className={`pv-attention-card pv-attention-${item.tone}`}>
+              <span className="pv-attention-ico" aria-hidden="true">
+                {item.key === "threats" ? <ShieldAlert size={16} /> : <LifeBuoy size={16} />}
+              </span>
+              <span className="pv-attention-body">
+                <span className="pv-attention-title">{item.title}</span>
+                <span className="pv-attention-detail">{item.detail}</span>
+              </span>
+              <span className="pv-attention-cta">{item.cta} →</span>
+            </Link>
+          ))}
+        </div>
+      )}
       {customizing && (
         <div className="pv-panel" style={{ marginBottom: 20 }}>
           <div className="pv-label" style={{ marginBottom: 10 }}>Arrange sections (saved in this browser)</div>

@@ -1,23 +1,60 @@
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Bell, Check, CheckCheck } from "lucide-react";
+import {
+  Bell,
+  Check,
+  CheckCheck,
+  HardDrive,
+  Info,
+  LifeBuoy,
+  ShieldAlert,
+  User,
+  UserPlus,
+  type LucideIcon,
+} from "lucide-react";
 import { api } from "../api.js";
 import { Popover } from "../ui/index.js";
 import { fmtRelative } from "../lib/format.js";
+import {
+  hasUnreadThreat,
+  notificationKindLabel,
+  notificationTone,
+  visibleNotifications,
+  type NotificationLike,
+} from "../lib/notify.js";
 
-interface Notification {
-  id: string;
-  kind: string;
-  title: string;
-  body: string | null;
-  link: string | null;
-  readAt: string | null;
-  createdAt: string;
+type Notification = NotificationLike;
+
+const KIND_ICONS: Record<string, LucideIcon> = {
+  threat: ShieldAlert,
+  ticket: LifeBuoy,
+  registration: UserPlus,
+  user: User,
+  backup: HardDrive,
+  system: Info,
+};
+
+function KindIcon({ kind }: { kind: string }) {
+  const Icon = KIND_ICONS[kind] ?? Info;
+  return <Icon size={14} className={`pv-notify-ico pv-notify-ico-${notificationTone(kind)}`} aria-hidden="true" />;
 }
 
-/** Global notifications (job outcomes, admin queue). Server-scoped rows. */
+/**
+ * Global notifications (job outcomes, admin queue). Server-scoped rows.
+ *
+ * Tuning choices that matter:
+ * - the list refetches when the popover opens, so it is never a minute stale
+ *   at the exact moment an admin looks at it;
+ * - the badge turns red only for an unread *threat* — a red dot that means
+ *   "any notice" trains people to ignore red;
+ * - the whole row is the link, not a 12px "Open" caption;
+ * - "Unread only" is a filter, not a destructive action, so switching it back
+ *   costs nothing.
+ */
 export default function NotificationBell() {
   const qc = useQueryClient();
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const { data: countData } = useQuery({
     queryKey: ["notifications-unread"],
     queryFn: () => api<{ count: number }>("/notifications/unread-count"),
@@ -26,12 +63,14 @@ export default function NotificationBell() {
   });
   const { data: listData } = useQuery({
     queryKey: ["notifications"],
-    queryFn: () => api<{ notifications: Notification[] }>("/notifications?limit=10"),
+    queryFn: () => api<{ notifications: Notification[] }>("/notifications?limit=20"),
     retry: false,
   });
 
   const count = countData?.count ?? 0;
   const items = listData?.notifications ?? [];
+  const unreadThreat = hasUnreadThreat(items);
+  const rows = visibleNotifications(items, { unreadOnly });
 
   const markRead = async (ids?: string[], all?: boolean) => {
     try {
@@ -43,10 +82,15 @@ export default function NotificationBell() {
     }
   };
 
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ["notifications"] });
+    void qc.invalidateQueries({ queryKey: ["notifications-unread"] });
+  };
+
   return (
     <Popover
       label="Notifications"
-      width={340}
+      width={370}
       trigger={({ open, toggle, ref }) => (
         <button
           ref={ref}
@@ -54,72 +98,101 @@ export default function NotificationBell() {
           style={{ position: "relative" }}
           aria-label={`Notifications${count ? ` (${count} unread)` : ""}`}
           aria-expanded={open}
-          onClick={toggle}
+          onClick={() => {
+            if (!open) refresh();
+            toggle();
+          }}
         >
           <Bell size={15} aria-hidden="true" />
-          {count > 0 && <span className="pv-btn-badge">{count > 99 ? "99+" : count}</span>}
+          {count > 0 && (
+            <span className={`pv-btn-badge${unreadThreat ? "" : " pv-btn-badge-info"}`}>
+              {count > 99 ? "99+" : count}
+            </span>
+          )}
         </button>
       )}
     >
       {() => (
         <>
-          <div style={{ display: "flex", alignItems: "center", padding: "6px 10px 8px", borderBottom: "1px solid var(--pv-border-soft)" }}>
-            <span style={{ fontWeight: 650, fontSize: "0.85rem" }}>Notifications</span>
+          <div className="pv-notify-head">
+            <span className="pv-notify-title">Notifications</span>
             {count > 0 && (
-              <button
-                className="pv-btn pv-btn-link"
-                style={{ marginLeft: "auto", fontSize: "0.76rem" }}
-                onClick={() => void markRead(undefined, true)}
-              >
-                <CheckCheck size={12} aria-hidden="true" /> Mark all read
-              </button>
+              <>
+                <button
+                  className="pv-btn pv-btn-link pv-notify-action"
+                  aria-pressed={unreadOnly}
+                  onClick={() => setUnreadOnly((v) => !v)}
+                >
+                  {unreadOnly ? "Show all" : "Unread only"}
+                </button>
+                <button
+                  className="pv-btn pv-btn-link pv-notify-action"
+                  onClick={() => void markRead(undefined, true)}
+                >
+                  <CheckCheck size={12} aria-hidden="true" /> Mark all read
+                </button>
+              </>
             )}
           </div>
-          <div style={{ maxHeight: 340, overflowY: "auto" }}>
-            {items.map((n) => (
-              <div
-                key={n.id}
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  padding: "9px 10px",
-                  borderBottom: "1px solid var(--pv-border-soft)",
-                  background: n.readAt ? "transparent" : "var(--pv-accent-soft)",
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: "0.82rem", fontWeight: n.readAt ? 500 : 650 }}>{n.title}</div>
-                  {n.body && (
-                    <div style={{ fontSize: "0.76rem", color: "var(--pv-text-2)", marginTop: 1 }}>{n.body}</div>
+          <div className="pv-notify-list">
+            {rows.map((n) => {
+              const content = (
+                <>
+                  <KindIcon kind={n.kind} />
+                  <span className="pv-notify-main">
+                    <span className={`pv-notify-row-title${n.readAt ? "" : " pv-notify-unread"}`}>{n.title}</span>
+                    {n.body && <span className="pv-notify-row-body">{n.body}</span>}
+                    <span className="pv-notify-meta">
+                      <span className={`pv-notify-kind pv-notify-kind-${notificationTone(n.kind)}`}>
+                        {notificationKindLabel(n.kind)}
+                      </span>
+                      <span>{fmtRelative(n.createdAt)}</span>
+                    </span>
+                  </span>
+                </>
+              );
+              return (
+                <div key={n.id} className={`pv-notify-row${n.readAt ? "" : " pv-notify-row-unread"}`}>
+                  {/* The row body is the link (a 12px "Open" caption is not a
+                      target); the mark-read control stays a sibling so no
+                      button is ever nested inside an anchor. */}
+                  {n.link ? (
+                    <Link
+                      to={n.link}
+                      className="pv-notify-link"
+                      aria-label={`Open: ${n.title}`}
+                      onClick={() => void markRead([n.id])}
+                    >
+                      {content}
+                    </Link>
+                  ) : (
+                    <span className="pv-notify-link">{content}</span>
                   )}
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 3 }}>
-                    <span style={{ fontSize: "0.7rem", color: "var(--pv-text-3)" }}>{fmtRelative(n.createdAt)}</span>
-                    {n.link && (
-                      <Link
-                        to={n.link}
-                        style={{ fontSize: "0.72rem" }}
-                        onClick={() => void markRead([n.id])}
-                      >
-                        Open
-                      </Link>
-                    )}
-                  </div>
+                  {!n.readAt && (
+                    <button
+                      className="pv-btn pv-btn-ghost pv-btn-icon pv-btn-sm pv-notify-check"
+                      aria-label={`Mark “${n.title}” read`}
+                      title="Mark read"
+                      onClick={() => void markRead([n.id])}
+                    >
+                      <Check size={12} aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
-                {!n.readAt && (
-                  <button
-                    className="pv-btn pv-btn-ghost pv-btn-icon pv-btn-sm"
-                    aria-label={`Mark “${n.title}” read`}
-                    title="Mark read"
-                    onClick={() => void markRead([n.id])}
-                  >
-                    <Check size={12} aria-hidden="true" />
-                  </button>
+              );
+            })}
+            {!rows.length && (
+              <div className="pv-notify-empty">
+                {unreadOnly ? (
+                  <>
+                    No unread notifications.
+                    <button className="pv-btn pv-btn-link" style={{ marginLeft: 6 }} onClick={() => setUnreadOnly(false)}>
+                      Show all
+                    </button>
+                  </>
+                ) : (
+                  "All caught up."
                 )}
-              </div>
-            ))}
-            {!items.length && (
-              <div style={{ padding: "18px 12px", fontSize: "0.82rem", color: "var(--pv-text-3)", textAlign: "center" }}>
-                All caught up.
               </div>
             )}
           </div>

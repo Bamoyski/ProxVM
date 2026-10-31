@@ -14,6 +14,7 @@ import {
   createTicket,
   listTickets,
   setTicketStatus,
+  ticketQueueStats,
   dailyUsage,
   getAnnouncement,
   setAnnouncement,
@@ -204,6 +205,25 @@ describe("support tickets", () => {
     await expect(
       setTicketStatus(pool, "00000000-0000-0000-0000-000000000000", "closed", userId),
     ).rejects.toThrow(/not found/i);
+  });
+
+  it("reports queue pressure without fetching rows", async () => {
+    const older = await createTicket(pool, userId, "Oldest open", "waiting a while");
+    const newer = await createTicket(pool, userId, "Newer open", "just filed");
+    const threeDaysAgo = new Date(Date.now() - 3 * 86_400_000);
+    await pool.query("UPDATE support_tickets SET created_at = $2 WHERE id = $1", [older.id, threeDaysAgo]);
+
+    const stats = await ticketQueueStats(pool);
+    // The earlier test closed its ticket, so the closed count carries over.
+    expect(stats).toMatchObject({ open: 2, closed: 1, total: 3 });
+    expect(stats.oldestOpenAt?.getTime()).toBe(threeDaysAgo.getTime());
+    expect(newer.createdAt.getTime()).toBeGreaterThan(threeDaysAgo.getTime());
+
+    await setTicketStatus(pool, older.id, "closed", userId);
+    await setTicketStatus(pool, newer.id, "closed", userId);
+    const cleared = await ticketQueueStats(pool);
+    expect(cleared).toMatchObject({ open: 0, closed: 3 });
+    expect(cleared.oldestOpenAt).toBeNull();
   });
 });
 
