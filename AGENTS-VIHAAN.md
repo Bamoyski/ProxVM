@@ -697,15 +697,10 @@ The web app is a Vite SPA that proxies `/api` to `http://localhost:4000`.
 ### What you should see (with a ready backend)
 
 1. "Loading ProxVM…" while `/api/setup/status` and `/api/me` resolve.
-2. A school-website style landing page (fictional "Wrenfield Academy")
-   shown once per app start for ~2.5 s: utility bar, crest and nav, hero,
-   term dates, and further sections below the fold. It is deliberately
-   product-neutral — no application branding or feature copy. A Continue
-   control in the utility bar skips it.
-3. The dashboard (authenticated) or the login page.
+2. The dashboard (authenticated) or the login page — no intro splash.
 
-First-run setup and the restart-required screen always take precedence
-over the intro.
+First-run setup and the restart-required screen take precedence over
+everything else.
 
 ## Verification for UI changes (optional)
 
