@@ -114,6 +114,12 @@ export default function Backups() {
   const [backupSearch, setBackupSearch] = usePref("backups-search", "");
   // Last-used timetable survives reloads (server still validates everything).
   const [form, setForm] = usePref("backups-form", { mode: "snapshot", storage: "", hour: "02", minute: "00", frequency: "Every day", keepLast: "7" });
+  // Restore dialog state.
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreVmName, setRestoreVmName] = usePref("backups-restore-name", "");
+  const [restoreSelectedSnapshot, setRestoreSelectedSnapshot] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   const { data: overviewData } = useQuery({
     queryKey: ["backup-overview"],
@@ -418,13 +424,91 @@ export default function Backups() {
               {!(runsData?.runs ?? []).length && <EmptyState title="No runs yet" body="Trigger a backup or wait for a schedule." />}
               {(snapsData?.snapshots ?? []).length > 0 && (
                 <div style={{ marginTop: 6, fontSize: "0.85rem", color: "var(--pv-text-3)" }}>
-                  Snapshots: {(snapsData?.snapshots ?? []).map((s) => s.backupId).join(", ")}
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span>Snapshots:</span>
+                    <span style={{ color: "var(--pv-text)", fontSize: "0.82rem" }}>{(snapsData?.snapshots ?? []).map((s) => s.backupId).join(", ")}</span>
+                    <Btn size="sm" kind="primary" onClick={() => { setRestoreError(null); setRestoreOpen(true); }} style={{ marginLeft: "auto", fontSize: "0.8rem" }}>
+                      Restore from snapshot
+                    </Btn>
+                  </div>
                 </div>
               )}
+              {restoreError && <div style={{ marginTop: 6 }}><Alert kind="err" title="Restore failed">{restoreError}</Alert></div>}
             </Section>
           )}
         </div>
       </div>
+
+      {/* Restore dialog */}
+      {restoreOpen && (
+        <div className="pv-dialog-backdrop" onClick={() => setRestoreOpen(false)} role="dialog" aria-modal="true" aria-label="Restore VM from snapshot">
+          <div className="pv-dialog" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: "1rem", fontWeight: 600 }}>Restore VM from PBS snapshot</span>
+              <button className="pv-btn pv-btn-link" onClick={() => setRestoreOpen(false)} style={{ marginLeft: "auto" }}>✕</button>
+            </div>
+            <div style={{ color: "var(--pv-text-3)", fontSize: "0.85rem", marginBottom: 8 }}>
+              This will create a <strong>new</strong> VM from the selected snapshot. The original VM is not modified.
+            </div>
+            {snapsData?.snapshots?.map((snap) => (
+              <div key={snap.backupId} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: "1px solid var(--pv-border-soft)" }}>
+                <input
+                  type="radio"
+                  name="restore-snapshot"
+                  value={snap.backupId}
+                  id={`snap-${snap.backupId}`}
+                  onChange={(e) => setRestoreSelectedSnapshot(e.target.value)}
+                  checked={restoreSelectedSnapshot === snap.backupId}
+                />
+                <label htmlFor={`snap-${snap.backupId}`} style={{ flex: 1, fontSize: "0.85rem", cursor: "pointer" }}>
+                  {snap.backupId}
+                  {snap.lastBackup && (
+                    <span style={{ color: "var(--pv-text-3)", fontSize: "0.78rem", marginLeft: 8 }}>
+                      ({new Date(snap.lastBackup).toLocaleString()})
+                    </span>
+                  )}
+                </label>
+              </div>
+            ))}
+              <div style={{ marginTop: 8 }}>
+            <Field label="Name for the new VM">
+              <input
+                className="pv-input"
+                placeholder="restored-vm-name"
+                aria-label="New VM name"
+                value={restoreVmName}
+                onChange={(e) => setRestoreVmName(e.target.value.replace(/[^A-Za-z0-9_\-]/g, ""))}
+              />
+              <div className="pv-hint">Alphanumeric, underscore, hyphen only.</div>
+              </Field>
+              </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
+              <Btn kind="link" onClick={() => setRestoreOpen(false)}>Cancel</Btn>
+              <Btn
+                kind="primary"
+                disabled={!restoreVmName.trim() || !restoreSelectedSnapshot || restoring}
+                onClick={() => {
+                  setRestoring(true);
+                  setRestoreError(null);
+                  void call(async () => {
+                    await api(`/vms/${focus}/backups/restore`, {
+                      method: "POST",
+                      body: { snapshotId: restoreSelectedSnapshot, name: restoreVmName },
+                    });
+                    setRestoreOpen(false);
+                    setRestoring(false);
+                  }).catch((e: unknown) => {
+                    setRestoring(false);
+                    setRestoreError(e instanceof Error ? e.message : String(e));
+                  });
+                }}
+              >
+                {restoring ? "Restoring…" : "Restore"}
+              </Btn>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

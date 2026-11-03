@@ -549,6 +549,29 @@ export class ProxmoxClient {
     return typeof result === "string" ? result : "";
   }
 
+  /**
+   * Restore a VM from a PBS backup. This is the PVE 8+ restore endpoint
+   * (`POST /nodes/{node}/qemu/{vmid}/restore?backup=...`). The target VM
+   * must NOT exist (it is created by the task). The caller must ensure the
+   * VM name is unique and the node has enough resources — the task returns
+   * a UPID that the ticker polls to completion.
+   *
+   * WHY this is in ProxmoxClient (not PBS client): restore is orchestrated
+   * by the PVE node, which reads the PBS backup and creates the new VM. The
+   * PBS client handles the backup store itself, not the orchestration.
+   */
+  async restore(
+    node: string,
+    opts: { vmid: number; backup: string; name?: string },
+  ): Promise<string> {
+    const query = `backup=${encodeURIComponent(opts.backup)}` + (opts.name ? `&name=${encodeURIComponent(opts.name)}` : "");
+    const result = await this.request<string>(`/nodes/${encodeURIComponent(node)}/qemu/${opts.vmid}/restore?${query}`, {
+      method: "POST",
+      body: {},
+    });
+    return typeof result === "string" ? result : "";
+  }
+
   async taskStatus(node: string, upid: string): Promise<ProxmoxTaskStatus> {
     const safe = encodeURIComponent(upid);
     return this.request<ProxmoxTaskStatus>(`/nodes/${node}/tasks/${safe}/status`);
