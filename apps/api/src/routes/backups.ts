@@ -14,6 +14,7 @@ import type { CoreContext } from "@proxvm/core";
 import {
   AppError,
   BACKUP_MODES,
+  BACKUP_KINDS,
   createBackupRun,
   createBackupSchedule,
   deleteBackupSchedule,
@@ -23,6 +24,7 @@ import {
   listBackupSchedules,
   listVmSnapshots,
   setBackupScheduleEnabled,
+  runRestore,
 } from "@proxvm/core";
 
 // PBS backup schedules, manual runs, run history, snapshots, and retention
@@ -341,6 +343,45 @@ export async function backupRoutes(app: FastifyInstance, opts: { ctx: CoreContex
         actorUsername: user.username,
         vmId: vm.id,
         detail: { runId: run.id, kind: "prune", keepLast: body.keepLast, queued: true },
+      });
+      return reply.status(202).send({ run });
+    },
+  );
+
+  // -- Manual restore from PBS snapshot (async: queues a PENDING run) -------
+  app.post(
+    "/vms/:id/backups/restore",
+    { config: { rateLimit: { max: 5, timeWindow: "1 hour" } } },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const user = await manageGuard(request);
+      const access = await resolveVmAccess(request, id);
+      if (!access.allowed) throw AppError.forbidden("No access to this VM");
+      const vm = await ctx.vms.requireById(id);
+      await requirePbs();
+      const body = z
+        .object({
+          snapshotId: z.string().min(1).max(256),
+          name: z.string().min(1).max(128).regex(/^[A-Za-z0-9_\-]+$/),
+        })
+        .parse(request.body ?? {});
+      const run = await runRestore(
+        {
+          db: ctx.db,
+          users: ctx.users,
+          settings: ctx.settings,
+          getProxmoxClient: () => ctx.getProxmoxClient(),
+          audit: ctx.audit,
+          logger: ctx.logger,
+        },
+        { vmId: vm.id, backupId: body.snapshotId, name: body.name, userId: user.id },
+      );
+      await app.audit(request, {
+        event: "BACKUP_STARTED",
+        actorUserId: user.id,
+        actorUsername: user.username,
+        vmId: vm.id,
+        detail: { runId: run.id, kind: "restore", name: body.name, snapshotId: body.snapshotId, queued: true },
       });
       return reply.status(202).send({ run });
     },

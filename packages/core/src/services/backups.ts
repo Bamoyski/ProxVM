@@ -38,7 +38,7 @@ import type { Logger } from "../util/logger.js";
 export const BACKUP_MODES = ["snapshot", "suspend", "stop"] as const;
 export type BackupMode = (typeof BACKUP_MODES)[number];
 
-export const BACKUP_KINDS = ["backup", "prune"] as const;
+export const BACKUP_KINDS = ["backup", "prune", "restore"] as const;
 export type BackupKind = (typeof BACKUP_KINDS)[number];
 
 export const BACKUP_STATUSES = ["PENDING", "RUNNING", "OK", "FAILED"] as const;
@@ -81,6 +81,10 @@ export interface BackupRun {
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
+  /** PBS backup ID (e.g. "pbs:backup/2026-10-28T12:00:00Z") for restore runs. */
+  backupId: string | null;
+  /** Desired name of the restored VM (stored while the PVE task runs). */
+  restoreName: string | null;
 }
 
 function toSchedule(row: Record<string, unknown>): BackupSchedule {
@@ -118,6 +122,8 @@ function toRun(row: Record<string, unknown>): BackupRun {
     createdAt: new Date(row.created_at as string),
     startedAt: row.started_at ? new Date(row.started_at as string) : null,
     finishedAt: row.finished_at ? new Date(row.finished_at as string) : null,
+    backupId: (row.backup_id as string | null) ?? null,
+    restoreName: (row.restore_name as string | null) ?? null,
   };
 }
 
@@ -236,6 +242,10 @@ export interface BackupRunInput {
   datastore?: string | null;
   keepLast?: number | null;
   createdBy?: string | null;
+  /** PBS backup ID to restore from (for kind=restore). */
+  backupId?: string;
+  /** Desired name of the restored VM (for kind=restore). */
+  restoreName?: string;
 }
 
 export async function activeBackupRunCount(db: Queryable, vmId: string): Promise<number> {
@@ -254,8 +264,8 @@ export async function createBackupRun(db: Queryable, input: BackupRunInput): Pro
   }
   const id = newId();
   await db.query(
-    `INSERT INTO pbs_backups (id, vm_id, schedule_id, kind, mode, storage, datastore, keep_last, status, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9)`,
+    `INSERT INTO pbs_backups (id, vm_id, schedule_id, kind, mode, storage, datastore, keep_last, status, backup_id, restore_name, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10, $11)`,
     [
       id,
       input.vmId,
@@ -265,12 +275,53 @@ export async function createBackupRun(db: Queryable, input: BackupRunInput): Pro
       input.storage ?? "",
       input.datastore ?? null,
       input.keepLast ?? null,
+      input.backupId ?? null,
+      input.restoreName ?? null,
       input.createdBy ?? null,
     ],
   );
   const created = await getBackupRun(db, id);
   if (!created) throw new Error("Backup run creation failed");
   return created;
+}
+
+/**
+ * Create a PENDING restore run from a PBS snapshot.
+ * The restore uses Proxmox VE's built-in restore API (`POST /nodes/{node}/qemu/{vmid}/restore`).
+ * The ticker (executePendingBackups / finalizeBackupRuns) handles execution and finalization
+ * the same way as backup/prune runs (PENDING → RUNNING → OK|FAILED).
+ *
+ * Security: the caller must already have vm.manage + per-VM access. This function only
+ * creates the DB row — the actual Proxmox call happens in the ticker with re-auth.
+ */
+export async function runRestore(
+  deps: Pick<BackupTickerDeps, "db" | "users" | "settings" | "getProxmoxClient" | "audit" | "logger">,
+  opts: { vmId: string; backupId: string; name: string; userId: string },
+): Promise<BackupRun> {
+  // Validate the backup ID format to prevent injection into the PVE API query param.
+  if (!/^[A-Za-z0-9._/:]+$/.test(opts.backupId)) {
+    throw AppError.validation("Invalid backup ID format");
+  }
+  if (opts.name.length > 128 || opts.name.trim() !== opts.name) {
+    throw AppError.validation("Restore name must be 1-128 non-whitespace characters");
+  }
+  // Pre-check that the user still has permission (same gate as executePendingBackups).
+  const user = await deps.users.findById(opts.userId).catch(() => null);
+  if (!user || !user.active || !hasPermission(user, "vm.manage")) {
+    throw AppError.forbidden("No permission to restore from backups");
+  }
+
+  return createBackupRun(deps.db, {
+    vmId: opts.vmId,
+    kind: "restore",
+    mode: "snapshot",
+    storage: "",
+    datastore: null,
+    keepLast: null,
+    backupId: opts.backupId,
+    restoreName: opts.name,
+    createdBy: opts.userId,
+  });
 }
 
 /** Atomically claim one PENDING run; null when already claimed/finished. */
@@ -408,6 +459,20 @@ export async function executePendingBackups(deps: BackupTickerDeps): Promise<{ s
         if (!backupId) throw AppError.validation("No snapshots found for this VM — nothing to prune");
         const upid = await pbs.pruneSnapshots(datastore, { backupId, keepLast: run.keepLast });
         await deps.db.query("UPDATE pbs_backups SET upid = $2 WHERE id = $1", [run.id, upid]);
+      } else if (run.kind === "restore") {
+        // Restore: PVE orchestrates the VM creation from the PBS snapshot.
+        // The source VM's node + backup_id are sufficient; the PVE task creates
+        // the new VM with the requested name. No PBS client needed — PVE reads
+        // the backup store directly.
+        if (!run.backupId) throw AppError.validation("Restore run missing backup ID");
+        const proxmox = await deps.getProxmoxClient();
+        const upid = await proxmox.restore(vm.node, {
+          vmid: vm.vmid,
+          backup: run.backupId,
+          name: run.restoreName ?? `restored-${vm.name}`,
+        });
+        if (!upid) throw AppError.external("Proxmox", "Restore task did not return a UPID");
+        await deps.db.query("UPDATE pbs_backups SET upid = $2 WHERE id = $1", [run.id, upid]);
       } else {
         const proxmox = await deps.getProxmoxClient();
         const upid = await proxmox.createBackup(vm.node, { vmid: vm.vmid, storage: run.storage, mode: run.mode });
@@ -426,6 +491,7 @@ export async function executePendingBackups(deps: BackupTickerDeps): Promise<{ s
             scheduleId: run.scheduleId,
             kind: run.kind,
             mode: run.kind === "backup" ? run.mode : undefined,
+            restoreName: run.kind === "restore" ? run.restoreName : undefined,
           },
         })
         .catch(() => undefined);
