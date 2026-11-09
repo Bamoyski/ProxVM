@@ -348,6 +348,18 @@ export default function AppShell({
           <div className="pv-header-actions">
             {can("audit.read") && <ThreatBell />}
             <NotificationBell />
+            {/* Visible counterpart to the account-menu item: logging out is a
+                common action and should not require opening the avatar
+                popover at the bottom of the sidebar. Same confirm +
+                server-side revoke path. */}
+            <button
+              className="pv-btn pv-btn-ghost pv-btn-icon"
+              onClick={() => void doLogout()}
+              aria-label="Log out"
+              title="Log out"
+            >
+              <LogOut size={15} aria-hidden="true" />
+            </button>
           </div>
         </header>
 

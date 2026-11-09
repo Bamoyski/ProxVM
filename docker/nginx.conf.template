@@ -25,7 +25,13 @@ server {
     #   PROXVM_HSTS_HEADER=add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
     # The nginx entrypoint substitutes this variable at container start.
     ${PROXVM_HSTS_HEADER}
-    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'self'; object-src 'none'" always;
+    # Turnstile is the only third party: its api.js must load (script-src) and
+    # its challenge iframe must be embeddable (frame-src) on the public signup
+    # form. Without these two the widget is blocked by `default-src 'self'`
+    # and the form can never produce a token — the browser shows nothing and
+    # registration fails with "Please complete the verification challenge".
+    # Everything else still falls back to 'self'.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; base-uri 'self'; frame-ancestors 'self'; object-src 'none'" always;
 
     # Upstream error responses pass through untouched: the API already
     # answers every failure with safe, user-actionable JSON (auth, validation,
