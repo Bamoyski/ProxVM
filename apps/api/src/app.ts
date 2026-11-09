@@ -208,6 +208,24 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
           error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error),
         }),
       );
+    } else if (statusCode >= 400 && statusCode !== 401 && statusCode !== 403) {
+      // 4xx were previously silent: the logger is off and only >=500 reached
+      // the console, so a client-visible 400 (e.g. a validation reject) left
+      // no server-side trace at all and could only be reconstructed from the
+      // nginx access log. 401/403 stay quiet on purpose — they are expected
+      // (expired sessions, denied permissions) and already audited/rate-
+      // limited where it matters.
+      console.warn(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          level: "warn",
+          logger: "api",
+          path: request.method + " " + request.url,
+          status: statusCode,
+          code: (error as { code?: string }).code ?? "INTERNAL_ERROR",
+          msg: message,
+        }),
+      );
     }
     void reply.status(statusCode).send({ code: "INTERNAL_ERROR", message });
   });

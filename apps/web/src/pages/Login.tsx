@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, Circle } from "lucide-react";
 import { api, setCsrfToken } from "../api.js";
@@ -11,11 +11,22 @@ interface RegisterConfig {
   turnstileSiteKey: string | null;
 }
 
+interface TurnstileOptions {
+  sitekey: string;
+  action?: string;
+  theme?: "auto" | "light" | "dark";
+  callback?: (token: string) => void;
+  "error-callback"?: () => void;
+  "expired-callback"?: () => void;
+}
+
 declare global {
   interface Window {
     turnstile?: {
+      render: (container: HTMLElement, options: TurnstileOptions) => string;
       getResponse: (widgetId?: string) => string;
       reset: (widgetId?: string) => void;
+      remove: (widgetId?: string) => void;
     };
   }
 }
@@ -37,6 +48,18 @@ export default function Login() {
   const [confirm, setConfirm] = useState("");
   const [registered, setRegistered] = useState(false);
   const [cfg, setCfg] = useState<RegisterConfig | null>(null);
+  // Turnstile is rendered EXPLICITLY (never via the implicit .cf-turnstile
+  // scan). Implicit rendering only inspects the DOM once, when api.js loads;
+  // this form lives behind the "Request one" toggle, so at that moment the
+  // widget container does not exist yet and Cloudflare never renders it. The
+  // result was a register form with no challenge and an unavoidable "Please
+  // complete the verification challenge." error. Explicit render() is driven
+  // by React's lifecycle instead, so the widget appears whenever the register
+  // form does.
+  const [tsReady, setTsReady] = useState(false);
+  const [tsError, setTsError] = useState<string | null>(null);
+  const tsHostRef = useRef<HTMLDivElement | null>(null);
+  const tsWidgetRef = useRef<string | null>(null);
 
   // Public fetch; fail-open (form as before, backend still enforces authoritatively).
   useEffect(() => {
@@ -46,15 +69,71 @@ export default function Login() {
   }, []);
 
   // Load the Turnstile script once the register form (may) need it.
+  // `render=explicit` disables Cloudflare's one-shot DOM scan (see above).
   useEffect(() => {
     if (!cfg?.turnstileSiteKey) return;
-    if (document.getElementById("cf-turnstile-api")) return;
+    if (window.turnstile) {
+      setTsReady(true);
+      return;
+    }
+    const onReady = () => setTsReady(true);
+    const onFail = () =>
+      setTsError("The verification widget could not load. Reload the page and try again.");
+    const existing = document.getElementById("cf-turnstile-api") as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", onReady);
+      existing.addEventListener("error", onFail);
+      return () => {
+        existing.removeEventListener("load", onReady);
+        existing.removeEventListener("error", onFail);
+      };
+    }
     const script = document.createElement("script");
     script.id = "cf-turnstile-api";
-    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
     script.async = true;
+    script.defer = true;
+    script.addEventListener("load", onReady);
+    script.addEventListener("error", onFail);
     document.head.appendChild(script);
+    return () => {
+      script.removeEventListener("load", onReady);
+      script.removeEventListener("error", onFail);
+    };
   }, [cfg?.turnstileSiteKey]);
+
+  // Render the challenge into the mounted container. Torn down when the form
+  // leaves register mode: a solved token is single-use, so a stale widget is
+  // worse than no widget.
+  useEffect(() => {
+    if (mode !== "register") return;
+    if (!tsReady || !cfg?.turnstileSiteKey) return;
+    const host = tsHostRef.current;
+    if (!host || tsWidgetRef.current) return;
+    try {
+      tsWidgetRef.current =
+        window.turnstile?.render(host, {
+          sitekey: cfg.turnstileSiteKey,
+          action: TURNSTILE_SIGNUP_ACTION,
+          theme: document.documentElement.classList.contains("light") ? "light" : "dark",
+          "error-callback": () =>
+            setTsError("Verification hit an error. Reload the page and try again."),
+        }) ?? null;
+      setTsError(null);
+    } catch {
+      setTsError("The verification widget could not load. Reload the page and try again.");
+    }
+    return () => {
+      const id = tsWidgetRef.current;
+      tsWidgetRef.current = null;
+      if (!id) return;
+      try {
+        window.turnstile?.remove(id);
+      } catch {
+        // widget already gone; nothing to clean up
+      }
+    };
+  }, [mode, tsReady, cfg?.turnstileSiteKey]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,14 +155,20 @@ export default function Login() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    // Serve-side demand (bot gate): if the widget exists, the implicit token
+    // Server-side demand (bot gate): when the widget is configured its token
     // is mandatory before we even hit the network.
     let token: string | undefined;
     if (cfg?.turnstileSiteKey) {
-      token = window.turnstile?.getResponse?.() || undefined;
+      const widgetId = tsWidgetRef.current ?? undefined;
+      token = window.turnstile?.getResponse?.(widgetId) || undefined;
       if (!token) {
         setBusy(false);
-        setError("Please complete the verification challenge.");
+        setError(
+          tsError ??
+            (widgetId
+              ? "Please complete the verification challenge above the button."
+              : "The verification challenge is still loading. Wait a moment and try again."),
+        );
         return;
       }
     }
@@ -95,7 +180,7 @@ export default function Login() {
       // Turnstile tokens are single-use: a failed attempt must start over,
       // or every retry would re-post the spent token and forever fail.
       try {
-        window.turnstile?.reset?.();
+        window.turnstile?.reset?.(tsWidgetRef.current ?? undefined);
       } catch {
         // widget not loaded; nothing to reset
       }
@@ -109,6 +194,7 @@ export default function Login() {
     setError(null);
     setRegistered(false);
     setConfirm("");
+    setTsError(null);
   };
 
   const rulesOk = PASSWORD_RULES.every((r) => ruleMet(r, password)) && password === confirm && password.length > 0;
@@ -209,12 +295,24 @@ export default function Login() {
               </div>
             </div>
             {cfg?.turnstileSiteKey && (
-              <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}>
-                <div
-                  className="cf-turnstile"
-                  data-sitekey={cfg.turnstileSiteKey}
-                  data-action={TURNSTILE_SIGNUP_ACTION}
-                />
+              <div
+                style={{
+                  marginBottom: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                {/* Explicit-render host: Cloudflare injects the widget here. */}
+                <div ref={tsHostRef} />
+                {/* If the script is blocked (CSP/network) the widget slot would
+                    otherwise stay silently empty; say so where it belongs. */}
+                {tsError && (
+                  <div className="pv-error" role="alert" style={{ marginBottom: 0, width: "100%" }}>
+                    {tsError}
+                  </div>
+                )}
               </div>
             )}
           </>

@@ -4,6 +4,7 @@ import { Bell, Check, CheckCheck } from "lucide-react";
 import { api } from "../api.js";
 import { Popover } from "../ui/index.js";
 import { fmtRelative } from "../lib/format.js";
+import { backoffInterval } from "../lib/poll.js";
 
 interface Notification {
   id: string;
@@ -21,7 +22,11 @@ export default function NotificationBell() {
   const { data: countData } = useQuery({
     queryKey: ["notifications-unread"],
     queryFn: () => api<{ count: number }>("/notifications/unread-count"),
-    refetchInterval: 30000,
+    // Healthy: poll every 30s so the badge is never a minute stale. Failing:
+    // back off exponentially (30s → 1m → 2m → 4m → 5m cap) from the query's
+    // consecutive-failure count, which resets on the first success. See
+    // lib/poll.ts for why the cap exists.
+    refetchInterval: (query) => backoffInterval(query.state.fetchFailureCount),
     retry: false,
   });
   const { data: listData } = useQuery({
